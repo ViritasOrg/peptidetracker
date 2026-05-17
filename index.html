@@ -6,235 +6,128 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.8</title>
+<title>Henrik's Protocol v1.9</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
-
-  :root {
-    --bg: #0a0a0a;
-    --surface: #131313;
-    --surface2: #1c1c1c;
-    --border: #2a2a2a;
-    --accent: #e8ff3c;
-    --accent2: #ff6b2b;
-    --accent3: #3cffa0;
-    --accent4: #c084fc;
-    --text: #f0f0f0;
-    --muted: #555;
-    --muted2: #888;
-    --danger: #ff3c3c;
-    --warning: #ffb03c;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-
-  html, body {
-    background: #0a0a0a !important;
-    color: var(--text);
-    font-family: 'DM Sans', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-    margin: 0;
-    padding: 0;
-  }
-  body.locked { overflow: hidden; height: 100vh; }
-
-  /* PIN */
-  #pin-screen {
-    position: fixed; inset: 0; background: var(--bg); z-index: 9999;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px;
-  }
-  #pin-screen.hidden { display: none; }
-  .pin-logo { font-family: 'Bebas Neue', sans-serif; font-size: 38px; letter-spacing: 4px; color: var(--accent); }
-  .pin-sub { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 2px; margin-top: 4px; margin-bottom: 44px; }
-  .pin-dots { display: flex; gap: 14px; margin-bottom: 36px; }
-  .pin-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); transition: all 0.15s; }
-  .pin-dot.filled { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px rgba(232,255,60,0.5); }
-  .pin-dot.error { background: var(--danger); border-color: var(--danger); animation: shake 0.35s ease; }
-  @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
-  .pin-grid { display: grid; grid-template-columns: repeat(3, 72px); gap: 12px; }
-  .pin-btn {
-    width: 72px; height: 72px; border-radius: 50%;
-    background: var(--surface2); border: 1px solid var(--border);
-    color: var(--text); font-size: 22px; font-weight: 500; font-family: 'DM Sans', sans-serif;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: all 0.12s; user-select: none;
-  }
-  .pin-btn:active { background: var(--accent); color: #000; transform: scale(0.92); }
-  .pin-btn.del { font-size: 15px; color: var(--muted2); }
-  .pin-btn.empty { background: transparent; border: none; cursor: default; }
-  .pin-err { font-size: 12px; color: var(--danger); margin-top: 18px; min-height: 16px; letter-spacing: 0.5px; }
-
-  /* APP */
-  #app { display: none; flex-direction: column; min-height: 100vh; padding-bottom: 40px; }
-  #app.visible { display: flex; }
-
-  /* HEADER */
-  .hdr { padding: 22px 20px 0; display: flex; justify-content: space-between; align-items: flex-start; }
-  .hdr-title { font-family: 'Bebas Neue', sans-serif; font-size: 34px; letter-spacing: 3px; color: var(--accent); line-height: 1; }
-  .hdr-sub { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 1.5px; margin-top: 3px; }
-  .hdr-right { text-align: right; }
-  .hdr-day { font-family: 'Bebas Neue', sans-serif; font-size: 30px; color: var(--text); line-height: 1; }
-  .hdr-weekday { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 1px; }
-
-  /* TABS */
-  .tabs { display: flex; padding: 14px 20px 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; gap: 4px; }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tab {
-    font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.5px;
-    padding: 8px 14px 12px; color: var(--muted2); cursor: pointer;
-    border-bottom: 2px solid transparent; white-space: nowrap; transition: all 0.15s;
-  }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  /* CONTENT */
-  .content { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-  .content.hidden { display: none; }
-
-  /* CARDS */
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  .card-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 16px 12px; border-bottom: 1px solid var(--border);
-  }
-  .card-title-wrap { display: flex; align-items: center; gap: 10px; }
-  .card-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .card-title { font-family: 'Bebas Neue', sans-serif; font-size: 17px; letter-spacing: 1.5px; color: var(--text); }
-  .card-badge {
-    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
-    padding: 3px 8px; border-radius: 20px;
-  }
-  .badge-today { background: rgba(232,255,60,0.15); color: var(--accent); border: 1px solid rgba(232,255,60,0.3); }
-  .badge-done { background: rgba(60,255,160,0.1); color: var(--accent3); border: 1px solid rgba(60,255,160,0.2); }
-  .badge-upcoming { background: rgba(192,132,252,0.1); color: var(--accent4); border: 1px solid rgba(192,132,252,0.2); }
-  .badge-bridge { background: rgba(255,107,43,0.1); color: var(--accent2); border: 1px solid rgba(255,107,43,0.2); }
-
-  .card-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
-
-  .info-row { display: flex; justify-content: space-between; align-items: baseline; }
-  .info-label { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 1px; }
-  .info-val { font-size: 13px; font-weight: 500; color: var(--text); }
-  .info-val.accent { color: var(--accent); }
-  .info-val.green { color: var(--accent3); }
-  .info-val.orange { color: var(--accent2); }
-  .info-val.purple { color: var(--accent4); }
-  .info-val.warn { color: var(--warning); }
-
-  .divider { height: 1px; background: var(--border); margin: 4px 0; }
-  .note {
-    font-size: 11px; color: var(--muted2); background: var(--surface2);
-    border-radius: 6px; padding: 8px 10px; margin-top: 2px; line-height: 1.5;
-  }
-
-  /* CHECKLIST */
-  .checklist { display: flex; flex-direction: column; }
-  .check-item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 13px 16px; border-bottom: 1px solid var(--border);
-    cursor: pointer; transition: background 0.12s; user-select: none;
-  }
-  .check-item:last-child { border-bottom: none; }
-  .check-item:active { background: var(--surface2); }
-  .check-box {
-    width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--border);
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s;
-  }
-  .check-box.checked { background: var(--accent3); border-color: var(--accent3); }
-  .check-box svg { display: none; }
-  .check-box.checked svg { display: block; }
-  .check-main { flex: 1; }
-  .check-name { font-size: 14px; font-weight: 500; }
-  .check-detail { font-size: 11px; color: var(--muted2); margin-top: 2px; }
-  .check-item.checked-item .check-name { text-decoration: line-through; color: var(--muted2); }
-  .check-time { font-family: 'Bebas Neue', sans-serif; font-size: 15px; letter-spacing: 1px; color: var(--muted2); }
-
-  /* WEEK STRIP */
-  .week-strip { display: flex; gap: 6px; padding: 0 20px; }
-  .week-day {
-    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
-    padding: 10px 4px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border);
-    font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted2);
-  }
-  .week-day.today { border-color: var(--accent); }
-  .week-day-name { font-weight: 600; }
-  .week-day-num { font-family: 'Bebas Neue', sans-serif; font-size: 18px; line-height: 1; color: var(--text); }
-  .week-day.today .week-day-num { color: var(--accent); }
-  .week-dots { display: flex; gap: 3px; flex-wrap: wrap; justify-content: center; min-height: 6px; }
-  .week-dot { width: 5px; height: 5px; border-radius: 50%; }
-
-  /* TIMELINE */
-  .timeline { display: flex; flex-direction: column; }
-  .milestone { display: flex; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-  .milestone:last-child { border-bottom: none; }
-  .milestone-line { display: flex; flex-direction: column; align-items: center; }
-  .milestone-dot {
-    width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border);
-    background: var(--surface2); flex-shrink: 0; margin-top: 3px;
-  }
-  .milestone-dot.past { background: var(--accent3); border-color: var(--accent3); }
-  .milestone-dot.today-dot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 8px rgba(232,255,60,0.5); }
-  .milestone-dot.future { background: transparent; border-color: var(--muted); }
-  .milestone-connector { width: 2px; flex: 1; background: var(--border); margin-top: 4px; min-height: 20px; }
-  .milestone-body { flex: 1; padding-bottom: 4px; }
-  .milestone-date { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 1px; }
-  .milestone-name { font-weight: 600; font-size: 14px; margin-top: 2px; }
-  .milestone-desc { font-size: 12px; color: var(--muted2); margin-top: 3px; line-height: 1.4; }
-
-  /* PROGRESS BAR */
-  .prog-wrap { padding: 12px 16px 14px; }
-  .prog-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted2); margin-bottom: 6px; }
-  .prog-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
-  .prog-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
-
-  /* STACK ROWS */
-  .stack-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  .stack-row:last-child { border-bottom: none; }
-  .stack-pct { font-family: 'Bebas Neue', sans-serif; font-size: 24px; line-height: 1; min-width: 52px; }
-  .stack-info { flex: 1; }
-  .stack-name { font-size: 13px; font-weight: 500; }
-  .stack-dose { font-size: 11px; color: var(--muted2); margin-top: 2px; }
-  .stack-bar-wrap { width: 60px; }
-  .stack-bar { height: 3px; background: var(--border); border-radius: 2px; }
-  .stack-fill { height: 100%; border-radius: 2px; }
-
-  /* ALERTS */
-  .alert-bar {
-    padding: 10px 14px; border-radius: 8px;
-    background: rgba(255,176,60,0.08); border: 1px solid rgba(255,176,60,0.25);
-    display: flex; gap: 10px; align-items: flex-start;
-  }
-  .alert-bar.green { background: rgba(60,255,160,0.06); border-color: rgba(60,255,160,0.2); }
-  .alert-icon { font-size: 14px; margin-top: 1px; flex-shrink: 0; }
-  .alert-text { font-size: 12px; color: var(--muted2); line-height: 1.5; }
-  .alert-text strong { color: var(--text); }
-
-  /* SCHEDULE DAY */
-  .sched-day { margin-bottom: 12px; }
-  .sched-day-label { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-  .sched-day-label.is-today { color: var(--accent); }
-  .pill-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 20px; padding: 4px 10px; font-size: 11px;
-  }
-  .pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-
-  .empty { padding: 40px 20px; text-align: center; color: var(--muted2); font-size: 13px; }
-  .empty-icon { font-size: 32px; margin-bottom: 12px; }
-
-  .reset-btn {
-    margin: 0 20px; padding: 12px; border-radius: 8px; background: var(--surface2);
-    border: 1px solid var(--border); color: var(--muted2);
-    font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; font-family: 'DM Sans', sans-serif;
-    cursor: pointer; transition: all 0.12s; width: calc(100% - 40px);
-  }
-  .reset-btn:active { color: var(--danger); border-color: var(--danger); }
+  :root{--bg:#0a0a0a;--surface:#131313;--surface2:#1c1c1c;--border:#2a2a2a;--accent:#e8ff3c;--accent2:#ff6b2b;--accent3:#3cffa0;--accent4:#c084fc;--text:#f0f0f0;--muted:#555;--muted2:#888;--danger:#ff3c3c;--warning:#ffb03c;}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{background:#0a0a0a !important;color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;margin:0;padding:0;}
+  body.locked{overflow:hidden;height:100vh;}
+  #pin-screen{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;}
+  #pin-screen.hidden{display:none;}
+  .pin-logo{font-family:'Bebas Neue',sans-serif;font-size:38px;letter-spacing:4px;color:var(--accent);}
+  .pin-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:2px;margin-top:4px;margin-bottom:44px;}
+  .pin-dots{display:flex;gap:14px;margin-bottom:36px;}
+  .pin-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--border);transition:all 0.15s;}
+  .pin-dot.filled{background:var(--accent);border-color:var(--accent);box-shadow:0 0 10px rgba(232,255,60,0.5);}
+  .pin-dot.error{background:var(--danger);border-color:var(--danger);animation:shake 0.35s ease;}
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+  .pin-grid{display:grid;grid-template-columns:repeat(3,72px);gap:12px;}
+  .pin-btn{width:72px;height:72px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:22px;font-weight:500;font-family:'DM Sans',sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.12s;user-select:none;}
+  .pin-btn:active{background:var(--accent);color:#000;transform:scale(0.92);}
+  .pin-btn.del{font-size:15px;color:var(--muted2);}
+  .pin-btn.empty{background:transparent;border:none;cursor:default;}
+  .pin-err{font-size:12px;color:var(--danger);margin-top:18px;min-height:16px;letter-spacing:0.5px;}
+  #app{display:none;flex-direction:column;min-height:100vh;padding-bottom:40px;}
+  #app.visible{display:flex;}
+  .hdr{padding:22px 20px 0;display:flex;justify-content:space-between;align-items:flex-start;}
+  .hdr-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:3px;color:var(--accent);line-height:1;}
+  .hdr-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1.5px;margin-top:3px;}
+  .hdr-right{text-align:right;}
+  .hdr-day{font-family:'Bebas Neue',sans-serif;font-size:30px;color:var(--text);line-height:1;}
+  .hdr-weekday{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
+  .tabs{display:flex;padding:14px 20px 0;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;gap:4px;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;padding:8px 14px 12px;color:var(--muted2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.15s;}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .content{flex:1;padding:20px;display:flex;flex-direction:column;gap:14px;}
+  .content.hidden{display:none;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+  .card-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border);}
+  .card-title-wrap{display:flex;align-items:center;gap:10px;}
+  .card-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .card-title{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:1.5px;color:var(--text);}
+  .card-badge{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;padding:3px 8px;border-radius:20px;}
+  .badge-today{background:rgba(232,255,60,0.15);color:var(--accent);border:1px solid rgba(232,255,60,0.3);}
+  .badge-done{background:rgba(60,255,160,0.1);color:var(--accent3);border:1px solid rgba(60,255,160,0.2);}
+  .badge-upcoming{background:rgba(192,132,252,0.1);color:var(--accent4);border:1px solid rgba(192,132,252,0.2);}
+  .badge-bridge{background:rgba(255,107,43,0.1);color:var(--accent2);border:1px solid rgba(255,107,43,0.2);}
+  .card-body{padding:14px 16px;display:flex;flex-direction:column;gap:8px;}
+  .info-row{display:flex;justify-content:space-between;align-items:baseline;}
+  .info-label{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
+  .info-val{font-size:13px;font-weight:500;color:var(--text);}
+  .info-val.accent{color:var(--accent);}
+  .info-val.green{color:var(--accent3);}
+  .info-val.orange{color:var(--accent2);}
+  .info-val.purple{color:var(--accent4);}
+  .info-val.warn{color:var(--warning);}
+  .divider{height:1px;background:var(--border);margin:4px 0;}
+  .note{font-size:11px;color:var(--muted2);background:var(--surface2);border-radius:6px;padding:8px 10px;margin-top:2px;line-height:1.5;}
+  .checklist{display:flex;flex-direction:column;}
+  .check-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.12s;user-select:none;}
+  .check-item:last-child{border-bottom:none;}
+  .check-item:active{background:var(--surface2);}
+  .check-box{width:22px;height:22px;border-radius:6px;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;}
+  .check-box.checked{background:var(--accent3);border-color:var(--accent3);}
+  .check-box svg{display:none;}
+  .check-box.checked svg{display:block;}
+  .check-main{flex:1;}
+  .check-name{font-size:14px;font-weight:500;}
+  .check-detail{font-size:11px;color:var(--muted2);margin-top:2px;}
+  .check-item.checked-item .check-name{text-decoration:line-through;color:var(--muted2);}
+  .check-time{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1px;color:var(--muted2);}
+  .week-strip{display:flex;gap:6px;padding:0 20px;}
+  .week-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);}
+  .week-day.today{border-color:var(--accent);}
+  .week-day-name{font-weight:600;}
+  .week-day-num{font-family:'Bebas Neue',sans-serif;font-size:18px;line-height:1;color:var(--text);}
+  .week-day.today .week-day-num{color:var(--accent);}
+  .week-dots{display:flex;gap:3px;flex-wrap:wrap;justify-content:center;min-height:6px;}
+  .week-dot{width:5px;height:5px;border-radius:50%;}
+  .timeline{display:flex;flex-direction:column;}
+  .milestone{display:flex;gap:14px;padding:14px 16px;border-bottom:1px solid var(--border);}
+  .milestone:last-child{border-bottom:none;}
+  .milestone-line{display:flex;flex-direction:column;align-items:center;}
+  .milestone-dot{width:12px;height:12px;border-radius:50%;border:2px solid var(--border);background:var(--surface2);flex-shrink:0;margin-top:3px;}
+  .milestone-dot.past{background:var(--accent3);border-color:var(--accent3);}
+  .milestone-dot.today-dot{background:var(--accent);border-color:var(--accent);box-shadow:0 0 8px rgba(232,255,60,0.5);}
+  .milestone-dot.future{background:transparent;border-color:var(--muted);}
+  .milestone-connector{width:2px;flex:1;background:var(--border);margin-top:4px;min-height:20px;}
+  .milestone-body{flex:1;padding-bottom:4px;}
+  .milestone-date{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
+  .milestone-name{font-weight:600;font-size:14px;margin-top:2px;}
+  .milestone-desc{font-size:12px;color:var(--muted2);margin-top:3px;line-height:1.4;}
+  .prog-wrap{padding:12px 16px 14px;}
+  .prog-label{display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-bottom:6px;}
+  .prog-bar{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+  .prog-fill{height:100%;border-radius:2px;transition:width 0.5s ease;}
+  .stack-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);}
+  .stack-row:last-child{border-bottom:none;}
+  .stack-pct{font-family:'Bebas Neue',sans-serif;font-size:24px;line-height:1;min-width:52px;}
+  .stack-info{flex:1;}
+  .stack-name{font-size:13px;font-weight:500;}
+  .stack-dose{font-size:11px;color:var(--muted2);margin-top:2px;}
+  .stack-bar-wrap{width:60px;}
+  .stack-bar{height:3px;background:var(--border);border-radius:2px;}
+  .stack-fill{height:100%;border-radius:2px;}
+  .alert-bar{padding:10px 14px;border-radius:8px;background:rgba(255,176,60,0.08);border:1px solid rgba(255,176,60,0.25);display:flex;gap:10px;align-items:flex-start;}
+  .alert-bar.green{background:rgba(60,255,160,0.06);border-color:rgba(60,255,160,0.2);}
+  .alert-icon{font-size:14px;margin-top:1px;flex-shrink:0;}
+  .alert-text{font-size:12px;color:var(--muted2);line-height:1.5;}
+  .alert-text strong{color:var(--text);}
+  .sched-day{margin-bottom:12px;}
+  .sched-day-label{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+  .sched-day-label.is-today{color:var(--accent);}
+  .pill-wrap{display:flex;flex-wrap:wrap;gap:5px;}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 10px;font-size:11px;}
+  .pill-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+  .empty{padding:40px 20px;text-align:center;color:var(--muted2);font-size:13px;}
+  .empty-icon{font-size:32px;margin-bottom:12px;}
+  .reset-btn{margin:0 20px;padding:12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all 0.12s;width:calc(100% - 40px);}
+  .reset-btn:active{color:var(--danger);border-color:var(--danger);}
 </style>
 </head>
 <body class="locked">
-
-<!-- PIN -->
 <div id="pin-screen">
   <div class="pin-logo">PROTOCOL</div>
   <div class="pin-sub">Henrik's Stack</div>
@@ -260,24 +153,14 @@
   </div>
   <div class="pin-err" id="pin-err"></div>
 </div>
-
-<!-- APP -->
 <div id="app">
   <div class="hdr">
-    <div>
-      <div class="hdr-title">PROTOCOL</div>
-      <div class="hdr-sub">Henrik's Stack</div>
-    </div>
-    <div class="hdr-right">
-      <div class="hdr-day" id="hdr-day">—</div>
-      <div class="hdr-weekday" id="hdr-weekday">—</div>
-    </div>
+    <div><div class="hdr-title">PROTOCOL</div><div class="hdr-sub">Henrik's Stack</div></div>
+    <div class="hdr-right"><div class="hdr-day" id="hdr-day">—</div><div class="hdr-weekday" id="hdr-weekday">—</div></div>
   </div>
-
   <div style="height:14px"></div>
   <div class="week-strip" id="week-strip"></div>
   <div style="height:4px"></div>
-
   <div class="tabs">
     <div class="tab active" onclick="switchTab('today',this)">Today</div>
     <div class="tab" onclick="switchTab('schedule',this)">Schedule</div>
@@ -285,68 +168,37 @@
     <div class="tab" onclick="switchTab('timeline',this)">Timeline</div>
     <div class="tab" onclick="switchTab('body',this)">Body Comp</div>
   </div>
-
-  <!-- TODAY -->
   <div class="content" id="tab-today">
     <div id="today-alerts" style="display:flex;flex-direction:column;gap:8px;"></div>
     <div class="card">
       <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent)"></div>
-          <div class="card-title">TODAY'S DOSES</div>
-        </div>
+        <div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">TODAY'S DOSES</div></div>
         <span class="card-badge badge-today" id="today-badge">0 / 0</span>
       </div>
-      <div class="checklist" id="today-checklist">
-        <div class="empty"><div class="empty-icon">💉</div>Nothing scheduled</div>
-      </div>
+      <div class="checklist" id="today-checklist"><div class="empty"><div class="empty-icon">💉</div>Nothing scheduled</div></div>
     </div>
     <button class="reset-btn" onclick="resetToday()">Reset Today's Log</button>
   </div>
-
-  <!-- SCHEDULE -->
   <div class="content hidden" id="tab-schedule">
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent2)"></div>
-          <div class="card-title">WEEKLY PATTERN</div>
-        </div>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">WEEKLY PATTERN</div></div></div>
       <div class="card-body" id="schedule-body"></div>
     </div>
     <div class="card">
       <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent4)"></div>
-          <div class="card-title">TESTOVIRON BRIDGE</div>
-        </div>
+        <div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">TESTOVIRON BRIDGE</div></div>
         <span class="card-badge badge-upcoming" id="testo-badge">—</span>
       </div>
       <div class="checklist" id="testo-list"></div>
       <div class="prog-wrap">
-        <div class="prog-label">
-          <span>Bridge progress</span>
-          <span id="testo-prog-txt">—</span>
-        </div>
-        <div class="prog-bar">
-          <div class="prog-fill" id="testo-prog" style="background:var(--accent4);width:0%"></div>
-        </div>
+        <div class="prog-label"><span>Bridge progress</span><span id="testo-prog-txt">—</span></div>
+        <div class="prog-bar"><div class="prog-fill" id="testo-prog" style="background:var(--accent4);width:0%"></div></div>
       </div>
     </div>
   </div>
-
-  <!-- STACK -->
   <div class="content hidden" id="tab-stack">
-
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent)"></div>
-          <div class="card-title">RETATRUTIDE</div>
-        </div>
-        <span class="card-badge badge-today">ACTIVE</span>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">RETATRUTIDE</div></div><span class="card-badge badge-today">ACTIVE</span></div>
       <div class="card-body">
         <div class="info-row"><span class="info-label">Dose</span><span class="info-val accent">3 mg / injection</span></div>
         <div class="info-row"><span class="info-label">Frequency</span><span class="info-val">2× / week — Sun &amp; Wed</span></div>
@@ -357,15 +209,8 @@
         <div class="note">Changed from 5mg × 1/week to 3mg × 2/week for more stable exposure.</div>
       </div>
     </div>
-
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent3)"></div>
-          <div class="card-title">CJC-1295 / IPAMORELIN</div>
-        </div>
-        <span class="card-badge badge-today">ACTIVE — PRE-HGH</span>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">CJC-1295 / IPAMORELIN</div></div><span class="card-badge badge-today">ACTIVE — PRE-HGH</span></div>
       <div class="card-body">
         <div class="info-row"><span class="info-label">AM dose</span><span class="info-val green">4 IU — fasted AM</span></div>
         <div class="info-row"><span class="info-label">PM dose</span><span class="info-val green">5 IU — pre-sleep PM</span></div>
@@ -374,43 +219,15 @@
         <div class="note">Bridge until HGH delivery. Discontinue on 4 Jul 2026 when HGH starts.</div>
       </div>
     </div>
-
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:#3b9eff"></div>
-          <div class="card-title">GLOW STACK</div>
-        </div>
-        <span class="card-badge badge-today">ACTIVE</span>
-      </div>
-      <div class="card-body">
-        <div class="info-row"><span class="info-label">Daily dose</span><span class="info-val" style="color:#3b9eff">2 mg (9 IU)</span></div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-pct" style="color:var(--accent)">70%</div>
-        <div class="stack-info"><div class="stack-name">GHK-Cu</div><div class="stack-dose">700 µg / day</div></div>
-        <div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:70%;background:var(--accent)"></div></div></div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-pct" style="color:var(--accent3)">15%</div>
-        <div class="stack-info"><div class="stack-name">TB-500</div><div class="stack-dose">150 µg / day</div></div>
-        <div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:var(--accent3)"></div></div></div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-pct" style="color:#3b9eff">15%</div>
-        <div class="stack-info"><div class="stack-name">BPC-157</div><div class="stack-dose">150 µg / day</div></div>
-        <div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:#3b9eff"></div></div></div>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:#3b9eff"></div><div class="card-title">GLOW STACK</div></div><span class="card-badge badge-today">ACTIVE</span></div>
+      <div class="card-body"><div class="info-row"><span class="info-label">Daily dose</span><span class="info-val" style="color:#3b9eff">2 mg (9 IU)</span></div></div>
+      <div class="stack-row"><div class="stack-pct" style="color:var(--accent)">70%</div><div class="stack-info"><div class="stack-name">GHK-Cu</div><div class="stack-dose">700 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:70%;background:var(--accent)"></div></div></div></div>
+      <div class="stack-row"><div class="stack-pct" style="color:var(--accent3)">15%</div><div class="stack-info"><div class="stack-name">TB-500</div><div class="stack-dose">150 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:var(--accent3)"></div></div></div></div>
+      <div class="stack-row"><div class="stack-pct" style="color:#3b9eff">15%</div><div class="stack-info"><div class="stack-name">BPC-157</div><div class="stack-dose">150 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:#3b9eff"></div></div></div></div>
     </div>
-
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent4)"></div>
-          <div class="card-title">TESTOVIRON BRIDGE</div>
-        </div>
-        <span class="card-badge badge-bridge">BRIDGE</span>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">TESTOVIRON BRIDGE</div></div><span class="card-badge badge-bridge">BRIDGE</span></div>
       <div class="card-body">
         <div class="info-row"><span class="info-label">Dose</span><span class="info-val purple">125 mg / injection</span></div>
         <div class="info-row"><span class="info-label">Route</span><span class="info-val">SC — 27G × 12mm</span></div>
@@ -420,15 +237,8 @@
         <div class="info-row"><span class="info-label">Trough panel</span><span class="info-val warn">29 Jun 2026 — urologist</span></div>
       </div>
     </div>
-
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--muted)"></div>
-          <div class="card-title">HGH — INCOMING</div>
-        </div>
-        <span class="card-badge badge-upcoming">FROM 4 JUL</span>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--muted)"></div><div class="card-title">HGH — INCOMING</div></div><span class="card-badge badge-upcoming">FROM 4 JUL</span></div>
       <div class="card-body">
         <div class="info-row"><span class="info-label">Start dose</span><span class="info-val">1 IU / day</span></div>
         <div class="info-row"><span class="info-label">Schedule</span><span class="info-val">5-on / 2-off</span></div>
@@ -438,696 +248,152 @@
         <div class="note">Coincides with Nebido injection #2. Discontinue CJC/IPA on start day.</div>
       </div>
     </div>
-
   </div>
-
-  <!-- TIMELINE -->
   <div class="content hidden" id="tab-timeline">
     <div class="card">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent)"></div>
-          <div class="card-title">MILESTONES</div>
-        </div>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">MILESTONES</div></div></div>
       <div class="timeline" id="timeline-body"></div>
     </div>
   </div>
-
-  <!-- BODY COMP -->
   <div class="content hidden" id="tab-body">
-
-    <!-- Entry form -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent)"></div>
-          <div class="card-title">LOG MEASUREMENT</div>
-        </div>
+        <div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">LOG MEASUREMENT</div></div>
         <span class="card-badge badge-today" id="bc-date-badge">—</span>
       </div>
       <div class="card-body" style="gap:12px;">
-        <!-- Height fixed -->
-        <div class="info-row">
-          <span class="info-label">Height</span>
-          <span class="info-val" style="color:var(--muted2)">182 cm</span>
-        </div>
+        <div class="info-row"><span class="info-label">Height</span><span class="info-val" style="color:var(--muted2)">182 cm</span></div>
         <div class="divider"></div>
-        <!-- Weight -->
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Body Weight (kg)</label>
-          <input id="bc-weight" type="number" step="0.1" min="50" max="200" placeholder="e.g. 93.0"
-            onblur="this.value=this.value.replace(',','.')"
-            style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
+          <input id="bc-weight" type="number" step="0.1" min="50" max="200" placeholder="e.g. 93.0" onblur="this.value=this.value.replace(',','.')" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
-        <!-- Neck -->
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Neck circumference (cm)</label>
-          <input id="bc-neck" type="number" step="0.5" min="20" max="60" placeholder="e.g. 39.0"
-            onblur="this.value=this.value.replace(',','.')"
-            style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
+          <input id="bc-neck" type="number" step="0.5" min="20" max="60" placeholder="e.g. 39.0" onblur="this.value=this.value.replace(',','.')" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
-        <!-- Belly -->
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Abdomen circumference (cm)</label>
-          <input id="bc-belly" type="number" step="0.5" min="50" max="160" placeholder="e.g. 96.0"
-            onblur="this.value=this.value.replace(',','.')"
-            style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
+          <input id="bc-belly" type="number" step="0.5" min="50" max="160" placeholder="e.g. 96.0" onblur="this.value=this.value.replace(',','.')" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
-        <button onclick="bcLog()"
-          style="margin-top:4px;padding:12px;border-radius:8px;background:var(--accent);border:none;color:#000;font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;text-transform:uppercase;letter-spacing:1.5px;cursor:pointer;width:100%;">
-          Log Entry
-        </button>
+        <button onclick="bcLog()" style="margin-top:4px;padding:12px;border-radius:8px;background:var(--accent);border:none;color:#000;font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;text-transform:uppercase;letter-spacing:1.5px;cursor:pointer;width:100%;">Log Entry</button>
         <div id="bc-err" style="font-size:11px;color:var(--danger);min-height:14px;text-align:center;"></div>
       </div>
     </div>
-
-    <!-- Results -->
     <div class="card" id="bc-results-card" style="display:none;">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent3)"></div>
-          <div class="card-title">LATEST RESULTS</div>
-        </div>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">LATEST RESULTS</div></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--border);">
-        <div style="padding:16px;text-align:center;border-right:1px solid var(--border);">
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent)" id="res-bw">—</div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">kg</div>
-        </div>
-        <div style="padding:16px;text-align:center;border-right:1px solid var(--border);">
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent2)" id="res-bf">—</div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">% BF</div>
-        </div>
-        <div style="padding:16px;text-align:center;">
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent3)" id="res-bmi">—</div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">BMI</div>
-        </div>
+        <div style="padding:16px;text-align:center;border-right:1px solid var(--border);"><div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent)" id="res-bw">—</div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">kg</div></div>
+        <div style="padding:16px;text-align:center;border-right:1px solid var(--border);"><div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent2)" id="res-bf">—</div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">% BF</div></div>
+        <div style="padding:16px;text-align:center;"><div style="font-family:'Bebas Neue',sans-serif;font-size:32px;line-height:1;color:var(--accent3)" id="res-bmi">—</div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">BMI</div></div>
       </div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;">
         <div style="font-size:11px;color:var(--muted2);">Fat mass <span id="res-fm" style="color:var(--text);font-weight:500;">—</span> kg</div>
         <div style="font-size:11px;color:var(--muted2);">Lean mass <span id="res-lm" style="color:var(--text);font-weight:500;">—</span> kg</div>
       </div>
     </div>
-
-    <!-- Charts -->
     <div class="card" id="bc-chart-card" style="display:none;">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--accent4)"></div>
-          <div class="card-title">PROGRESS</div>
-        </div>
-        <span class="card-badge badge-upcoming" id="bc-entries-badge">0 entries</span>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">PROGRESS</div></div><span class="card-badge badge-upcoming" id="bc-entries-badge">0 entries</span></div>
       <div style="padding:16px;display:flex;flex-direction:column;gap:20px;">
-        <!-- BW chart -->
-        <div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Body Weight (kg)</div>
-          <canvas id="chart-bw" height="120" style="width:100%;display:block;"></canvas>
-        </div>
+        <div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Body Weight (kg)</div><canvas id="chart-bw" height="120" style="width:100%;display:block;"></canvas></div>
         <div style="height:1px;background:var(--border);"></div>
-        <!-- BF chart -->
-        <div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Body Fat (%)</div>
-          <canvas id="chart-bf" height="120" style="width:100%;display:block;"></canvas>
-        </div>
+        <div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Body Fat (%)</div><canvas id="chart-bf" height="120" style="width:100%;display:block;"></canvas></div>
         <div style="height:1px;background:var(--border);"></div>
-        <!-- BMI chart -->
-        <div>
-          <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">BMI</div>
-          <canvas id="chart-bmi" height="120" style="width:100%;display:block;"></canvas>
-        </div>
+        <div><div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">BMI</div><canvas id="chart-bmi" height="120" style="width:100%;display:block;"></canvas></div>
       </div>
     </div>
-
-    <!-- History -->
     <div class="card" id="bc-history-card" style="display:none;">
-      <div class="card-header">
-        <div class="card-title-wrap">
-          <div class="card-dot" style="background:var(--muted2)"></div>
-          <div class="card-title">HISTORY</div>
-        </div>
-        <button onclick="bcClearAll()" style="font-size:10px;color:var(--danger);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;letter-spacing:1px;text-transform:uppercase;">Clear All</button>
-      </div>
+      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--muted2)"></div><div class="card-title">HISTORY</div></div><button onclick="bcClearAll()" style="font-size:10px;color:var(--danger);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;letter-spacing:1px;text-transform:uppercase;">Clear All</button></div>
       <div id="bc-history-list" style="display:flex;flex-direction:column;"></div>
     </div>
-
   </div>
 </div>
-
 <script>
-const PIN = '8538';
-const NOW = new Date();
-const TODAY_DOW = NOW.getDay();
-
-// Doses: dow 0=Sun
-const WEEKLY = [
-  { id:'reta-sun',  name:'Retatrutide',      detail:'3 mg — 30 IU SC',                   dow:[0],             time:'AM',  dot:'#e8ff3c' },
-  { id:'reta-wed',  name:'Retatrutide',      detail:'3 mg — 30 IU SC',                   dow:[3],             time:'AM',  dot:'#e8ff3c' },
-  { id:'cjc-am',   name:'CJC-1295 / IPA',   detail:'4 IU — fasted AM',                  dow:[0,1,2,3,4,5,6], time:'AM',  dot:'#3cffa0' },
-  { id:'cjc-pm',   name:'CJC-1295 / IPA',   detail:'5 IU — pre-sleep PM',               dow:[0,1,2,3,4,5,6], time:'PM',  dot:'#3cffa0' },
-  { id:'glow',     name:'GLOW Stack',        detail:'2 mg (9 IU) — GHK-Cu / TB-500 / BPC-157', dow:[0,1,2,3,4,5,6], time:null, dot:'#3b9eff' },
+const PIN='8538';
+function hashPin(p){let h=0;for(let i=0;i<p.length;i++)h=(Math.imul(31,h)+p.charCodeAt(i))|0;return h.toString(36);}
+const AGENT_URL="https://api.henriks-agent.uk";
+const WEIGHTS_TOKEN=hashPin("8538");
+const NOW=new Date();
+const TODAY_DOW=NOW.getDay();
+const WEEKLY=[
+  {id:'reta-sun',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[0],time:'AM',dot:'#e8ff3c'},
+  {id:'reta-wed',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[3],time:'AM',dot:'#e8ff3c'},
+  {id:'cjc-am',name:'CJC-1295 / IPA',detail:'4 IU — fasted AM',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3cffa0'},
+  {id:'cjc-pm',name:'CJC-1295 / IPA',detail:'5 IU — pre-sleep PM',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3cffa0'},
+  {id:'glow',name:'GLOW Stack',detail:'2 mg (9 IU) — GHK-Cu / TB-500 / BPC-157',dow:[0,1,2,3,4,5,6],time:null,dot:'#3b9eff'},
 ];
-
-const TESTO = [
-  { date: new Date(2026,4,11), label:'Injection 1' },
-  { date: new Date(2026,4,16), label:'Injection 2' },
-  { date: new Date(2026,4,21), label:'Injection 3' },
-  { date: new Date(2026,4,26), label:'Injection 4' },
+const TESTO=[
+  {date:new Date(2026,4,11),label:'Injection 1'},
+  {date:new Date(2026,4,16),label:'Injection 2'},
+  {date:new Date(2026,4,21),label:'Injection 3'},
+  {date:new Date(2026,4,26),label:'Injection 4'},
 ];
-
-const MILESTONES = [
-  { date: new Date(2026,4,11), name:'Testoviron #1', desc:'125 mg SC — bridge begins' },
-  { date: new Date(2026,4,16), name:'Testoviron #2', desc:'125 mg SC' },
-  { date: new Date(2026,4,17), name:'Reta 2× / week starts', desc:'3 mg × 2 (Sun+Wed) from today' },
-  { date: new Date(2026,4,21), name:'Testoviron #3', desc:'125 mg SC' },
-  { date: new Date(2026,4,26), name:'Testoviron #4', desc:'125 mg SC — final bridge dose' },
-  { date: new Date(2026,5,29), name:'Trough Blood Panel', desc:'Urologist — E2, TT, hematocrit, LH, FSH' },
-  { date: new Date(2026,6,4),  name:'HGH Start / Nebido #2', desc:'1 IU/day 5-on/2-off. CJC/IPA stops.' },
+const MILESTONES=[
+  {date:new Date(2026,4,11),name:'Testoviron #1',desc:'125 mg SC — bridge begins'},
+  {date:new Date(2026,4,16),name:'Testoviron #2',desc:'125 mg SC'},
+  {date:new Date(2026,4,17),name:'Reta 2× / week starts',desc:'3 mg × 2 (Sun+Wed) from today'},
+  {date:new Date(2026,4,21),name:'Testoviron #3',desc:'125 mg SC'},
+  {date:new Date(2026,4,26),name:'Testoviron #4',desc:'125 mg SC — final bridge dose'},
+  {date:new Date(2026,5,29),name:'Trough Blood Panel',desc:'Urologist — E2, TT, hematocrit, LH, FSH'},
+  {date:new Date(2026,6,4),name:'HGH Start / Nebido #2',desc:'1 IU/day 5-on/2-off. CJC/IPA stops.'},
 ];
-
-// PIN
-let pinInput = '';
-function pinPress(d) {
-  if (pinInput.length >= 4) return;
-  pinInput += d;
-  refreshDots();
-  if (pinInput.length === 4) setTimeout(checkPin, 80);
-}
-function pinDel() { if (!pinInput.length) return; pinInput = pinInput.slice(0,-1); refreshDots(); }
-function refreshDots() {
-  for (let i=0;i<4;i++) {
-    const el = document.getElementById('d'+i);
-    el.classList.toggle('filled', i < pinInput.length);
-    el.classList.remove('error');
-  }
-}
-function checkPin() {
-  if (pinInput === PIN) {
+let pinInput='';
+function pinPress(d){if(pinInput.length>=4)return;pinInput+=d;refreshDots();if(pinInput.length===4)setTimeout(checkPin,80);}
+function pinDel(){if(!pinInput.length)return;pinInput=pinInput.slice(0,-1);refreshDots();}
+function refreshDots(){for(let i=0;i<4;i++){const el=document.getElementById('d'+i);el.classList.toggle('filled',i<pinInput.length);el.classList.remove('error');}}
+function checkPin(){
+  if(pinInput===PIN){
     document.getElementById('pin-screen').classList.add('hidden');
     document.getElementById('app').classList.add('visible');
     document.body.classList.remove('locked');
     init();
   } else {
-    for (let i=0;i<4;i++) document.getElementById('d'+i).classList.add('error');
-    document.getElementById('pin-err').textContent = 'Incorrect PIN';
-    setTimeout(() => { pinInput=''; refreshDots(); document.getElementById('pin-err').textContent=''; }, 900);
+    for(let i=0;i<4;i++)document.getElementById('d'+i).classList.add('error');
+    document.getElementById('pin-err').textContent='Incorrect PIN';
+    setTimeout(()=>{pinInput='';refreshDots();document.getElementById('pin-err').textContent='';},900);
   }
 }
-
-// ── Weight sync with agent ──────────────────────────────────────────
-const AGENT_URL = "https://api.henriks-agent.uk";
-const WEIGHTS_TOKEN = "wt_hsc_2026_x9k2m";
-
-async function syncWeightsFromAgent() {
-  try {
-    const r = await fetch(AGENT_URL + "/weights", {
-      headers: { "x-app-token": WEIGHTS_TOKEN }
-    });
-    if (!r.ok) return;
-    const remote = await r.json();
-    const local = getData('weight_log', []);
-    const remoteDates = new Set(remote.map(w => w.date));
-    const merged = [...remote];
-    for (const w of local) {
-      if (!remoteDates.has(w.date)) merged.push(w);
-    }
-    merged.sort((a, b) => a.date.localeCompare(b.date));
-    weights = merged;
-    setData('weight_log', merged);
-    updateCurrentWeight();
-  } catch (e) { /* offline — local data still works */ }
-}
-
-async function pushWeightToAgent(date, weightVal) {
-  try {
-    await fetch(AGENT_URL + "/weights", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-app-token": WEIGHTS_TOKEN },
-      body: JSON.stringify({ date: date, weight: weightVal })
-    });
-  } catch (e) {}
-}
-
-async function deleteWeightFromAgent(date) {
-  try {
-    await fetch(AGENT_URL + "/weights/" + date, {
-      method: "DELETE",
-      headers: { "x-app-token": WEIGHTS_TOKEN }
-    });
-  } catch (e) {}
-}
-// ────────────────────────────────────────────────────────────────────
-
-document.addEventListener('keydown', e => {
-  if (document.getElementById('pin-screen').classList.contains('hidden')) return;
-  if (e.key>='0' && e.key<='9') pinPress(e.key);
-  if (e.key==='Backspace') pinDel();
+document.addEventListener('keydown',e=>{
+  if(document.getElementById('pin-screen').classList.contains('hidden'))return;
+  if(e.key>='0'&&e.key<='9')pinPress(e.key);
+  if(e.key==='Backspace')pinDel();
 });
-
-function switchTab(id, el) {
-  document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('tab-'+id).classList.remove('hidden');
-  el.classList.add('active');
-  if (id === 'body') setTimeout(bcRender, 50);
+function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
+function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+let weights=getData('weight_log',[]);
+function updateCurrentWeight(){}
+async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();const local=getData('weight_log',[]);const remoteDates=new Set(remote.map(w=>w.date));const merged=[...remote];for(const w of local){if(!remoteDates.has(w.date))merged.push(w);}merged.sort((a,b)=>a.date.localeCompare(b.date));weights=merged;setData('weight_log',merged);}catch(e){}}
+async function pushWeightToAgent(date,weightVal){try{await fetch(AGENT_URL+"/weights",{method:"POST",headers:{"Content-Type":"application/json","x-app-token":WEIGHTS_TOKEN},body:JSON.stringify({date:date,weight:weightVal})});}catch(e){}}
+async function deleteWeightFromAgent(date){try{await fetch(AGENT_URL+"/weights/"+date,{method:"DELETE",headers:{"x-app-token":WEIGHTS_TOKEN}});}catch(e){}}
+function switchTab(id,el){document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);}
+function dateKey(d){return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
+function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});}
+function getChecked(){try{return JSON.parse(localStorage.getItem('proto-chk-'+dateKey(NOW))||'[]');}catch{return[];}}
+function setChecked(arr){localStorage.setItem('proto-chk-'+dateKey(NOW),JSON.stringify(arr));}
+function init(){
+  document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});
+  document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];
+  buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();
 }
-
-function dateKey(d) { return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
-function fmtDate(d) { return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }
-function getChecked() { try { return JSON.parse(localStorage.getItem('proto-chk-'+dateKey(NOW))||'[]'); } catch { return []; } }
-function setChecked(arr) { localStorage.setItem('proto-chk-'+dateKey(NOW), JSON.stringify(arr)); }
-
-function init() {
-  document.getElementById('hdr-day').textContent = NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});
-  document.getElementById('hdr-weekday').textContent = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];
-  buildWeekStrip();
-  buildToday();
-  buildSchedule();
-  buildTimeline();
-  initBodyComp();
-}
-
-function buildWeekStrip() {
-  const strip = document.getElementById('week-strip');
-  strip.innerHTML = '';
-  const mon = new Date(NOW);
-  mon.setDate(NOW.getDate() - ((NOW.getDay()+6)%7));
-  for (let i=0;i<7;i++) {
-    const d = new Date(mon); d.setDate(mon.getDate()+i);
-    const dow = d.getDay();
-    const isToday = d.toDateString()===NOW.toDateString();
-    const dots = [];
-    WEEKLY.forEach(dose => { if (dose.dow.includes(dow)) dots.push(dose.dot); });
-    TESTO.forEach(t => { if (t.date.toDateString()===d.toDateString()) dots.push('#c084fc'); });
-    const el = document.createElement('div');
-    el.className = 'week-day'+(isToday?' today':'');
-    el.innerHTML = `<div class="week-day-name">${['M','T','W','T','F','S','S'][i]}</div>
-      <div class="week-day-num">${d.getDate()}</div>
-      <div class="week-dots">${[...new Set(dots)].slice(0,3).map(c=>`<div class="week-dot" style="background:${c}"></div>`).join('')}</div>`;
-    strip.appendChild(el);
-  }
-}
-
-function buildToday() {
-  const list = document.getElementById('today-checklist');
-  list.innerHTML = '';
-  const checked = getChecked();
-  const alertWrap = document.getElementById('today-alerts');
-  alertWrap.innerHTML = '';
-
-  // Build alerts
-  TESTO.forEach((t,i) => {
-    const diff = Math.round((t.date - NOW)/86400000);
-    if (diff===1) {
-      const a = document.createElement('div'); a.className='alert-bar';
-      a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC. Prepare syringe.</div>`;
-      alertWrap.appendChild(a);
-    }
-  });
-  const panel = new Date(2026,5,29);
-  const pd = Math.round((panel-NOW)/86400000);
-  if (pd>0 && pd<=7) {
-    const a = document.createElement('div'); a.className='alert-bar';
-    a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist. Fast beforehand.</div>`;
-    alertWrap.appendChild(a);
-  }
-  const hgh = new Date(2026,6,4);
-  const hd = Math.round((hgh-NOW)/86400000);
-  if (hd>0 && hd<=7) {
-    const a = document.createElement('div'); a.className='alert-bar green';
-    a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA. 1 IU/day, 5-on/2-off.</div>`;
-    alertWrap.appendChild(a);
-  }
-
-  // Build today doses
-  const doses = [];
-  WEEKLY.forEach(d => { if (d.dow.includes(TODAY_DOW)) doses.push({id:d.id+'_'+dateKey(NOW), name:d.name, detail:d.detail, time:d.time, dot:d.dot}); });
-  TESTO.forEach((t,i) => {
-    if (t.date.toDateString()===NOW.toDateString())
-      doses.push({id:'testo_'+i+'_'+dateKey(NOW), name:'Testoviron 125mg', detail:t.label+' — 27G×12mm SC, 18G filter', time:null, dot:'#c084fc'});
-  });
-
-  if (!doses.length) {
-    list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';
-    document.getElementById('today-badge').textContent='—';
-    return;
-  }
-
-  const order = {'AM':0, 'null':1, 'PM':2};
-  doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));
-
-  let done=0;
-  doses.forEach(dose => {
-    const isChk = checked.includes(dose.id);
-    if (isChk) done++;
-    const item = document.createElement('div');
-    item.className = 'check-item'+(isChk?' checked-item':'');
-    item.innerHTML = `
-      <div class="check-box ${isChk?'checked':''}">
-        <svg width="12" height="10" viewBox="0 0 12 10" fill="none">
-          <path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="check-main">
-        <div class="check-name" style="color:${isChk?'':''+dose.dot}">${dose.name}</div>
-        <div class="check-detail">${dose.detail}</div>
-      </div>
-      ${dose.time?`<div class="check-time">${dose.time}</div>`:''}
-    `;
-    item.onclick = ()=>toggle(dose.id);
-    list.appendChild(item);
-  });
-
-  const badge = document.getElementById('today-badge');
-  badge.textContent = done+' / '+doses.length;
-  badge.className = 'card-badge '+(done===doses.length?'badge-done':'badge-today');
-}
-
-function toggle(id) {
-  const chk = getChecked();
-  const i = chk.indexOf(id);
-  if (i===-1) chk.push(id); else chk.splice(i,1);
-  setChecked(chk);
-  buildToday();
-}
-function resetToday() { setChecked([]); buildToday(); }
-
-function buildSchedule() {
-  // Weekly pattern
-  const body = document.getElementById('schedule-body');
-  body.innerHTML = '';
-  const dayLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const dowMap    = [1,2,3,4,5,6,0];
-  dayLabels.forEach((lbl,i) => {
-    const dow = dowMap[i];
-    const today = dow===TODAY_DOW;
-    const doses = WEEKLY.filter(d=>d.dow.includes(dow));
-    if (!doses.length) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'sched-day';
-    wrap.innerHTML = `<div class="sched-day-label ${today?'is-today':''}">${lbl}${today?' · today':''}</div><div class="pill-wrap"></div>`;
-    const pills = wrap.querySelector('.pill-wrap');
-    doses.forEach(d => {
-      const p = document.createElement('div'); p.className='pill';
-      p.innerHTML=`<div class="pill-dot" style="background:${d.dot}"></div>${d.name}${d.time?' · '+d.time:''}`;
-      pills.appendChild(p);
-    });
-    body.appendChild(wrap);
-  });
-
-  // Testo list
-  const tList = document.getElementById('testo-list');
-  tList.innerHTML='';
-  let past=0;
-  TESTO.forEach((t,i) => {
-    const isPast = t.date < NOW && t.date.toDateString()!==NOW.toDateString();
-    const isToday2 = t.date.toDateString()===NOW.toDateString();
-    if (isPast) past++;
-    const item = document.createElement('div');
-    item.className='check-item'; item.style.cursor='default';
-    item.innerHTML=`
-      <div class="check-box ${isPast?'checked':''}">
-        <svg width="12" height="10" viewBox="0 0 12 10" fill="none">
-          <path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="check-main">
-        <div class="check-name" style="color:${isPast?'var(--muted2)':isToday2?'var(--accent)':'var(--accent4)'}">${t.label} — 125 mg</div>
-        <div class="check-detail">${fmtDate(t.date)}${isToday2?' · TODAY':''}</div>
-      </div>
-      <div style="font-size:11px;font-weight:600;color:${isPast?'var(--accent3)':isToday2?'var(--accent)':'var(--muted2)'}">
-        ${isPast?'DONE':isToday2?'TODAY':'—'}
-      </div>
-    `;
-    tList.appendChild(item);
-  });
-  const pct = Math.round(past/TESTO.length*100);
-  document.getElementById('testo-prog').style.width = pct+'%';
-  document.getElementById('testo-prog-txt').textContent = past+' / '+TESTO.length+' done';
-  const tb = document.getElementById('testo-badge');
-  tb.textContent = past===TESTO.length?'COMPLETE':`${past}/${TESTO.length} DONE`;
-  tb.className = 'card-badge '+(past===TESTO.length?'badge-done':'badge-upcoming');
-}
-
-function buildTimeline() {
-  const body = document.getElementById('timeline-body');
-  body.innerHTML = '';
-  MILESTONES.forEach((m,i) => {
-    const past = m.date < NOW && m.date.toDateString()!==NOW.toDateString();
-    const isToday = m.date.toDateString()===NOW.toDateString();
-    const last = i===MILESTONES.length-1;
-    const row = document.createElement('div');
-    row.className='milestone';
-    row.innerHTML=`
-      <div class="milestone-line">
-        <div class="milestone-dot ${past?'past':isToday?'today-dot':'future'}"></div>
-        ${!last?'<div class="milestone-connector"></div>':''}
-      </div>
-      <div class="milestone-body">
-        <div class="milestone-date">${fmtDate(m.date)}${isToday?' · TODAY':''}</div>
-        <div class="milestone-name" style="color:${past?'var(--muted2)':isToday?'var(--accent)':'var(--text)'}">${m.name}</div>
-        <div class="milestone-desc">${m.desc}</div>
-      </div>
-    `;
-    body.appendChild(row);
-  });
-}
-
-// ── BODY COMP ──
-const HEIGHT_CM = 182;
-const BC_KEY = 'proto-bodycomp-v1';
-
-function bcLoad() {
-  try {
-    let arr = JSON.parse(localStorage.getItem(BC_KEY) || '[]');
-    // Fix old BMI stored as 10x
-    arr.forEach(e => { if (e.bmi > 100) e.bmi = Math.round(e.bmi / 10); });
-    // Remove corrupt entries (bad decimal separator caused e.g. 924kg)
-    arr = arr.filter(e => e.weight >= 40 && e.weight <= 250 && e.neck >= 20 && e.belly >= 50 && e.belly > e.neck);
-    return arr;
-  } catch { return []; }
-}
-function bcSave(arr) { localStorage.setItem(BC_KEY, JSON.stringify(arr)); }
-
-// US Navy BF formula (male, metric)
-// BF% = 495 / (1.0324 - 0.19077*log10(abdomen - neck) + 0.15456*log10(height)) - 450
-function navyBF(weightKg, neckCm, bellyCm, heightCm) {
-  const bf = 495 / (1.0324 - 0.19077 * Math.log10(bellyCm - neckCm) + 0.15456 * Math.log10(heightCm)) - 450;
-  return Math.round(bf * 10) / 10;
-}
-function calcBMI(weightKg, heightCm) {
-  return Math.round(weightKg / Math.pow(heightCm / 100, 2));
-}
-
-function parseVal(id) {
-  const raw = document.getElementById(id).value.trim().replace(',', '.');
-  const v = parseFloat(raw);
-  return isNaN(v) ? null : v;
-}
-
-function bcLog() {
-  const w = parseVal('bc-weight');
-  const n = parseVal('bc-neck');
-  const b = parseVal('bc-belly');
-  const err = document.getElementById('bc-err');
-  err.textContent = '';
-
-  if (w === null) { err.textContent = 'Enter a valid body weight (e.g. 93.0)'; return; }
-  if (n === null) { err.textContent = 'Enter a valid neck circumference (e.g. 39.0)'; return; }
-  if (b === null) { err.textContent = 'Enter a valid abdomen circumference (e.g. 96.0)'; return; }
-
-  if (w < 40 || w > 250)  { err.textContent = 'Weight out of range (40–250 kg)'; return; }
-  if (n < 20 || n > 60)   { err.textContent = 'Neck out of range (20–60 cm)'; return; }
-  if (b < 50 || b > 200)  { err.textContent = 'Abdomen out of range (50–200 cm)'; return; }
-  if (b <= n)              { err.textContent = 'Abdomen must be larger than neck'; return; }
-
-  const bf = navyBF(w, n, b, HEIGHT_CM);
-  const bmi = calcBMI(w, HEIGHT_CM);
-  if (bf < 3 || bf > 60) { err.textContent = 'Result out of range — check measurements.'; return; }
-
-  const entry = {
-    date: dateKey(NOW),
-    dateLabel: fmtDate(NOW),
-    weight: w,
-    neck: n,
-    belly: b,
-    bf: bf,
-    bmi: bmi,
-    fm: Math.round(w * bf / 100 * 10) / 10,
-    lm: Math.round(w * (1 - bf / 100) * 10) / 10,
-  };
-
-  const arr = bcLoad();
-  // Replace if same day
-  const idx = arr.findIndex(e => e.date === entry.date);
-  if (idx !== -1) arr[idx] = entry; else arr.push(entry);
-  arr.sort((a,b) => a.date.localeCompare(b.date));
-  bcSave(arr);
-
-  // Clear inputs
-  document.getElementById('bc-weight').value = '';
-  document.getElementById('bc-neck').value = '';
-  document.getElementById('bc-belly').value = '';
-
-  bcRender();
-}
-
-function bcRender() {
-  const arr = bcLoad();
-  // Update date badge
-  document.getElementById('bc-date-badge').textContent = fmtDate(NOW).toUpperCase();
-
-  if (!arr.length) {
-    document.getElementById('bc-results-card').style.display = 'none';
-    document.getElementById('bc-chart-card').style.display = 'none';
-    document.getElementById('bc-history-card').style.display = 'none';
-    return;
-  }
-
-  const latest = arr[arr.length - 1];
-  document.getElementById('bc-results-card').style.display = '';
-  document.getElementById('res-bw').textContent = latest.weight;
-  document.getElementById('res-bf').textContent = latest.bf + '%';
-  document.getElementById('res-bmi').textContent = latest.bmi;
-  document.getElementById('res-fm').textContent = latest.fm;
-  document.getElementById('res-lm').textContent = latest.lm;
-
-  document.getElementById('bc-chart-card').style.display = '';
-  document.getElementById('bc-entries-badge').textContent = arr.length + ' entr' + (arr.length === 1 ? 'y' : 'ies');
-
-  // Charts
-  bcDrawChart('chart-bw',  arr.map(e=>e.weight), arr.map(e=>e.dateLabel), '#e8ff3c', 'kg');
-  bcDrawChart('chart-bf',  arr.map(e=>e.bf),     arr.map(e=>e.dateLabel), '#ff6b2b', '%');
-  bcDrawChart('chart-bmi', arr.map(e=>e.bmi),    arr.map(e=>e.dateLabel), '#3cffa0', '');
-
-  // History
-  document.getElementById('bc-history-card').style.display = '';
-  const list = document.getElementById('bc-history-list');
-  list.innerHTML = '';
-  [...arr].reverse().forEach((e, i) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';
-    if (i === arr.length - 1) row.style.borderBottom = 'none';
-    row.innerHTML = `
-      <div>
-        <div style="font-weight:500;color:var(--text)">${e.dateLabel}</div>
-        <div style="color:var(--muted2);margin-top:2px;">Neck ${e.neck} · Belly ${e.belly}</div>
-      </div>
-      <div style="text-align:right;display:flex;gap:14px;align-items:center;">
-        <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent);line-height:1">${e.weight}</div><div style="font-size:9px;color:var(--muted2);">KG</div></div>
-        <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>
-        <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>
-        <button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button>
-      </div>
-    `;
-    list.appendChild(row);
-  });
-}
-
-function bcDrawChart(canvasId, values, labels, color, unit) {
-  const canvas = document.getElementById(canvasId);
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = canvas.offsetWidth || 300;
-  const cssH = 120;
-  canvas.width  = cssW * dpr;
-  canvas.height = cssH * dpr;
-  canvas.style.width  = cssW + 'px';
-  canvas.style.height = cssH + 'px';
-
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  if (values.length < 1) return;
-
-  const PAD = { top: 12, right: 12, bottom: 28, left: 38 };
-  const cW = cssW - PAD.left - PAD.right;
-  const cH = cssH - PAD.top  - PAD.bottom;
-
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const range = maxV - minV || 1;
-  const vMin = minV - range * 0.15;
-  const vMax = maxV + range * 0.15;
-
-  const xOf = i => PAD.left + (values.length === 1 ? cW / 2 : (i / (values.length - 1)) * cW);
-  const yOf = v => PAD.top + cH - ((v - vMin) / (vMax - vMin)) * cH;
-
-  // Grid
-  ctx.strokeStyle = '#2a2a2a';
-  ctx.lineWidth = 0.5;
-  for (let i = 0; i <= 3; i++) {
-    const y = PAD.top + (cH / 3) * i;
-    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
-  }
-
-  // Y labels
-  ctx.fillStyle = '#555';
-  ctx.font = '9px DM Sans, sans-serif';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 3; i++) {
-    const v = vMax - (vMax - vMin) * (i / 3);
-    const y = PAD.top + (cH / 3) * i;
-    ctx.fillText(Math.round(v * 10) / 10, PAD.left - 4, y + 3);
-  }
-
-  if (values.length === 1) {
-    const x = xOf(0), y = yOf(values[0]);
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = color; ctx.fill();
-    ctx.fillStyle = '#555'; ctx.font = '9px DM Sans,sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(labels[0].split(' ').slice(0,2).join(' '), x, PAD.top + cH + 18);
-    return;
-  }
-
-  // Gradient fill
-  const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
-  grad.addColorStop(0, color + '33');
-  grad.addColorStop(1, color + '00');
-  ctx.beginPath();
-  ctx.moveTo(xOf(0), PAD.top + cH);
-  values.forEach((v, i) => ctx.lineTo(xOf(i), yOf(v)));
-  ctx.lineTo(xOf(values.length - 1), PAD.top + cH);
-  ctx.closePath();
-  ctx.fillStyle = grad; ctx.fill();
-
-  // Line
-  ctx.beginPath();
-  ctx.moveTo(xOf(0), yOf(values[0]));
-  values.forEach((v, i) => { if (i > 0) ctx.lineTo(xOf(i), yOf(v)); });
-  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
-
-  // Dots + X labels
-  values.forEach((v, i) => {
-    const x = xOf(i), y = yOf(v);
-    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-    ctx.fillStyle = color; ctx.fill();
-    ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#0a0a0a'; ctx.fill();
-    if (i === 0 || i === values.length - 1 || i % Math.max(1, Math.floor(values.length / 4)) === 0) {
-      ctx.fillStyle = '#555'; ctx.font = '9px DM Sans,sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(labels[i].split(' ').slice(0,2).join(' '), x, PAD.top + cH + 18);
-    }
-  });
-}
-
-function bcDeleteEntry(date) {
-  const arr = bcLoad().filter(e => e.date !== date);
-  bcSave(arr);
-  bcRender();
-}
-
-function bcClearAll() {
-  if (!confirm('Delete all body comp entries?')) return;
-  localStorage.removeItem(BC_KEY);
-  bcRender();
-}
-
-function initBodyComp() {
-  syncWeightsFromAgent();
-  document.getElementById('bc-date-badge').textContent = fmtDate(NOW).toUpperCase();
-  bcRender();
-}
+function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const mon=new Date(NOW);mon.setDate(NOW.getDate()-((NOW.getDay()+6)%7));for(let i=0;i<7;i++){const d=new Date(mon);d.setDate(mon.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(dose=>{if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(t=>{if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.innerHTML=`<div class="week-day-name">${['M','T','W','T','F','S','S'][i]}</div><div class="week-day-num">${d.getDate()}</div><div class="week-dots">${[...new Set(dots)].slice(0,3).map(c=>`<div class="week-dot" style="background:${c}"></div>`).join('')}</div>`;strip.appendChild(el);}}
+function buildToday(){const list=document.getElementById('today-checklist');list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC. Prepare syringe.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist. Fast beforehand.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA. 1 IU/day, 5-on/2-off.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(d.dow.includes(TODAY_DOW))doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron 125mg',detail:t.label+' — 27G×12mm SC, 18G filter',time:null,dot:'#c084fc'});});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(dose=>{const isChk=checked.includes(dose.id);if(isChk)done++;const item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');item.innerHTML=`<div class="check-box ${isChk?'checked':''}"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:${isChk?'':''+dose.dot}">${dose.name}</div><div class="check-detail">${dose.detail}</div></div>${dose.time?`<div class="check-time">${dose.time}</div>`:''}`; item.onclick=()=>toggle(dose.id);list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
+function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);buildToday();}
+function resetToday(){setChecked([]);buildToday();}
+function buildSchedule(){const body=document.getElementById('schedule-body');body.innerHTML='';const dayLabels=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];const dowMap=[1,2,3,4,5,6,0];dayLabels.forEach((lbl,i)=>{const dow=dowMap[i];const today=dow===TODAY_DOW;const doses=WEEKLY.filter(d=>d.dow.includes(dow));if(!doses.length)return;const wrap=document.createElement('div');wrap.className='sched-day';wrap.innerHTML=`<div class="sched-day-label ${today?'is-today':''}">${lbl}${today?' · today':''}</div><div class="pill-wrap"></div>`;const pills=wrap.querySelector('.pill-wrap');doses.forEach(d=>{const p=document.createElement('div');p.className='pill';p.innerHTML=`<div class="pill-dot" style="background:${d.dot}"></div>${d.name}${d.time?' · '+d.time:''}`;pills.appendChild(p);});body.appendChild(wrap);});const tList=document.getElementById('testo-list');tList.innerHTML='';let past=0;TESTO.forEach((t,i)=>{const isPast=t.date<NOW&&t.date.toDateString()!==NOW.toDateString();const isToday2=t.date.toDateString()===NOW.toDateString();if(isPast)past++;const item=document.createElement('div');item.className='check-item';item.style.cursor='default';item.innerHTML=`<div class="check-box ${isPast?'checked':''}"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:${isPast?'var(--muted2)':isToday2?'var(--accent)':'var(--accent4)'}">${t.label} — 125 mg</div><div class="check-detail">${fmtDate(t.date)}${isToday2?' · TODAY':''}</div></div><div style="font-size:11px;font-weight:600;color:${isPast?'var(--accent3)':isToday2?'var(--accent)':'var(--muted2)'}">${isPast?'DONE':isToday2?'TODAY':'—'}</div>`;tList.appendChild(item);});const pct=Math.round(past/TESTO.length*100);document.getElementById('testo-prog').style.width=pct+'%';document.getElementById('testo-prog-txt').textContent=past+' / '+TESTO.length+' done';const tb=document.getElementById('testo-badge');tb.textContent=past===TESTO.length?'COMPLETE':`${past}/${TESTO.length} DONE`;tb.className='card-badge '+(past===TESTO.length?'badge-done':'badge-upcoming');}
+function buildTimeline(){const body=document.getElementById('timeline-body');body.innerHTML='';MILESTONES.forEach((m,i)=>{const past=m.date<NOW&&m.date.toDateString()!==NOW.toDateString();const isToday=m.date.toDateString()===NOW.toDateString();const last=i===MILESTONES.length-1;const row=document.createElement('div');row.className='milestone';row.innerHTML=`<div class="milestone-line"><div class="milestone-dot ${past?'past':isToday?'today-dot':'future'}"></div>${!last?'<div class="milestone-connector"></div>':''}</div><div class="milestone-body"><div class="milestone-date">${fmtDate(m.date)}${isToday?' · TODAY':''}</div><div class="milestone-name" style="color:${past?'var(--muted2)':isToday?'var(--accent)':'var(--text)'}">${m.name}</div><div class="milestone-desc">${m.desc}</div></div>`;body.appendChild(row);});}
+const HEIGHT_CM=182;
+const BC_KEY='proto-bodycomp-v1';
+function bcLoad(){try{let arr=JSON.parse(localStorage.getItem(BC_KEY)||'[]');arr.forEach(e=>{if(e.bmi>100)e.bmi=Math.round(e.bmi/10);});arr=arr.filter(e=>e.weight>=40&&e.weight<=250&&e.neck>=20&&e.belly>=50&&e.belly>e.neck);return arr;}catch{return[];}}
+function bcSave(arr){localStorage.setItem(BC_KEY,JSON.stringify(arr));}
+function navyBF(w,n,b,h){return Math.round((495/(1.0324-0.19077*Math.log10(b-n)+0.15456*Math.log10(h))-450)*10)/10;}
+function calcBMI(w,h){return Math.round(w/Math.pow(h/100,2));}
+function parseVal(id){const raw=document.getElementById(id).value.trim().replace(',','.');const v=parseFloat(raw);return isNaN(v)?null:v;}
+function bcLog(){const w=parseVal('bc-weight');const n=parseVal('bc-neck');const b=parseVal('bc-belly');const err=document.getElementById('bc-err');err.textContent='';if(w===null){err.textContent='Enter a valid body weight (e.g. 93.0)';return;}if(n===null){err.textContent='Enter a valid neck circumference (e.g. 39.0)';return;}if(b===null){err.textContent='Enter a valid abdomen circumference (e.g. 96.0)';return;}if(w<40||w>250){err.textContent='Weight out of range (40–250 kg)';return;}if(n<20||n>60){err.textContent='Neck out of range (20–60 cm)';return;}if(b<50||b>200){err.textContent='Abdomen out of range (50–200 cm)';return;}if(b<=n){err.textContent='Abdomen must be larger than neck';return;}const bf=navyBF(w,n,b,HEIGHT_CM);const bmi=calcBMI(w,HEIGHT_CM);if(bf<3||bf>60){err.textContent='Result out of range — check measurements.';return;}const entry={date:dateKey(NOW),dateLabel:fmtDate(NOW),weight:w,neck:n,belly:b,bf:bf,bmi:bmi,fm:Math.round(w*bf/100*10)/10,lm:Math.round(w*(1-bf/100)*10)/10};const arr=bcLoad();const idx=arr.findIndex(e=>e.date===entry.date);if(idx!==-1)arr[idx]=entry;else arr.push(entry);arr.sort((a,b)=>a.date.localeCompare(b.date));bcSave(arr);pushWeightToAgent(entry.date,entry.weight);document.getElementById('bc-weight').value='';document.getElementById('bc-neck').value='';document.getElementById('bc-belly').value='';bcRender();}
+function bcRender(){const arr=bcLoad();document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();if(!arr.length){document.getElementById('bc-results-card').style.display='none';document.getElementById('bc-chart-card').style.display='none';document.getElementById('bc-history-card').style.display='none';return;}const latest=arr[arr.length-1];document.getElementById('bc-results-card').style.display='';document.getElementById('res-bw').textContent=latest.weight;document.getElementById('res-bf').textContent=latest.bf+'%';document.getElementById('res-bmi').textContent=latest.bmi;document.getElementById('res-fm').textContent=latest.fm;document.getElementById('res-lm').textContent=latest.lm;document.getElementById('bc-chart-card').style.display='';document.getElementById('bc-entries-badge').textContent=arr.length+' entr'+(arr.length===1?'y':'ies');bcDrawChart('chart-bw',arr.map(e=>e.weight),arr.map(e=>e.dateLabel),'#e8ff3c','kg');bcDrawChart('chart-bf',arr.map(e=>e.bf),arr.map(e=>e.dateLabel),'#ff6b2b','%');bcDrawChart('chart-bmi',arr.map(e=>e.bmi),arr.map(e=>e.dateLabel),'#3cffa0','');document.getElementById('bc-history-card').style.display='';const list=document.getElementById('bc-history-list');list.innerHTML='';[...arr].reverse().forEach((e,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';if(i===arr.length-1)row.style.borderBottom='none';row.innerHTML=`<div><div style="font-weight:500;color:var(--text)">${e.dateLabel}</div><div style="color:var(--muted2);margin-top:2px;">Neck ${e.neck} · Belly ${e.belly}</div></div><div style="text-align:right;display:flex;gap:14px;align-items:center;"><div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent);line-height:1">${e.weight}</div><div style="font-size:9px;color:var(--muted2);">KG</div></div><div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div><div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div><button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button></div>`;list.appendChild(row);});}
+function bcDrawChart(canvasId,values,labels,color,unit){const canvas=document.getElementById(canvasId);const dpr=window.devicePixelRatio||1;const cssW=canvas.offsetWidth||300;const cssH=120;canvas.width=cssW*dpr;canvas.height=cssH*dpr;canvas.style.width=cssW+'px';canvas.style.height=cssH+'px';const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);if(values.length<1)return;const PAD={top:12,right:12,bottom:28,left:38};const cW=cssW-PAD.left-PAD.right;const cH=cssH-PAD.top-PAD.bottom;const minV=Math.min(...values);const maxV=Math.max(...values);const range=maxV-minV||1;const vMin=minV-range*0.15;const vMax=maxV+range*0.15;const xOf=i=>PAD.left+(values.length===1?cW/2:(i/(values.length-1))*cW);const yOf=v=>PAD.top+cH-((v-vMin)/(vMax-vMin))*cH;ctx.strokeStyle='#2a2a2a';ctx.lineWidth=0.5;for(let i=0;i<=3;i++){const y=PAD.top+(cH/3)*i;ctx.beginPath();ctx.moveTo(PAD.left,y);ctx.lineTo(PAD.left+cW,y);ctx.stroke();}ctx.fillStyle='#555';ctx.font='9px DM Sans, sans-serif';ctx.textAlign='right';for(let i=0;i<=3;i++){const v=vMax-(vMax-vMin)*(i/3);const y=PAD.top+(cH/3)*i;ctx.fillText(Math.round(v*10)/10,PAD.left-4,y+3);}if(values.length===1){const x=xOf(0),y=yOf(values[0]);ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();return;}const grad=ctx.createLinearGradient(0,PAD.top,0,PAD.top+cH);grad.addColorStop(0,color+'33');grad.addColorStop(1,color+'00');ctx.beginPath();ctx.moveTo(xOf(0),PAD.top+cH);values.forEach((v,i)=>ctx.lineTo(xOf(i),yOf(v)));ctx.lineTo(xOf(values.length-1),PAD.top+cH);ctx.closePath();ctx.fillStyle=grad;ctx.fill();ctx.beginPath();ctx.moveTo(xOf(0),yOf(values[0]));values.forEach((v,i)=>{if(i>0)ctx.lineTo(xOf(i),yOf(v));});ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();values.forEach((v,i)=>{const x=xOf(i),y=yOf(v);ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.beginPath();ctx.arc(x,y,1.5,0,Math.PI*2);ctx.fillStyle='#0a0a0a';ctx.fill();if(i===0||i===values.length-1||i%Math.max(1,Math.floor(values.length/4))===0){ctx.fillStyle='#555';ctx.font='9px DM Sans,sans-serif';ctx.textAlign='center';ctx.fillText(labels[i].split(' ').slice(0,2).join(' '),x,PAD.top+cH+18);}});}
+function bcDeleteEntry(date){const arr=bcLoad().filter(e=>e.date!==date);bcSave(arr);deleteWeightFromAgent(date);bcRender();}
+function bcClearAll(){if(!confirm('Delete all body comp entries?'))return;localStorage.removeItem(BC_KEY);bcRender();}
+function initBodyComp(){syncWeightsFromAgent();document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcRender();}
 </script>
 </body>
 </html>
