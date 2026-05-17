@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.12</title>
+<title>Henrik's Protocol v1.13</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
   :root{--bg:#0a0a0a;--surface:#131313;--surface2:#1c1c1c;--border:#2a2a2a;--accent:#e8ff3c;--accent2:#ff6b2b;--accent3:#3cffa0;--accent4:#c084fc;--text:#f0f0f0;--muted:#555;--muted2:#888;--danger:#ff3c3c;--warning:#ffb03c;}
@@ -32,11 +32,14 @@
   #app.visible{display:flex;}
   .hdr{padding:22px 20px 0;display:flex;justify-content:space-between;align-items:flex-start;}
   .hdr-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:3px;color:var(--accent);line-height:1;}
-  .hdr-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1.5px;margin-top:3px;display:flex;align-items:center;gap:6px;}
-  .hdr-ver{font-size:11px;color:var(--accent);letter-spacing:1px;font-weight:600;}
+  .hdr-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1.5px;margin-top:3px;display:flex;align-items:center;gap:5px;}
   .hdr-right{text-align:right;}
   .hdr-day{font-family:'Bebas Neue',sans-serif;font-size:30px;color:var(--text);line-height:1;}
   .hdr-weekday{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
+  .agent-status{display:inline-flex;align-items:center;margin-left:2px;}
+  .agent-dot{width:7px;height:7px;border-radius:50%;background:var(--border);transition:background 0.3s;flex-shrink:0;cursor:pointer;}
+  .agent-dot.up{background:#3cffa0;box-shadow:0 0 5px rgba(60,255,160,0.6);}
+  .agent-dot.down{background:#ff3c3c;box-shadow:0 0 5px rgba(255,60,60,0.5);}
   .tabs{display:flex;padding:14px 20px 0;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;gap:4px;}
   .tabs::-webkit-scrollbar{display:none;}
   .tab{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;padding:8px 14px 12px;color:var(--muted2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.15s;}
@@ -147,7 +150,7 @@
   <div class="hdr">
     <div>
       <div class="hdr-title">PROTOCOL</div>
-      <div class="hdr-sub">Henrik's Stack <span style="color:var(--border)">·</span> <span class="hdr-ver">v1.12</span></div>
+      <div class="hdr-sub">Henrik's Stack <span style="color:var(--border)">·</span> <span style="color:var(--accent);font-weight:600;letter-spacing:1px">v1.13</span><span class="agent-status" title="Agent status"><span class="agent-dot" id="agent-dot" onclick="checkAgentStatus()"></span></span></div>
     </div>
     <div class="hdr-right"><div class="hdr-day" id="hdr-day">—</div><div class="hdr-weekday" id="hdr-weekday">—</div></div>
   </div>
@@ -241,6 +244,7 @@ document.addEventListener('keydown',e=>{if(document.getElementById('pin-screen')
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 let weights=getData('weight_log',[]);
+async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:{"x-app-token":WEIGHTS_TOKEN},signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
 async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();const local=getData('weight_log',[]);const remoteDates=new Set(remote.map(w=>w.date));const merged=[...remote];for(const w of local){if(!remoteDates.has(w.date))merged.push(w);}merged.sort((a,b)=>a.date.localeCompare(b.date));weights=merged;setData('weight_log',merged);}catch(e){}}
 async function pushWeightToAgent(date,weightVal){try{await fetch(AGENT_URL+"/weights",{method:"POST",headers:{"Content-Type":"application/json","x-app-token":WEIGHTS_TOKEN},body:JSON.stringify({date:date,weight:weightVal})});}catch(e){}}
 async function deleteWeightFromAgent(date){try{await fetch(AGENT_URL+"/weights/"+date,{method:"DELETE",headers:{"x-app-token":WEIGHTS_TOKEN}});}catch(e){}}
@@ -249,7 +253,7 @@ function dateKey(d){return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
 function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});}
 function getChecked(){try{return JSON.parse(localStorage.getItem('proto-chk-'+dateKey(NOW))||'[]');}catch{return[];}}
 function setChecked(arr){localStorage.setItem('proto-chk-'+dateKey(NOW),JSON.stringify(arr));}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();checkAgentStatus();}
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const mon=new Date(NOW);mon.setDate(NOW.getDate()-((NOW.getDay()+6)%7));for(let i=0;i<7;i++){const d=new Date(mon);d.setDate(mon.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(dose=>{if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(t=>{if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.innerHTML=`<div class="week-day-name">${['M','T','W','T','F','S','S'][i]}</div><div class="week-day-num">${d.getDate()}</div><div class="week-dots">${[...new Set(dots)].slice(0,3).map(c=>`<div class="week-dot" style="background:${c}"></div>`).join('')}</div>`;strip.appendChild(el);}}
 function buildToday(){const list=document.getElementById('today-checklist');list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(d.dow.includes(TODAY_DOW))doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron 125mg',detail:t.label+' — 27G×12mm SC, 18G filter',time:null,dot:'#c084fc'});});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(dose=>{const isChk=checked.includes(dose.id);if(isChk)done++;const item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');item.innerHTML=`<div class="check-box ${isChk?'checked':''}"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:${isChk?'':''+dose.dot}">${dose.name}</div><div class="check-detail">${dose.detail}</div></div>${dose.time?`<div class="check-time">${dose.time}</div>`:''}`; item.onclick=()=>toggle(dose.id);list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
 function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);buildToday();}
