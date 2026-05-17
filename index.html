@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.3</title>
+<title>Henrik's Protocol v1.8</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
 
@@ -477,18 +477,21 @@
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Body Weight (kg)</label>
           <input id="bc-weight" type="number" step="0.1" min="50" max="200" placeholder="e.g. 93.0"
+            onblur="this.value=this.value.replace(',','.')"
             style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
         <!-- Neck -->
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Neck circumference (cm)</label>
           <input id="bc-neck" type="number" step="0.5" min="20" max="60" placeholder="e.g. 39.0"
+            onblur="this.value=this.value.replace(',','.')"
             style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
         <!-- Belly -->
         <div style="display:flex;flex-direction:column;gap:4px;">
           <label class="info-label">Abdomen circumference (cm)</label>
           <input id="bc-belly" type="number" step="0.5" min="50" max="160" placeholder="e.g. 96.0"
+            onblur="this.value=this.value.replace(',','.')"
             style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:'DM Sans',sans-serif;width:100%;outline:none;">
         </div>
         <button onclick="bcLog()"
@@ -631,6 +634,51 @@ function checkPin() {
     setTimeout(() => { pinInput=''; refreshDots(); document.getElementById('pin-err').textContent=''; }, 900);
   }
 }
+
+// ── Weight sync with agent ──────────────────────────────────────────
+const AGENT_URL = "https://api.henriks-agent.uk";
+const WEIGHTS_TOKEN = "wt_hsc_2026_x9k2m";
+
+async function syncWeightsFromAgent() {
+  try {
+    const r = await fetch(AGENT_URL + "/weights", {
+      headers: { "x-app-token": WEIGHTS_TOKEN }
+    });
+    if (!r.ok) return;
+    const remote = await r.json();
+    const local = getData('weight_log', []);
+    const remoteDates = new Set(remote.map(w => w.date));
+    const merged = [...remote];
+    for (const w of local) {
+      if (!remoteDates.has(w.date)) merged.push(w);
+    }
+    merged.sort((a, b) => a.date.localeCompare(b.date));
+    weights = merged;
+    setData('weight_log', merged);
+    updateCurrentWeight();
+  } catch (e) { /* offline — local data still works */ }
+}
+
+async function pushWeightToAgent(date, weightVal) {
+  try {
+    await fetch(AGENT_URL + "/weights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-app-token": WEIGHTS_TOKEN },
+      body: JSON.stringify({ date: date, weight: weightVal })
+    });
+  } catch (e) {}
+}
+
+async function deleteWeightFromAgent(date) {
+  try {
+    await fetch(AGENT_URL + "/weights/" + date, {
+      method: "DELETE",
+      headers: { "x-app-token": WEIGHTS_TOKEN }
+    });
+  } catch (e) {}
+}
+// ────────────────────────────────────────────────────────────────────
+
 document.addEventListener('keydown', e => {
   if (document.getElementById('pin-screen').classList.contains('hidden')) return;
   if (e.key>='0' && e.key<='9') pinPress(e.key);
@@ -852,9 +900,11 @@ const BC_KEY = 'proto-bodycomp-v1';
 
 function bcLoad() {
   try {
-    const arr = JSON.parse(localStorage.getItem(BC_KEY) || '[]');
-    // Migrate: fix BMI if stored as 10x (old bug)
+    let arr = JSON.parse(localStorage.getItem(BC_KEY) || '[]');
+    // Fix old BMI stored as 10x
     arr.forEach(e => { if (e.bmi > 100) e.bmi = Math.round(e.bmi / 10); });
+    // Remove corrupt entries (bad decimal separator caused e.g. 924kg)
+    arr = arr.filter(e => e.weight >= 40 && e.weight <= 250 && e.neck >= 20 && e.belly >= 50 && e.belly > e.neck);
     return arr;
   } catch { return []; }
 }
@@ -870,15 +920,27 @@ function calcBMI(weightKg, heightCm) {
   return Math.round(weightKg / Math.pow(heightCm / 100, 2));
 }
 
+function parseVal(id) {
+  const raw = document.getElementById(id).value.trim().replace(',', '.');
+  const v = parseFloat(raw);
+  return isNaN(v) ? null : v;
+}
+
 function bcLog() {
-  const w = parseFloat(document.getElementById('bc-weight').value);
-  const n = parseFloat(document.getElementById('bc-neck').value);
-  const b = parseFloat(document.getElementById('bc-belly').value);
+  const w = parseVal('bc-weight');
+  const n = parseVal('bc-neck');
+  const b = parseVal('bc-belly');
   const err = document.getElementById('bc-err');
   err.textContent = '';
 
-  if (isNaN(w) || isNaN(n) || isNaN(b)) { err.textContent = 'Fill in all three fields.'; return; }
-  if (b <= n) { err.textContent = 'Abdomen must be larger than neck.'; return; }
+  if (w === null) { err.textContent = 'Enter a valid body weight (e.g. 93.0)'; return; }
+  if (n === null) { err.textContent = 'Enter a valid neck circumference (e.g. 39.0)'; return; }
+  if (b === null) { err.textContent = 'Enter a valid abdomen circumference (e.g. 96.0)'; return; }
+
+  if (w < 40 || w > 250)  { err.textContent = 'Weight out of range (40–250 kg)'; return; }
+  if (n < 20 || n > 60)   { err.textContent = 'Neck out of range (20–60 cm)'; return; }
+  if (b < 50 || b > 200)  { err.textContent = 'Abdomen out of range (50–200 cm)'; return; }
+  if (b <= n)              { err.textContent = 'Abdomen must be larger than neck'; return; }
 
   const bf = navyBF(w, n, b, HEIGHT_CM);
   const bmi = calcBMI(w, HEIGHT_CM);
@@ -956,6 +1018,7 @@ function bcRender() {
         <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent);line-height:1">${e.weight}</div><div style="font-size:9px;color:var(--muted2);">KG</div></div>
         <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>
         <div><div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>
+        <button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button>
       </div>
     `;
     list.appendChild(row);
@@ -1048,6 +1111,12 @@ function bcDrawChart(canvasId, values, labels, color, unit) {
   });
 }
 
+function bcDeleteEntry(date) {
+  const arr = bcLoad().filter(e => e.date !== date);
+  bcSave(arr);
+  bcRender();
+}
+
 function bcClearAll() {
   if (!confirm('Delete all body comp entries?')) return;
   localStorage.removeItem(BC_KEY);
@@ -1055,6 +1124,7 @@ function bcClearAll() {
 }
 
 function initBodyComp() {
+  syncWeightsFromAgent();
   document.getElementById('bc-date-badge').textContent = fmtDate(NOW).toUpperCase();
   bcRender();
 }
