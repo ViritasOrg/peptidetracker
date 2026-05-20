@@ -150,7 +150,7 @@
   <div class="hdr">
     <div>
       <div class="hdr-title">PROTOCOL</div>
-      <div class="hdr-sub">Henrik's Stack <span style="color:var(--border)">·</span> <span style="color:var(--accent);font-weight:600;letter-spacing:1px">v1.18</span><span class="agent-status" title="Agent status"><span class="agent-dot" id="agent-dot" onclick="checkAgentStatus()"></span></span></div>
+      <div class="hdr-sub">Henrik's Stack <span style="color:var(--border)">·</span> <span style="color:var(--accent);font-weight:600;letter-spacing:1px">v1.21</span><span class="agent-status" title="Agent status"><span class="agent-dot" id="agent-dot" onclick="checkAgentStatus()"></span></span></div>
     </div>
     <div class="hdr-right"><div class="hdr-day" id="hdr-day">—</div><div class="hdr-weekday" id="hdr-weekday">—</div></div>
   </div>
@@ -236,10 +236,11 @@ const WEEKLY=[
   {id:'glow',name:'GLOW Stack',detail:'2 mg — GHK-Cu 1400µg / TB-500 300µg / BPC-157 300µg',dow:[0,1,2,3,4,5,6],time:null,dot:'#3b9eff'},
 ];
 const TESTO=[
-  {date:new Date(2026,4,11),label:'Injection 1'},
-  {date:new Date(2026,4,13),label:'Injection 2'},
-  {date:new Date(2026,4,18),label:'Injection 3'},
-  {date:new Date(2026,4,23),label:'Injection 4'},
+  {date:new Date(2026,4,4), label:'Injection 1',dose:'250mg',route:'IM'},
+  {date:new Date(2026,4,11),label:'Injection 2',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,16),label:'Injection 3',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,21),label:'Injection 4',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,27),label:'Injection 5',dose:'125mg',route:'SC'},
 ];
 const MILESTONES=[
   {date:new Date(2026,4,11),name:'Testoviron #1',desc:'125 mg SC — bridge begins'},
