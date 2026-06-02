@@ -7,7 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
 <title>Henrik's Protocol v1.18</title>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>function onGoogleSignIn(resp){localStorage.setItem('google_token',resp.credential);location.reload();}</script>
+<script src="https://accounts.google.com/gsi/client" defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
   :root{--bg:#0a0a0a;--surface:#131313;--surface2:#1c1c1c;--border:#2a2a2a;--accent:#e8ff3c;--accent2:#ff6b2b;--accent3:#3cffa0;--accent4:#c084fc;--text:#f0f0f0;--muted:#555;--muted2:#888;--danger:#ff3c3c;--warning:#ffb03c;}
@@ -250,7 +251,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.69';
+const VERSION='1.70';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -289,7 +290,7 @@ const BC_SEED=[
 ];
 const BC_KEY='proto-bodycomp-v2';
 let weights=[];
-const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';const WEIGHTS_TOKEN='10vtu';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('pin-screen').classList.add('hidden');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}if(_googleToken){unlockApp();}
+const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';const WEIGHTS_TOKEN='10vtu';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('pin-screen').classList.add('hidden');document.body.classList.remove('locked');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}if(_googleToken){unlockApp();}
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
@@ -364,7 +365,7 @@ function bcDrawChart(canvasId,values,labels,color,unit){const canvas=document.ge
 function bcDeleteEntry(date){const arr=bcLoad().filter(e=>e.date!==date);bcSave(arr);deleteBodyCompFromAgent(date);bcRender();}
 function bcClearAll(){if(!confirm('Delete all logged entries?'))return;localStorage.removeItem(BC_KEY);bcRender();}
 function initBodyComp(){weights=getData('weight_log',[]);syncWeightsFromAgent().then(()=>bcRender());syncBodyCompFromAgent();document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcRender();}
-checkAppVersion();const _LOAD_DATE=new Date().toDateString();document.addEventListener('visibilitychange',function(){if(!document.hidden&&new Date().toDateString()!==_LOAD_DATE)location.reload();});window.addEventListener('focus',function(){if(new Date().toDateString()!==_LOAD_DATE)location.reload();});
+checkAppVersion();
 </script>
 </body>
 </html>
