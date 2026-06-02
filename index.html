@@ -244,8 +244,46 @@
   </div>
 </div>
 <script>
-const VERSION='1.63';
+const VERSION='1.64';
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';const WEIGHTS_TOKEN='10vtu';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('pin-screen').classList.add('hidden');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}if(_googleToken){unlockApp();}else{const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);}
+const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
+const HEIGHT_CM=182;
+const NOW=new Date();
+const TODAY_DOW=NOW.getDay();
+const WEEKLY=[
+  {id:'reta-sun',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[0],time:'AM',dot:'#e8ff3c'},
+  {id:'reta-wed',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[3],time:'AM',dot:'#e8ff3c'},
+  {id:'cjc-am',name:'CJC-1295 / IPA',detail:'4 IU — fasted AM',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3cffa0'},
+  {id:'cjc-pm',name:'CJC-1295 / IPA',detail:'5 IU — pre-sleep PM',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3cffa0'},
+  {id:'glow-1',name:'GLOW Stack',detail:'2 mg — GHK-Cu 1400µg / TB-500 300µg / BPC-157 300µg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
+  {id:'glow-2',name:'GLOW Stack (2nd dose)',detail:'2 mg — double dose period, ends 3 Jun',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3b9eff',startDate:new Date(2026,4,20),endDate:new Date(2026,5,3)},
+];
+const TESTO=[
+  {date:new Date(2026,4,4), label:'Injection 1',dose:'250mg',route:'IM'},
+  {date:new Date(2026,4,11),label:'Injection 2',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,16),label:'Injection 3',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,21),label:'Injection 4',dose:'125mg',route:'SC'},
+  {date:new Date(2026,4,26),label:'Injection 5',dose:'125mg',route:'SC'},
+];
+const MILESTONES=[
+  {date:new Date(2026,3,2), name:'Nebido #1',desc:'1000 mg IM — first injection'},
+  {date:new Date(2026,4,4), name:'Testoviron #1',desc:'250 mg IM — bridge begins (Lagos)'},
+  {date:new Date(2026,4,11),name:'Testoviron #2',desc:'125 mg SC'},
+  {date:new Date(2026,4,16),name:'Testoviron #3',desc:'125 mg SC'},
+  {date:new Date(2026,4,21),name:'Testoviron #4',desc:'125 mg SC'},
+  {date:new Date(2026,4,26),name:'Testoviron #5',desc:'125 mg SC — final bridge dose'},
+  {date:new Date(2026,4,20),name:'GLOW double dose starts',desc:'2×2 mg/day SC — shoulder, 14 days'},
+  {date:new Date(2026,5,3), name:'GLOW double dose ends',desc:'Reverts to 1×2 mg/day'},
+  {date:new Date(2026,5,29),name:'Trough Blood Panel',desc:'Urologist — E2, TT, hematocrit, LH, FSH'},
+  {date:new Date(2026,6,4), name:'HGH Start / Nebido #2',desc:'1 IU/day 5-on/2-off. CJC/IPA stops.'},
+];
+const BC_SEED=[
+  {date:"2026-3-23",dateLabel:"23 Mar 2026",neck:42,belly:99,bf:23.0},
+  {date:"2026-5-2", dateLabel:"2 May 2026", neck:42,belly:96,bf:21.0},
+  {date:"2026-5-3", dateLabel:"3 May 2026", neck:42,belly:94,bf:19.6},
+];
+const BC_KEY='proto-bodycomp-v2';
+let weights=[];
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
