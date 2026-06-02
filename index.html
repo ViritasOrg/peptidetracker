@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
 <title>Henrik's Protocol v1.18</title>
-<script>function onGoogleSignIn(resp){localStorage.setItem('google_token',resp.credential);location.reload();}</script>
+<script>function onGoogleSignIn(resp){if(localStorage.getItem('google_token'))return;localStorage.setItem('google_token',resp.credential);location.reload();}</script>
 <script src="https://accounts.google.com/gsi/client" defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -251,7 +251,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.70';
+const VERSION='1.71';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
