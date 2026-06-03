@@ -300,7 +300,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.85';
+const VERSION='1.85b';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -522,17 +522,21 @@ async function loadUserWeight(){
     if(r.ok){
       var data=await r.json();
       _userWeight=data.weight;
+      if(_userWeight)localStorage.setItem('user_weight',_userWeight);
     }
-  }catch(e){}
+  }catch(e){
+    _userWeight=localStorage.getItem('user_weight')||null;
+  }
 }
 async function saveUserWeight(weight){
+  _userWeight=weight;
+  localStorage.setItem('user_weight',weight);
   try{
     await fetch(AGENT_URL+'/weight',{
       method:'POST',
       headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},
       body:JSON.stringify({weight:weight,unit:'kg'})
     });
-    _userWeight=weight;
   }catch(e){}
 }
 // ── Cycle length suggestions ───────────────────────────────────────────────
@@ -848,7 +852,7 @@ function wizBack(){
   if(_wiz.step===0){closeWizard();}
   else{_wiz.step--;wizRender();}
 }
-var WIZ_TITLES=['GOALS','PEPTIDES','CONFIGURE','TRT','REVIEW'];
+
 function wizRender(){
   var steps=5;
   var prog='';
