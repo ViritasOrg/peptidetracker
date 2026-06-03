@@ -408,9 +408,6 @@ const STACK_RULES=[
   {id:'gh-hgh-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var hasPep=ids.some(function(id){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin'].includes(id);});return hasPep&&ids.includes('hgh');},level:'warn',title:'GH peptides + exogenous HGH',msg:'Running GH secretagogues alongside exogenous HGH can over-stimulate the axis. Monitor IGF-1. Consider discontinuing CJC/IPA when HGH starts.'},
 ];
 // ── User protocol state ──────────────────────────────────────────────────────
-let _userProtocol=null;
-let _protocolLoaded=false;
-let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false};
 // ── Build WEEKLY from protocol ───────────────────────────────────────────────
 function buildWeeklyFromProtocol(proto){
   if(!proto||!proto.peptides||!proto.peptides.length)return[];
@@ -531,7 +528,6 @@ function showCheckPanel(){
   document.body.appendChild(overlay);
 }
 // ── Wizard ────────────────────────────────────────────────────────────────────
-var _wizOverlay=null;
 function showWizard(editMode){
   _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:editMode};
   if(editMode&&_userProtocol){
