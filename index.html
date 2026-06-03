@@ -318,8 +318,8 @@ const HEIGHT_CM=182;
 const NOW=new Date();
 const TODAY_DOW=NOW.getDay();
 const WEEKLY_DEFAULT=[
-  {id:'reta-sun',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[0],time:'AM',dot:'#e8ff3c'},
-  {id:'reta-wed',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[3],time:'AM',dot:'#e8ff3c'},
+  {id:'reta-sun',name:'Retatrutide',detail:'3 mg — SC',dow:[0],time:'AM',dot:'#e8ff3c'},
+  {id:'reta-wed',name:'Retatrutide',detail:'3 mg — SC',dow:[3],time:'AM',dot:'#e8ff3c'},
   {id:'cjc-am',name:'CJC-1295 / IPA',detail:'4 IU — fasted AM',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3cffa0'},
   {id:'cjc-pm',name:'CJC-1295 / IPA',detail:'5 IU — pre-sleep PM',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3cffa0'},
   {id:'glow-1',name:'GLOW Stack',detail:'2 mg — GHK-Cu 1400µg / TB-500 300µg / BPC-157 300µg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
@@ -378,7 +378,7 @@ function setChecked(arr){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);loca
 async function checkSyncStatus(){const dot=document.getElementById('sync-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl.signal});if(!r.ok){dot.className='agent-dot down';dot.title='Backend unreachable';return;}const remote=await r.json();const remoteDates=new Set(remote.map(e=>e.date));const localKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const unsynced=localKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;dot.className='agent-dot '+(unsynced===0?'up':'warn');dot.title=unsynced===0?'Doses synced ✓ • Body comp synced ✓':'Doses: ⚠ '+unsynced+' day(s) not on backend';}catch(e){dot.className='agent-dot down';dot.title='Sync check failed';}}
 // ── Peptide catalogue ────────────────────────────────────────────────────────
 const PEPTIDE_CAT=[
-  {id:'cjc-ipa',name:'CJC-1295 / IPA Blend',sku:'CP10',price:'$120/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh','ghrp'],desc:'Classic GHRH+GHRP combo. Best bang-for-buck GH stack.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'4 IU',dosePm:'5 IU',unitAm:'IU',unitPm:'IU'}},
+  {id:'cjc-ipa',name:'CJC-1295 / IPA Blend',sku:'CP10',price:'$120/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh','ghrp'],desc:'Classic GHRH+GHRP combo. Best bang-for-buck GH stack.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'4',dosePm:'5',unitAm:'IU',unitPm:'IU'}},
   {id:'cjc-nodac',name:'CJC-1295 (no DAC)',sku:'CND2',price:'$45/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh'],desc:'GHRH analog, short-acting. Pair with Ipamorelin for synergy.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'100',dosePm:'100',unitAm:'mcg',unitPm:'mcg'}},
   {id:'ipamorelin',name:'Ipamorelin',sku:'IP5',price:'$40/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrp'],desc:'Clean GHRP pulse, minimal cortisol/prolactin sides.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'200',dosePm:'200',unitAm:'mcg',unitPm:'mcg'}},
   {id:'sermorelin',name:'Sermorelin',sku:'SMO5',price:'$73/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh'],desc:'GHRH analog, shorter half-life than CJC. Best at bedtime.',dflt:{times:['PM'],days:[0,1,2,3,4,5,6],doseAm:'',dosePm:'200',unitAm:'mcg',unitPm:'mcg'}},
@@ -421,13 +421,15 @@ function buildWeeklyFromProtocol(proto){
     var startDate=p.start_date?new Date(p.start_date):null;
     var endDate=p.end_date?new Date(p.end_date):null;
     if(times.includes('AM')&&times.includes('PM')){
-      var dAm=p.dose_am||p.dose||'';
-      var dPm=p.dose_pm||p.dose||'';
+      var uAm=p.unit_am||'';var uPm=p.unit_pm||'';
+      var dAm=(p.dose_am||p.dose||'')+(uAm?' '+uAm:'');
+      var dPm=(p.dose_pm||p.dose||'')+(uPm?' '+uPm:'');
       built.push({id:p.id+'-am',name:p.name,detail:dAm+(p.note_am?' — '+p.note_am:' — fasted AM'),dow:days,time:'AM',dot:dot,startDate:startDate,endDate:endDate});
       built.push({id:p.id+'-pm',name:p.name,detail:dPm+(p.note_pm?' — '+p.note_pm:' — pre-sleep PM'),dow:days,time:'PM',dot:dot,startDate:startDate,endDate:endDate});
     } else {
       var t=times[0]||'AM';
-      var dose=t==='AM'?(p.dose_am||p.dose||''):(p.dose_pm||p.dose||'');
+      var u=t==='AM'?(p.unit_am||''):(p.unit_pm||'');
+      var dose=(t==='AM'?(p.dose_am||p.dose||''):(p.dose_pm||p.dose||''))+(u?' '+u:'');
       built.push({id:p.id,name:p.name,detail:dose+(p.note?' — '+p.note:''),dow:days,time:t,dot:dot,startDate:startDate,endDate:endDate});
     }
   });
@@ -456,6 +458,15 @@ async function loadUserStacks(){
     _userStacks[0].name='My Stack';
     _activeStackIndex=0;
   }
+  _userStacks.forEach(function(stack){
+    if(!stack.peptides)return;
+    stack.peptides.forEach(function(p){
+      var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
+      if(!cat||!cat.dflt)return;
+      if(p.unit_am==='IU'&&cat.dflt.unitAm&&cat.dflt.unitAm!=='IU')p.unit_am=cat.dflt.unitAm;
+      if(p.unit_pm==='IU'&&cat.dflt.unitPm&&cat.dflt.unitPm!=='IU')p.unit_pm=cat.dflt.unitPm;
+    });
+  });
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
@@ -679,12 +690,14 @@ function _synthesizeProtocol(weekly){
   var seen={};var peptides=[];
   weekly.forEach(function(w){
     var baseId=w.id.replace(/-am$|-pm$/,'');
-    if(!seen[baseId]){seen[baseId]={id:baseId,name:w.name,dot:w.dot,days:w.dow.slice(),times:[],dose_am:'',dose_pm:'',unit_am:'IU',unit_pm:'IU',note:'',active:true};peptides.push(seen[baseId]);}
+    if(!seen[baseId]){seen[baseId]={id:baseId,name:w.name,dot:w.dot,days:w.dow.slice(),times:[],dose_am:'',dose_pm:'',unit_am:'mg',unit_pm:'mg',note:'',active:true};peptides.push(seen[baseId]);}
     var e=seen[baseId];
     var t=w.time||'AM';
     if(!e.times.includes(t))e.times.push(t);
-    var dosePart=w.detail?w.detail.split('—')[0].trim():'';
-    if(t==='AM')e.dose_am=dosePart;else e.dose_pm=dosePart;
+    var rawPart=w.detail?w.detail.split('—')[0].trim():'';
+    var dm=rawPart.match(/^([\d.]+)\s*(mg|mcg|IU|ml)?$/);
+    if(dm){if(t==='AM'){e.dose_am=dm[1];e.unit_am=dm[2]||'mg';}else{e.dose_pm=dm[1];e.unit_pm=dm[2]||'mg';}}
+    else{if(t==='AM')e.dose_am=rawPart;else e.dose_pm=rawPart;}
     if(w.startDate&&!e.start_date)e.start_date=w.startDate.toISOString().split('T')[0];
     if(w.endDate&&!e.end_date)e.end_date=w.endDate.toISOString().split('T')[0];
   });
