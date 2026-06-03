@@ -312,7 +312,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.87';
+const VERSION='1.88';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -864,24 +864,12 @@ function wizBack(){
   else{_wiz.step--;wizRender();}
 }
 function wizNext(){_wiz.step=Math.min(5,_wiz.step+1);wizRender();}
-function showWizard(editMode){
-  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:editMode};
-  if(editMode&&_userProtocol){
-    var proto=_userProtocol;
-    _wiz.peptides=proto.peptides.map(function(p){return JSON.parse(JSON.stringify(p));});
-    _wiz.trt=proto.trt?JSON.parse(JSON.stringify(proto.trt)):{enabled:false,compound:'',injections:[]};
-    if(!_wiz.trt.hasOwnProperty('enabled'))_wiz.trt.enabled=!!(_wiz.trt.compound);
-    var allGoals=[];
-    _wiz.peptides.forEach(function(p){
-      var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
-      if(cat)cat.goals.forEach(function(g){if(!allGoals.includes(g))allGoals.push(g);});
-    });
-    _wiz.goals=allGoals;
-  }
+function showWizard(editModeUnused){
+  // _wiz must already be initialised by createNewStack() or editStackWithCycle()
   if(!_wizOverlay){
     _wizOverlay=document.createElement('div');
     _wizOverlay.className='wiz-overlay';
-    _wizOverlay.innerHTML='<div class="wiz-header"><button class="wiz-back" id="wiz-back-btn">‹</button><div class="wiz-title" id="wiz-title">BUILD STACK</div><div class="wiz-progress" id="wiz-progress"></div></div><div class="wiz-body" id="wiz-body"></div><div class="wiz-footer" id="wiz-footer"></div>';
+    _wizOverlay.innerHTML='<div class="wiz-header"><button class="wiz-back" id="wiz-back-btn">&#8249;</button><div class="wiz-title" id="wiz-title">BUILD STACK</div><div class="wiz-progress" id="wiz-progress"></div></div><div class="wiz-body" id="wiz-body"></div><div class="wiz-footer" id="wiz-footer"></div>';
     document.body.appendChild(_wizOverlay);
     document.getElementById('wiz-back-btn').onclick=wizBack;
   }
