@@ -246,6 +246,18 @@
   </div>
   <div class="content hidden" id="tab-timeline"><div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">MILESTONES</div></div></div><div class="timeline" id="timeline-body"></div></div></div>
   <div class="content hidden" id="tab-body">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:0">
+        <div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Weight (kg)</div>
+          <div style="display:flex;gap:6px"><input id="bc-weight-in" type="number" step="0.1" placeholder="0.0" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('weight')" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Height (cm)</div>
+          <div style="display:flex;gap:6px"><input id="bc-height-in" type="number" step="1" placeholder="180" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('height')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
+        </div>
+      </div>
+    </div>
     <div class="card">
       <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">LOG MEASUREMENT</div></div><span class="card-badge badge-today" id="bc-date-badge">—</span></div>
       <div class="card-body" style="gap:12px;">
@@ -300,7 +312,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.86';
+const VERSION='1.87';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -355,7 +367,7 @@ async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodyc
 async function pushBodyCompToAgent(entry){try{await fetch(AGENT_URL+"/bodycomp",{method:"POST",headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(entry)});}catch(e){}}
 async function deleteBodyCompFromAgent(date){try{await fetch(AGENT_URL+"/bodycomp/"+date,{method:"DELETE",headers:{"x-app-token":WEIGHTS_TOKEN}});}catch(e){}}
 function getWeightForDate(dateStr){if(!weights.length)return null;const target=new Date(dateStr.replace(/-/g,'/'));let best=null,bestDiff=Infinity;for(const w of weights){const diff=Math.abs(target-new Date(w.date.replace(/-/g,'/')));if(diff<bestDiff){bestDiff=diff;best=w.weight;}}return bestDiff<=7*86400000?best:null;}
-function switchTab(id,el){document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='stack')buildStack();if(id==='bodycomp'){var inp=document.getElementById('weight-input');if(inp&&_userWeight)inp.value=_userWeight;}}
+function switchTab(id,el){document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='stack')buildStackStore();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}}}
 function logout(){_googleToken='';localStorage.removeItem('google_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}}
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}const token=WEIGHTS_TOKEN;fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':token}}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'Content-Type':'application/json','x-app-token':token},body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
@@ -621,35 +633,8 @@ async function wizSave(){
   }
 }
 // ── Updated buildStackStore to show cycle length ────────────────────────────
-function buildStackStore(){
-  var body=document.getElementById('stack-body');
-  if(!body)return;
-  if(!_stacksLoaded){
-    body.innerHTML='<div class="stack-empty"><div class="today-spinner"><div class="today-spinner-dot"></div></div></div>';
-    return;
-  }
-  var html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">';
-  _userStacks.forEach(function(st,i){
-    var pCount=st.peptides?st.peptides.length:0;
-    var hasTrt=st.trt&&st.trt.compound;
-    var cycleLen=st.cycle_length||'?';
-    var isActive=i===_activeStackIndex;
-    var badge=isActive?'<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>':'';
-    html+='<div class="stack-card'+(isActive?' active':'')+'"><div class="stack-card-header">'+badge+'<div class="stack-card-name">'+(st.name||'Stack '+(i+1))+'</div></div><div class="stack-card-meta">';
-    html+='<div>'+pCount+' peptide'+(pCount===1?'':'s')+'</div>';
-    html+='<div style="color:var(--muted2);font-size:10px">'+cycleLen+' week cycle</div>';
-    if(hasTrt)html+='<div style="color:var(--accent4)">TRT</div>';
-    html+='</div><div class="stack-card-actions">'+(isActive?'':'<button class="btn-sm" onclick="useStack('+i+')">Use</button>')+'<button class="btn-sm" onclick="editStackWithCycle('+i+')">Edit</button><button class="btn-sm btn-danger" onclick="deleteStack('+i+')">Delete</button></div></div>';
-  });
-  html+='</div><div style="margin-top:16px;text-align:center;"><button class="btn btn-primary" onclick="createNewStack()">+ New Stack</button></div>';
-  body.innerHTML=html;
-}
 function createNewStack(){initWizard();showWizard(false);}
 
-function createNewStack(){
-  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false,stackIndex:-1,stackName:'Cycle '+((_userStacks.length%4)+1)};
-  showWizard(false);
-}
 function editStack(idx){
   if(idx<0||idx>=_userStacks.length)return;
   var st=_userStacks[idx];
@@ -665,29 +650,6 @@ function editStack(idx){
   showWizard(true);
 }
 // ── Modified wizard save ─────────────────────────────────────────────────────
-async function wizSave(){
-  var btn=document.querySelector('.wiz-footer .btn.btn-primary');
-  if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  var proto={name:_wiz.stackName,peptides:_wiz.peptides,trt:_wiz.trt.enabled?_wiz.trt:{}};
-  if(_wiz.stackIndex>=0&&_wiz.stackIndex<_userStacks.length){
-    _userStacks[_wiz.stackIndex]=proto;
-  } else {
-    _userStacks.push(proto);
-    if(_userStacks.length===1)_activeStackIndex=0;
-  }
-  _userStacks=_userStacks.slice(0,4);
-  var ok=await saveStacksToBackend();
-  if(ok){
-    updateWEEKLY();
-    buildWeekStrip();
-    buildToday();
-    buildStackStore();
-    closeWizard();
-    switchTab('stack',document.querySelector('.tab'));
-  } else {
-    if(btn){btn.disabled=false;btn.textContent='Save Failed — Retry';}
-  }
-}
 // ── Modified wizard step 4 review ────────────────────────────────────────────
 function wizStep4(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
@@ -728,24 +690,6 @@ function _synthesizeProtocol(weekly){
   });
   return{peptides:peptides,trt:{},_unsaved:true};
 }
-async function loadUserProtocol(){
-  try{
-    var r=await fetch(AGENT_URL+'/protocol',{headers:{'x-app-token':WEIGHTS_TOKEN}});
-    if(!r.ok){_userProtocol=_synthesizeProtocol(WEEKLY_DEFAULT);_protocolLoaded=true;buildStack();return;}
-    var proto=await r.json();
-    if(proto&&proto.peptides&&proto.peptides.length){
-      _userProtocol=proto;
-      WEEKLY=buildWeeklyFromProtocol(proto);
-    } else {
-      _userProtocol=_synthesizeProtocol(WEEKLY_DEFAULT);
-      WEEKLY=WEEKLY_DEFAULT.slice();
-    }
-    _protocolLoaded=true;
-    buildStack();
-    buildWeekStrip();
-    buildToday();
-  }catch(e){_userProtocol=_synthesizeProtocol(WEEKLY_DEFAULT);_protocolLoaded=true;WEEKLY=WEEKLY_DEFAULT.slice();buildStack();}
-}
 // ── Run rule checks ──────────────────────────────────────────────────────────
 function checkStack(peptides){
   var results=[];
@@ -768,47 +712,6 @@ async function saveProtocolToBackend(proto){
   }catch(e){return false;}
 }
 // ── Build Stack tab (3 states) ────────────────────────────────────────────────
-function buildStack(){
-  var body=document.getElementById('stack-body');
-  if(!body)return;
-  if(!_protocolLoaded){
-    body.innerHTML='<div class="stack-empty"><div class="today-spinner"><div class="today-spinner-dot"></div></div></div>';
-    return;
-  }
-  if(!_userProtocol||!_userProtocol.peptides||!_userProtocol.peptides.length){
-    body.innerHTML='<div class="stack-empty"><div class="stack-empty-icon">💉</div><div class="stack-empty-title">No Stack Defined</div><div class="stack-empty-desc">Set up your peptide protocol to track daily doses, get interaction warnings, and sync across devices.</div><button class="btn btn-primary" style="display:block;margin:0 auto;" onclick="showWizard(false)">Build My Stack</button></div>';
-    return;
-  }
-  var proto=_userProtocol;
-  var html='<div class="stack-actions"><button class="btn btn-primary" onclick="showWizard(true)">'+(proto._unsaved?'Save Stack':'Edit Stack')+'</button><button class="btn-check" onclick="showCheckPanel()">Check Stack</button></div>'+(proto._unsaved?'<div style="background:rgba(255,176,60,0.08);border:1px solid rgba(255,176,60,0.3);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#ffb03c;">⚠️ Stack not yet saved to backend — cross-device sync and per-user isolation won\'t work until you save it.</div>':'');
-  var groups={};
-  proto.peptides.forEach(function(p){
-    var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
-    var grp=cat?cat.group:'Other';
-    if(!groups[grp])groups[grp]=[];
-    groups[grp].push({p:p,cat:cat});
-  });
-  Object.keys(groups).forEach(function(grp){
-    html+='<div class="wiz-section">'+grp+'</div>';
-    groups[grp].forEach(function(item){
-      var p=item.p,cat=item.cat;
-      var dot=p.dot||(cat?cat.dot:'#888');
-      var times=(p.times||['AM']).join(' + ');
-      var dose='';
-      if(p.times&&p.times.includes('AM')&&p.times.includes('PM')&&p.dose_am!==p.dose_pm){
-        dose=(p.dose_am||'?')+' AM / '+(p.dose_pm||'?')+' PM';
-      } else {
-        dose=p.dose_am||p.dose_pm||p.dose||'';
-      }
-      var daysLabel=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].filter(function(_,i){return p.days.includes(i);}).join(', '):'—';
-      html+='<div class="card" style="margin-bottom:8px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:'+dot+'"></div><div class="card-title">'+p.name.toUpperCase()+'</div></div><span class="card-badge badge-today">ACTIVE</span></div><div class="card-body"><div class="info-row"><span class="info-label">Dose</span><span class="info-val" style="color:'+dot+'">'+dose+'</span></div><div class="info-row"><span class="info-label">Timing</span><span class="info-val">'+times+'</span></div><div class="info-row"><span class="info-label">Days</span><span class="info-val">'+daysLabel+'</span></div>'+(p.note?'<div class="divider"></div><div class="note">'+p.note+'</div>':'')+'</div></div>';
-    });
-  });
-  if(proto.trt&&proto.trt.compound){
-    html+='<div class="wiz-section">TRT</div><div class="card" style="margin-bottom:8px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">'+proto.trt.compound.toUpperCase()+'</div></div><span class="card-badge badge-upcoming">TRT</span></div><div class="card-body">'+(proto.trt.injections&&proto.trt.injections.length?proto.trt.injections.map(function(inj){return'<div class="info-row"><span class="info-label">'+inj.label+'</span><span class="info-val">'+inj.date+(inj.dose?' · '+inj.dose:'')+'</span></div>';}).join(''):'<div class="info-row"><span class="info-label">Injections</span><span class="info-val">None added</span></div>')+'</div></div>';
-  }
-  body.innerHTML=html;
-}
 // ── Check Stack panel ─────────────────────────────────────────────────────────
 function showCheckPanel(){
   if(!_userProtocol||!_userProtocol.peptides)return;
@@ -847,209 +750,17 @@ function showWizard(editMode){
   setTimeout(function(){_wizOverlay.classList.add('open');},10);
   wizRender();
 }
-function closeWizard(){if(_wizOverlay){_wizOverlay.classList.remove('open');}}
-function wizBack(){
-  if(_wiz.step===0){closeWizard();}
-  else{_wiz.step--;wizRender();}
-}
 
-function wizRender(){
-  var steps=5;
-  var prog='';
-  for(var i=0;i<steps;i++){
-    var cls=i<_wiz.step?'done':i===_wiz.step?'active':'';
-    prog+='<div class="wiz-dot '+cls+'"></div>';
-  }
-  document.getElementById('wiz-progress').innerHTML=prog;
-  document.getElementById('wiz-title').textContent=(_wiz.editMode?'EDIT ':'BUILD ')+WIZ_TITLES[_wiz.step];
-  var body=document.getElementById('wiz-body');
-  var footer=document.getElementById('wiz-footer');
-  body.scrollTop=0;
-  if(_wiz.step===0)wizStep0(body,footer);
-  else if(_wiz.step===1)wizStep1(body,footer);
-  else if(_wiz.step===2)wizStep2(body,footer);
-  else if(_wiz.step===3)wizStep3(body,footer);
-  else wizStep4(body,footer);
+function saveBodyMeasurement(type){
+  var inp=document.getElementById('bc-'+type+'-in');
+  if(!inp)return;
+  var v=parseFloat(inp.value);
+  if(isNaN(v)||v<=0)return;
+  localStorage.setItem('user_'+type,v);
+  if(type==='weight')saveUserWeight(v);
+  inp.style.borderColor='var(--accent3)';
+  setTimeout(function(){inp.style.borderColor='var(--border)';},1500);
 }
-var GOAL_DEFS=[{id:'muscle',label:'Muscle & Recovery',icon:'💪'},{id:'recovery',label:'Injury & Healing',icon:'🩹'},{id:'skin',label:'Skin & Anti-aging',icon:'✨'},{id:'fat',label:'Fat Loss',icon:'🔥'},{id:'cognitive',label:'Cognitive',icon:'🧠'},{id:'antiaging',label:'Longevity',icon:'⏳'},{id:'trt',label:'TRT Support',icon:'⚡'}];
-function wizStep0(body,footer){
-  var html='<div class="wiz-section">What are your goals?</div><div class="goal-grid">';
-  GOAL_DEFS.forEach(function(g){
-    var sel=_wiz.goals.includes(g.id)?'sel':'';
-    html+='<div class="goal-chip '+sel+'" onclick="wizToggleGoal(\''+g.id+'\')">'+g.icon+' '+g.label+'</div>';
-  });
-  html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:12px;">Select all that apply. Used to filter the peptide catalogue.</div>';
-  body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Peptides</button>';
-}
-function wizToggleGoal(id){
-  var i=_wiz.goals.indexOf(id);
-  if(i===-1)_wiz.goals.push(id);else _wiz.goals.splice(i,1);
-  var chips=document.querySelectorAll('.goal-chip');
-  chips.forEach(function(chip){
-    var gid=chip.getAttribute('onclick').replace("wizToggleGoal('","").replace("')","");
-    chip.className='goal-chip'+(_wiz.goals.includes(gid)?' sel':'');
-  });
-}
-function wizStep1(body,footer){
-  var filtered=PEPTIDE_CAT;
-  if(_wiz.goals.length){filtered=PEPTIDE_CAT.filter(function(p){return p.goals.some(function(g){return _wiz.goals.includes(g);});});}
-  var groups={};
-  filtered.forEach(function(p){if(!groups[p.group])groups[p.group]=[];groups[p.group].push(p);});
-  var allIds=PEPTIDE_CAT.map(function(x){return x.id;});
-  var selIds=_wiz.peptides.map(function(x){return x.id;});
-  // Also show selected peptides not in current filter
-  _wiz.peptides.forEach(function(sp){
-    if(!filtered.find(function(f){return f.id===sp.id;})){
-      var cat=PEPTIDE_CAT.find(function(c){return c.id===sp.id;});
-      if(cat){if(!groups['Selected'])groups['Selected']=[];groups['Selected'].push(cat);}
-    }
-  });
-  var html='';
-  if(!_wiz.goals.length)html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">Showing all peptides. Select goals on the previous step to filter.</div>';
-  Object.keys(groups).forEach(function(grp){
-    html+='<div class="wiz-section">'+grp+'</div>';
-    groups[grp].forEach(function(p){
-      var isSel=selIds.includes(p.id);
-      html+='<div class="pep-card'+(isSel?' sel':'')+'" id="pc-'+p.id+'" onclick="wizTogglePep(\''+p.id+'\')"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+p.desc+'</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><div class="pep-price">'+p.price+'</div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
-    });
-  });
-  body.innerHTML=html;
-  var checkBtn=_wiz.peptides.length>0?'<button class="btn-check" onclick="wizShowCheck()">Check Stack</button>':'';
-  footer.innerHTML=checkBtn+'<button class="btn btn-primary" style="flex:1" onclick="wizNext()">'+(selIds.length?'Next → Configure ('+selIds.length+')':'Skip →')+'</button>';
-}
-function wizTogglePep(id){
-  var idx=_wiz.peptides.findIndex(function(p){return p.id===id;});
-  if(idx===-1){
-    var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});
-    if(!cat)return;
-    var d=cat.dflt;
-    _wiz.peptides.push({id:id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),dose_am:d.doseAm,dose_pm:d.dosePm,unit_am:d.unitAm,unit_pm:d.unitPm,note:'',active:true});
-  } else {
-    _wiz.peptides.splice(idx,1);
-  }
-  wizStep1(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
-}
-function wizShowCheck(){
-  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-  var overlay=document.createElement('div');
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:400;display:flex;align-items:flex-end;justify-content:center;';
-  overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
-  var sheet=document.createElement('div');
-  sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:70vh;overflow-y:auto;';
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
-  overlay.appendChild(sheet);
-  document.body.appendChild(overlay);
-}
-var UNITS=['mg','mcg','IU','ml'];
-var DAYS_SHORT=['S','M','T','W','T','F','S'];
-function wizStep2(body,footer){
-  if(!_wiz.peptides.length){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2);">No peptides selected. Go back and add some.</div>';footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → TRT</button>';return;}
-  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;">Configure dose, timing and frequency for each peptide.</div>';
-  _wiz.peptides.forEach(function(p,pi){
-    var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
-    var dot=p.dot||(cat?cat.dot:'#888');
-    html+='<div class="cfg-block"><div class="cfg-name"><div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0"></div>'+p.name+'</div>';
-    // Timing
-    html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">';
-    ['AM','PM'].forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="wizToggleTime('+pi+',\''+t+'\')">'+t+'</div>';});
-    html+='</div></div>';
-    // Doses
-    if(p.times&&p.times.includes('AM')){
-      html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_am||'')+'" oninput="wizSetDose('+pi+',\'am\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'am\',this.value)">'+UNITS.map(function(u){return'<option'+(u===(p.unit_am||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-    }
-    if(p.times&&p.times.includes('PM')){
-      html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_pm||'')+'" oninput="wizSetDose('+pi+',\'pm\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'pm\',this.value)">'+UNITS.map(function(u){return'<option'+(u===(p.unit_pm||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-    }
-    // Days
-    html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
-    DAYS_SHORT.forEach(function(d,di){html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
-    html+='</div></div>';
-    // Note
-    html+='<div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
-    html+='</div>';
-  });
-  body.innerHTML=html;
-  footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Check Stack</button><button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → TRT</button>';
-}
-function wizToggleTime(pi,t){
-  var p=_wiz.peptides[pi];if(!p)return;
-  if(!p.times)p.times=[];
-  var i=p.times.indexOf(t);
-  if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);
-  wizStep2(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
-}
-function wizToggleDay(pi,di){
-  var p=_wiz.peptides[pi];if(!p)return;
-  if(!p.days)p.days=[];
-  var i=p.days.indexOf(di);
-  if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);
-  wizStep2(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
-}
-function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.dose_am=val;else p.dose_pm=val;}
-function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.unit_am=val;else p.unit_pm=val;}
-function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
-function wizStep3(body,footer){
-  var trt=_wiz.trt;
-  var html='<div class="trt-toggle" onclick="wizToggleTRT()"><div class="trt-toggle-label">Add testosterone protocol</div><div class="toggle-sw'+(trt.enabled?' on':'')+'"></div></div>';
-  if(trt.enabled){
-    html+='<div class="trt-form"><div class="cfg-lbl">Compound</div><input class="trt-in" type="text" value="'+String(trt.compound||'')+'" oninput="wizSetTRTCompound(this.value)" placeholder="e.g. Nebido, Testoviron, Enanthate"><div class="cfg-lbl" style="margin-top:8px">Injections</div>';
-    (trt.injections||[]).forEach(function(inj,i){
-      html+='<div class="inj-row"><input type="date" value="'+String(inj.date||'')+'" onchange="wizSetInjDate('+i+',this.value)"><input type="text" value="'+String(inj.label||'')+'" oninput="wizSetInjLabel('+i+',this.value)" placeholder="Label e.g. Injection 1"><input type="text" value="'+String(inj.dose||'')+'" oninput="wizSetInjDose('+i+',this.value)" placeholder="Dose e.g. 125mg" style="max-width:90px;"><button onclick="wizRemoveInj('+i+')">×</button></div>';
-    });
-    html+='<button class="btn-check" style="width:100%;margin-top:4px" onclick="wizAddInj()">+ Add Injection</button></div>';
-  }
-  body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Review</button>';
-}
-function wizToggleTRT(){_wiz.trt.enabled=!_wiz.trt.enabled;wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetTRTCompound(v){_wiz.trt.compound=v;}
-function wizAddInj(){if(!_wiz.trt.injections)_wiz.trt.injections=[];_wiz.trt.injections.push({date:'',label:'Injection '+(_wiz.trt.injections.length+1),dose:''});wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizRemoveInj(i){_wiz.trt.injections.splice(i,1);wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetInjDate(i,v){_wiz.trt.injections[i].date=v;}
-function wizSetInjLabel(i,v){_wiz.trt.injections[i].label=v;}
-function wizSetInjDose(i,v){_wiz.trt.injections[i].dose=v;}
-function wizStep4(body,footer){
-  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-  var issues=checkStack(pepObjs);
-  var hasErrors=issues.some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Stack Check</div>'+renderCheckResults(pepObjs);
-  html+='<div class="wiz-section">Summary</div>';
-  if(_wiz.peptides.length){
-    _wiz.peptides.forEach(function(p){
-      var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));
-      var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'× / week':'?';
-      html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';
-    });
-  } else {
-    html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';
-  }
-  if(_wiz.trt&&_wiz.trt.enabled&&_wiz.trt.compound){
-    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_wiz.trt.compound+'</div><div style="font-size:12px;color:var(--muted2)">'+(_wiz.trt.injections?_wiz.trt.injections.length+' injections':'TRT')+'</div></div>';
-  }
-  body.innerHTML=html;
-  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
-  footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Re-check</button><button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
-}
-async function wizSave(){
-  var btn=document.querySelector('.wiz-footer .btn.btn-primary');
-  if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  var proto={peptides:_wiz.peptides,trt:_wiz.trt.enabled?_wiz.trt:{}};
-  var ok=await saveProtocolToBackend(proto);
-  if(ok){
-    _userProtocol=proto;
-    WEEKLY=buildWeeklyFromProtocol(proto);
-    buildWeekStrip();
-    buildToday();
-    buildStack();
-    closeWizard();
-    switchTab('stack',document.querySelector('.tab'));
-  } else {
-    if(btn){btn.disabled=false;btn.textContent='Save Failed — Retry';}
-  }
-}
-function wizNext(){_wiz.step=Math.min(4,_wiz.step+1);wizRender();}
-
 function saveWeightFromInput(){
   var inp=document.getElementById('weight-input');
   if(!inp)return;
@@ -1127,7 +838,10 @@ function bcRender(){const stored=bcLoad();const storedDates=new Set(stored.map(e
 function bcDrawChart(canvasId,values,labels,color,unit){const canvas=document.getElementById(canvasId);if(!canvas)return;const dpr=window.devicePixelRatio||1;const cssW=canvas.offsetWidth||300;const cssH=120;canvas.width=cssW*dpr;canvas.height=cssH*dpr;canvas.style.width=cssW+'px';canvas.style.height=cssH+'px';const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);if(!values||values.length<1)return;const PAD={top:12,right:12,bottom:28,left:40};const cW=cssW-PAD.left-PAD.right;const cH=cssH-PAD.top-PAD.bottom;const minV=Math.min(...values);const maxV=Math.max(...values);const range=maxV-minV||1;const vMin=minV-range*0.15;const vMax=maxV+range*0.15;const xOf=i=>PAD.left+(values.length===1?cW/2:(i/(values.length-1))*cW);const yOf=v=>PAD.top+cH-((v-vMin)/(vMax-vMin))*cH;ctx.strokeStyle='#2a2a2a';ctx.lineWidth=0.5;for(let i=0;i<=3;i++){const y=PAD.top+(cH/3)*i;ctx.beginPath();ctx.moveTo(PAD.left,y);ctx.lineTo(PAD.left+cW,y);ctx.stroke();}ctx.fillStyle='#555';ctx.font='9px DM Sans,sans-serif';ctx.textAlign='right';for(let i=0;i<=3;i++){const v=vMax-(vMax-vMin)*(i/3);const y=PAD.top+(cH/3)*i;ctx.fillText(v.toFixed(1)+(unit||''),PAD.left-4,y+3);}if(values.length===1){ctx.beginPath();ctx.arc(xOf(0),yOf(values[0]),4,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();return;}const grad=ctx.createLinearGradient(0,PAD.top,0,PAD.top+cH);grad.addColorStop(0,color+'33');grad.addColorStop(1,color+'00');ctx.beginPath();ctx.moveTo(xOf(0),PAD.top+cH);values.forEach((v,i)=>ctx.lineTo(xOf(i),yOf(v)));ctx.lineTo(xOf(values.length-1),PAD.top+cH);ctx.closePath();ctx.fillStyle=grad;ctx.fill();ctx.beginPath();ctx.moveTo(xOf(0),yOf(values[0]));values.forEach((v,i)=>{if(i>0)ctx.lineTo(xOf(i),yOf(v));});ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();values.forEach((v,i)=>{const x=xOf(i),y=yOf(v);ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.beginPath();ctx.arc(x,y,1.5,0,Math.PI*2);ctx.fillStyle='#0a0a0a';ctx.fill();if(i===0||i===values.length-1||i%Math.max(1,Math.floor(values.length/4))===0){ctx.fillStyle='#555';ctx.font='9px DM Sans,sans-serif';ctx.textAlign='center';ctx.fillText(labels[i].split(' ').slice(0,2).join(' '),x,PAD.top+cH+18);}});}
 function bcDeleteEntry(date){const arr=bcLoad().filter(e=>e.date!==date);bcSave(arr);deleteBodyCompFromAgent(date);bcRender();}
 function bcClearAll(){if(!confirm('Delete all logged entries?'))return;localStorage.removeItem(BC_KEY);bcRender();}
-function initBodyComp(){weights=getData('weight_log',[]);syncWeightsFromAgent().then(()=>bcRender());syncBodyCompFromAgent();document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcRender();}
+function initBodyComp(){
+  var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');
+  var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');
+  if(wi&&sw)wi.value=sw;if(hi&&sh)hi.value=sh;weights=getData('weight_log',[]);syncWeightsFromAgent().then(()=>bcRender());syncBodyCompFromAgent();document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcRender();}
 init();
 checkAppVersion();const _LOAD_DATE=new Date().toDateString();document.addEventListener('visibilitychange',function(){if(!document.hidden&&new Date().toDateString()!==_LOAD_DATE)location.reload();});window.addEventListener('focus',function(){if(new Date().toDateString()!==_LOAD_DATE)location.reload();});
 </script>
