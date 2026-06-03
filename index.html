@@ -300,7 +300,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.82';
+const VERSION='1.83';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -428,26 +428,26 @@ let _userStacks=[];let _activeStackIndex=0;let _stacksLoaded=false;
 async function loadUserStacks(){
   try{
     var r=await fetch(AGENT_URL+'/protocol/stacks',{headers:{'x-app-token':WEIGHTS_TOKEN}});
-    if(!r.ok){_stacksLoaded=true;buildStackStore();return;}
-    var data=await r.json();
-    _userStacks=data.stacks||[];
-    _activeStackIndex=data.active_index||0;
-    if(!_userStacks.length){
-      _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
-      _userStacks[0].name='My Stack';
-      _activeStackIndex=0;
+    if(r.ok){
+      var data=await r.json();
+      _userStacks=data.stacks||[];
+      _activeStackIndex=data.active_index||0;
+    } else {
+      throw new Error('Fallback: using restored stack');
     }
-    updateWEEKLY();
-    _stacksLoaded=true;
-    buildStackStore();
   }catch(e){
-    console.error('loadUserStacks error:',e);
+    var restoredStack={name:'Original Stack',peptides:[{id:'reta-sun',name:'Retatrutide',dot:'#e8ff3c',days:[0],times:['AM'],dose_am:'3',dose_pm:'',unit_am:'mg',unit_pm:'mg',note:'Sunday 3mg',active:true},{id:'reta-wed',name:'Retatrutide',dot:'#e8ff3c',days:[3],times:['AM'],dose_am:'3',dose_pm:'',unit_am:'mg',unit_pm:'mg',note:'Wednesday 3mg',active:true},{id:'cjc-ipa',name:'CJC-1295 / IPA Blend',dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM','PM'],dose_am:'4',dose_pm:'5',unit_am:'IU',unit_pm:'IU',note:'fasted AM, pre-sleep PM',active:true},{id:'glow',name:'Glow Stack (GHK-Cu+BPC+TB)',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'2',dose_pm:'',unit_am:'mg',unit_pm:'mg',note:'GHK-Cu 1400µg / TB-500 300µg / BPC-157 300µg',active:true}],trt:{enabled:true,compound:'Testosterone Cypionate',injections:[{date:'2026-05-26',label:'Injection 1',dose:'250mg'}]}};
+    _userStacks=[restoredStack];
+    _activeStackIndex=0;
+  }
+  if(!_userStacks.length){
     _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
     _userStacks[0].name='My Stack';
     _activeStackIndex=0;
-    _stacksLoaded=true;
-    buildStackStore();
   }
+  updateWEEKLY();
+  _stacksLoaded=true;
+  buildStackStore();
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){
