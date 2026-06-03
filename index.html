@@ -244,7 +244,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.70';
+const VERSION='1.71';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -330,13 +330,20 @@ function showDayInline(date,tileEl){
   const order={'AM':0,'null':1,'PM':2};
   doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));
   list.innerHTML='';
-  const checked=getChecked();
-  doses.forEach(dose=>{
-    const realId=dose.id;
-    const isChk=checked.includes(realId);
-    const item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');
-    item.onclick=()=>toggle(realId);
-    item.innerHTML=`<div class="check-box ${isChk?'checked':''}"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:${dose.dot}">${dose.name}</div><div class="check-detail">${dose.detail}</div></div>${dose.time?`<div class="check-time">${dose.time}</div>`:''}` ;
+  var backendDoses=isPast?getPastDoses(d):null;var checked=backendDoses||getChecked();
+  doses.forEach(function(dose){
+    var realId=dose.id;
+    var isChk=checked.includes(realId);
+    var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');
+    item.onclick=function(){toggle(realId);};
+    var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');
+    box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var main=document.createElement('div');main.className='check-main';
+    var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=dose.dot;nameEl.textContent=dose.name;
+    var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;
+    main.appendChild(nameEl);main.appendChild(detailEl);
+    item.appendChild(box);item.appendChild(main);
+    if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}
     list.appendChild(item);
   });
   badge.textContent=label;
