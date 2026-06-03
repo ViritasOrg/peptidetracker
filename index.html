@@ -126,6 +126,74 @@
   .pill-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
   .empty{padding:40px 20px;text-align:center;color:var(--muted2);font-size:13px;}
   .empty-icon{font-size:32px;margin-bottom:12px;}
+  /* Stack wizard */
+  .wiz-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;flex-direction:column;overflow:hidden;transform:translateX(100%);transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);}
+  .wiz-overlay.open{transform:translateX(0);}
+  .wiz-header{display:flex;align-items:center;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--border);flex-shrink:0;}
+  .wiz-back{background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;padding:0;line-height:1;flex-shrink:0;}
+  .wiz-title{font-family:'Bebas Neue',sans-serif;font-size:21px;letter-spacing:1px;color:var(--accent);flex:1;}
+  .wiz-progress{display:flex;gap:4px;align-items:center;}
+  .wiz-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all 0.2s;}
+  .wiz-dot.done{background:var(--accent3);}
+  .wiz-dot.active{background:var(--accent);width:18px;border-radius:3px;}
+  .wiz-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 20px 8px;}
+  .wiz-footer{padding:12px 20px 32px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;}
+  .wiz-section{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;margin:18px 0 10px;}
+  .wiz-section:first-child{margin-top:4px;}
+  .goal-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px;}
+  .goal-chip{padding:8px 14px;border:1px solid var(--border);border-radius:20px;font-size:13px;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
+  .goal-chip.sel{border-color:var(--accent);color:var(--accent);background:rgba(232,255,60,0.08);}
+  .pep-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;display:flex;align-items:center;gap:12px;}
+  .pep-card.sel{border-color:var(--accent);background:rgba(232,255,60,0.04);}
+  .pep-dot-sm{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .pep-info{flex:1;min-width:0;}
+  .pep-name{font-size:14px;font-weight:500;color:var(--text);}
+  .pep-meta{font-size:11px;color:var(--muted2);margin-top:2px;}
+  .pep-price{font-size:11px;color:var(--accent3);flex-shrink:0;text-align:right;}
+  .pep-chk{width:18px;height:18px;border-radius:4px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;}
+  .pep-card.sel .pep-chk{background:var(--accent);border-color:var(--accent);}
+  .cfg-block{border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;}
+  .cfg-name{font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .cfg-lbl{font-size:10px;font-weight:600;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;}
+  .cfg-row{margin-bottom:10px;}
+  .cfg-row:last-child{margin-bottom:0;}
+  .day-chips{display:flex;gap:5px;}
+  .day-chip{width:34px;height:34px;border-radius:50%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
+  .day-chip.sel{background:var(--accent);border-color:var(--accent);color:#000;}
+  .time-chips{display:flex;gap:6px;}
+  .time-chip{padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
+  .time-chip.sel{background:var(--accent);border-color:var(--accent);color:#000;}
+  .dose-row{display:flex;gap:6px;align-items:center;}
+  input.dose-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:13px;width:72px;font-family:inherit;outline:none;}
+  input.dose-in:focus{border-color:var(--accent);}
+  select.unit-sel{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;}
+  input.note-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px;width:100%;font-family:inherit;box-sizing:border-box;outline:none;}
+  .trt-toggle{display:flex;align-items:center;justify-content:space-between;padding:14px;border:1px solid var(--border);border-radius:10px;cursor:pointer;margin-bottom:10px;}
+  .trt-toggle-label{font-size:14px;color:var(--text);}
+  .toggle-sw{width:38px;height:22px;background:var(--border);border-radius:11px;position:relative;transition:background 0.2s;}
+  .toggle-sw.on{background:var(--accent);}
+  .toggle-sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#000;transition:transform 0.2s;}
+  .toggle-sw.on::after{transform:translateX(16px);}
+  .trt-form{border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;}
+  input.trt-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;width:100%;font-family:inherit;box-sizing:border-box;outline:none;margin-bottom:8px;}
+  .inj-row{display:flex;gap:6px;align-items:center;margin-bottom:6px;}
+  .inj-row input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none;}
+  .inj-row button{background:none;border:none;color:var(--danger);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
+  .rule-box{border-radius:8px;padding:12px 14px;margin-bottom:8px;}
+  .rule-box.ok{background:rgba(60,255,160,0.07);border:1px solid rgba(60,255,160,0.2);}
+  .rule-box.warn{background:rgba(255,176,60,0.07);border:1px solid rgba(255,176,60,0.3);}
+  .rule-box.err{background:rgba(255,60,60,0.07);border:1px solid rgba(255,60,60,0.25);}
+  .rule-title{font-size:13px;font-weight:600;margin-bottom:3px;}
+  .rule-title.ok{color:var(--accent3);}
+  .rule-title.warn{color:#ffb03c;}
+  .rule-title.err{color:var(--danger);}
+  .rule-msg{font-size:12px;color:var(--muted2);line-height:1.4;}
+  .stack-empty{text-align:center;padding:52px 24px;}
+  .stack-empty-icon{font-size:44px;margin-bottom:14px;}
+  .stack-empty-title{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--text);letter-spacing:1px;margin-bottom:8px;}
+  .stack-empty-desc{font-size:13px;color:var(--muted2);line-height:1.6;max-width:270px;margin:0 auto 24px;}
+  .stack-actions{display:flex;gap:8px;margin-bottom:12px;}
+  .btn-check{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
   .today-spinner{display:flex;justify-content:center;align-items:center;padding:48px 20px;}
   .today-spinner-dot{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -185,11 +253,7 @@
     </div>
   </div>
   <div class="content hidden" id="tab-stack">
-    <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">RETATRUTIDE</div></div><span class="card-badge badge-today">ACTIVE</span></div><div class="card-body"><div class="info-row"><span class="info-label">Dose</span><span class="info-val accent">3 mg / injection</span></div><div class="info-row"><span class="info-label">Frequency</span><span class="info-val">2× / week — Sun &amp; Wed</span></div><div class="info-row"><span class="info-label">Weekly total</span><span class="info-val">6 mg</span></div><div class="info-row"><span class="info-label">Route</span><span class="info-val">SC — 30 IU (10 mg/ml)</span></div><div class="divider"></div><div class="note">Changed from 5mg × 1/week to 3mg × 2/week for more stable exposure.</div></div></div>
-    <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">CJC-1295 / IPAMORELIN</div></div><span class="card-badge badge-today">ACTIVE — PRE-HGH</span></div><div class="card-body"><div class="info-row"><span class="info-label">AM dose</span><span class="info-val green">4 IU — fasted AM</span></div><div class="info-row"><span class="info-label">PM dose</span><span class="info-val green">5 IU — pre-sleep PM</span></div><div class="info-row"><span class="info-label">Daily total</span><span class="info-val">9 IU</span></div><div class="divider"></div><div class="note">Bridge until HGH delivery. Discontinue on 4 Jul 2026 when HGH starts.</div></div></div>
-    <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:#3b9eff"></div><div class="card-title">GLOW STACK</div></div><span class="card-badge badge-today">ACTIVE</span></div><div class="card-body"><div class="info-row"><span class="info-label">Daily dose</span><span class="info-val" style="color:#3b9eff">2 mg (9 IU)</span></div></div><div class="stack-row"><div class="stack-pct" style="color:var(--accent)">70%</div><div class="stack-info"><div class="stack-name">GHK-Cu</div><div class="stack-dose">1400 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:70%;background:var(--accent)"></div></div></div></div><div class="stack-row"><div class="stack-pct" style="color:var(--accent3)">15%</div><div class="stack-info"><div class="stack-name">TB-500</div><div class="stack-dose">300 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:var(--accent3)"></div></div></div></div><div class="stack-row"><div class="stack-pct" style="color:#3b9eff">15%</div><div class="stack-info"><div class="stack-name">BPC-157</div><div class="stack-dose">300 µg / day</div></div><div class="stack-bar-wrap"><div class="stack-bar"><div class="stack-fill" style="width:15%;background:#3b9eff"></div></div></div></div></div>
-    <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">TESTOVIRON BRIDGE</div></div><span class="card-badge badge-bridge">BRIDGE</span></div><div class="card-body"><div class="info-row"><span class="info-label">Dose</span><span class="info-val purple">125 mg / injection</span></div><div class="info-row"><span class="info-label">Route</span><span class="info-val">SC — 27G × 12mm</span></div><div class="info-row"><span class="info-label">Filter needle</span><span class="info-val">18G aspiration</span></div><div class="info-row"><span class="info-label">Schedule</span><span class="info-val">11, 13, 18, 23 May</span></div><div class="divider"></div><div class="info-row"><span class="info-label">Trough panel</span><span class="info-val warn">29 Jun 2026 — urologist</span></div></div></div>
-    <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--muted)"></div><div class="card-title">HGH — INCOMING</div></div><span class="card-badge badge-upcoming">FROM 4 JUL</span></div><div class="card-body"><div class="info-row"><span class="info-label">Start dose</span><span class="info-val">1 IU / day</span></div><div class="info-row"><span class="info-label">Schedule</span><span class="info-val">5-on / 2-off</span></div><div class="info-row"><span class="info-label">Vials</span><span class="info-val">24 IU × 10 vials</span></div><div class="info-row"><span class="info-label">Replaces</span><span class="info-val">CJC-1295 / IPA</span></div><div class="divider"></div><div class="note">Coincides with Nebido injection #2. Discontinue CJC/IPA on start day.</div></div></div>
+    <div id="stack-body"></div>
   </div>
   <div class="content hidden" id="tab-timeline"><div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">MILESTONES</div></div></div><div class="timeline" id="timeline-body"></div></div></div>
   <div class="content hidden" id="tab-body">
@@ -247,12 +311,12 @@
   </div>
 </div>
 <script>
-const VERSION='1.78';
+const VERSION='1.79';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
 const TODAY_DOW=NOW.getDay();
-const WEEKLY=[
+const WEEKLY_DEFAULT=[
   {id:'reta-sun',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[0],time:'AM',dot:'#e8ff3c'},
   {id:'reta-wed',name:'Retatrutide',detail:'3 mg — 30 IU SC',dow:[3],time:'AM',dot:'#e8ff3c'},
   {id:'cjc-am',name:'CJC-1295 / IPA',detail:'4 IU — fasted AM',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3cffa0'},
@@ -260,6 +324,7 @@ const WEEKLY=[
   {id:'glow-1',name:'GLOW Stack',detail:'2 mg — GHK-Cu 1400µg / TB-500 300µg / BPC-157 300µg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
   {id:'glow-2',name:'GLOW Stack (2nd dose)',detail:'2 mg — double dose period, ends 3 Jun',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3b9eff',startDate:new Date(2026,4,20),endDate:new Date(2026,5,4)},
 ];
+let WEEKLY=WEEKLY_DEFAULT.slice();
 const TESTO=[
   {date:new Date(2026,4,4), label:'Injection 1',dose:'250mg',route:'IM'},
   {date:new Date(2026,4,11),label:'Injection 2',dose:'125mg',route:'SC'},
@@ -288,6 +353,10 @@ const BC_KEY='proto-bodycomp-v2';
 let weights=[];
 let _viewDate=null;
 let _syncPending=true;
+let _userProtocol=null;
+let _protocolLoaded=false;
+let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false};
+var _wizOverlay=null;
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';const WEIGHTS_TOKEN='10vtu';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('pin-screen').classList.add('hidden');document.body.classList.remove('locked');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}if(_googleToken){unlockApp();}else{const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);}
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
@@ -297,7 +366,7 @@ async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodyc
 async function pushBodyCompToAgent(entry){try{await fetch(AGENT_URL+"/bodycomp",{method:"POST",headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(entry)});}catch(e){}}
 async function deleteBodyCompFromAgent(date){try{await fetch(AGENT_URL+"/bodycomp/"+date,{method:"DELETE",headers:{"x-app-token":WEIGHTS_TOKEN}});}catch(e){}}
 function getWeightForDate(dateStr){if(!weights.length)return null;const target=new Date(dateStr.replace(/-/g,'/'));let best=null,bestDiff=Infinity;for(const w of weights){const diff=Math.abs(target-new Date(w.date.replace(/-/g,'/')));if(diff<bestDiff){bestDiff=diff;best=w.weight;}}return bestDiff<=7*86400000?best:null;}
-function switchTab(id,el){document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();}
+function switchTab(id,el){document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='stack')buildStack();}
 function logout(){_googleToken='';localStorage.removeItem('google_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('pin-screen').classList.remove('hidden');}
 async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}}
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}const token=WEIGHTS_TOKEN;fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':token}}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'Content-Type':'application/json','x-app-token':token},body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
@@ -306,7 +375,391 @@ function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'sh
 function getChecked(){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);try{var v=JSON.parse(localStorage.getItem('proto-chk-'+dk)||'[]');return Array.isArray(v)?v:[];}catch{return[];}}
 function setChecked(arr){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);localStorage.setItem('proto-chk-'+dk,JSON.stringify(arr));}
 async function checkSyncStatus(){const dot=document.getElementById('sync-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl.signal});if(!r.ok){dot.className='agent-dot down';dot.title='Backend unreachable';return;}const remote=await r.json();const remoteDates=new Set(remote.map(e=>e.date));const localKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const unsynced=localKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;dot.className='agent-dot '+(unsynced===0?'up':'warn');dot.title=unsynced===0?'Doses synced ✓ • Body comp synced ✓':'Doses: ⚠ '+unsynced+' day(s) not on backend';}catch(e){dot.className='agent-dot down';dot.title='Sync check failed';}}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);}
+// ── Peptide catalogue ────────────────────────────────────────────────────────
+const PEPTIDE_CAT=[
+  {id:'cjc-ipa',name:'CJC-1295 / IPA Blend',sku:'CP10',price:'$120/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh','ghrp'],desc:'Classic GHRH+GHRP combo. Best bang-for-buck GH stack.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'4 IU',dosePm:'5 IU',unitAm:'IU',unitPm:'IU'}},
+  {id:'cjc-nodac',name:'CJC-1295 (no DAC)',sku:'CND2',price:'$45/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh'],desc:'GHRH analog, short-acting. Pair with Ipamorelin for synergy.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'100',dosePm:'100',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'ipamorelin',name:'Ipamorelin',sku:'IP5',price:'$40/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrp'],desc:'Clean GHRP pulse, minimal cortisol/prolactin sides.',dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'200',dosePm:'200',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'sermorelin',name:'Sermorelin',sku:'SMO5',price:'$73/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh'],desc:'GHRH analog, shorter half-life than CJC. Best at bedtime.',dflt:{times:['PM'],days:[0,1,2,3,4,5,6],doseAm:'',dosePm:'200',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'tesamorelin',name:'Tesamorelin',sku:'TSM2',price:'$60/box',group:'GH Axis',goals:['fat'],dot:'#e8ff3c',cg:['ghrh'],desc:'GHRH specifically for visceral fat. Do NOT combine with CJC/Sermorelin.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'2',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'hgh',name:'HGH',sku:'H24',price:'$118/box',group:'GH Axis',goals:['muscle','fat'],dot:'#3cffa0',cg:['hgh'],desc:'Exogenous HGH. 5-on/2-off. Replaces GH peptides when started.',dflt:{times:['AM'],days:[1,2,3,4,5],doseAm:'1',dosePm:'',unitAm:'IU',unitPm:'IU'}},
+  {id:'glow',name:'Glow Stack (GHK-Cu+BPC+TB)',sku:'BBG70',price:'$229/box',group:'Skin & Healing',goals:['skin','recovery'],dot:'#3b9eff',cg:[],desc:'70% GHK-Cu + 15% BPC-157 + 15% TB-500. Best value for skin+repair.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'2',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'klow',name:'Klow Stack (Glow+KPV)',sku:'Klow80',price:'$245/box',group:'Skin & Healing',goals:['skin','recovery'],dot:'#3b9eff',cg:[],desc:'Glow + KPV for enhanced anti-inflammation (gut, joints).',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'2',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'bpc-tb',name:'BPC-157 + TB-500 Blend',sku:'BB10',price:'$122/box',group:'Skin & Healing',goals:['recovery'],dot:'#3b9eff',cg:[],desc:'Wolverine stack. Systemic (TB-500) + localised (BPC-157) repair.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'500',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'bpc157',name:'BPC-157',sku:'BC5',price:'$50/box',group:'Skin & Healing',goals:['recovery'],dot:'#3b9eff',cg:[],desc:'Localised repair. Gut lining, tendons, joints.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'250',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'tb500',name:'TB-500',sku:'BT2',price:'$45/box',group:'Skin & Healing',goals:['recovery'],dot:'#3b9eff',cg:[],desc:'Systemic angiogenesis and tissue migration.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'2',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'ghkcu',name:'GHK-Cu',sku:'CU50',price:'$34/box',group:'Skin & Healing',goals:['skin'],dot:'#3b9eff',cg:[],desc:'Collagen synthesis, anti-aging. 70% of Glow stack.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'1.4',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'retatrutide',name:'Retatrutide',sku:'RT5',price:'$95/box',group:'Fat Loss',goals:['fat'],dot:'#e8ff3c',cg:['glp1'],desc:'Triple agonist — strongest fat loss peptide available.',dflt:{times:['AM'],days:[0],doseAm:'3',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'tirzepatide',name:'Tirzepatide',sku:'TR5',price:'$51/box',group:'Fat Loss',goals:['fat'],dot:'#e8ff3c',cg:['glp1'],desc:'GIP+GLP-1 dual agonist. Stronger than Semaglutide.',dflt:{times:['AM'],days:[0],doseAm:'5',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'semaglutide',name:'Semaglutide',sku:'SM2',price:'$21/box',group:'Fat Loss',goals:['fat'],dot:'#e8ff3c',cg:['glp1'],desc:'GLP-1 agonist. Most studied weight-loss peptide.',dflt:{times:['AM'],days:[0],doseAm:'0.5',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'aod9604',name:'AOD-9604',sku:'5AD',price:'$50/box',group:'Fat Loss',goals:['fat'],dot:'#e8ff3c',cg:[],desc:'HGH fragment for fat metabolism. No IGF-1 spike.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'300',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'semax',name:'Semax',sku:'XA5',price:'$46/box',group:'Cognitive',goals:['cognitive'],dot:'#c084fc',cg:[],desc:'ACTH analog. Focus, neuroprotection, BDNF boost.',dflt:{times:['AM'],days:[1,2,3,4,5],doseAm:'200',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'selank',name:'Selank',sku:'SK5',price:'$47/box',group:'Cognitive',goals:['cognitive'],dot:'#c084fc',cg:[],desc:'Anxiolytic + cognitive enhancer. GABA/serotonin modulation.',dflt:{times:['AM'],days:[1,2,3,4,5],doseAm:'250',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
+  {id:'epitalon',name:'Epitalon',sku:'ET10',price:'$37/box',group:'Anti-aging',goals:['antiaging'],dot:'#ff6b2b',cg:[],desc:'Telomerase activator. Cycle 10mg/day x 10-20 days.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'5',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'motsc',name:'MOTS-C',sku:'MS10',price:'$71/box',group:'Anti-aging',goals:['antiaging','muscle'],dot:'#ff6b2b',cg:[],desc:'Mitochondrial peptide. Metabolic regulation, exercise mimetic.',dflt:{times:['AM'],days:[1,3,5],doseAm:'10',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'nad',name:'NAD+',sku:'NJ100',price:'$47/box',group:'Anti-aging',goals:['antiaging','cognitive'],dot:'#ff6b2b',cg:[],desc:'Energy, DNA repair, sirtuin activation.',dflt:{times:['AM'],days:[1,3,5],doseAm:'100',dosePm:'',unitAm:'mg',unitPm:'mg'}},
+  {id:'hcg',name:'HCG',sku:'G5K',price:'$88/box',group:'TRT Support',goals:['trt'],dot:'#c084fc',cg:[],desc:'Testicular stimulation during TRT. Maintains fertility/size.',dflt:{times:['AM'],days:[1,4],doseAm:'500',dosePm:'',unitAm:'IU',unitPm:'IU'}},
+];
+const STACK_RULES=[
+  {id:'ghrh-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('ghrh');}).length>1;},level:'err',title:'Multiple GHRH analogs',msg:'CJC-1295, Sermorelin and Tesamorelin all act on the same GHRH receptor — stacking them causes receptor saturation with no added benefit and higher cost. Pick one.'},
+  {id:'cjc-tesa',check:function(p){var ids=p.map(function(x){return x.id;});return (ids.includes('cjc-ipa')||ids.includes('cjc-nodac'))&&ids.includes('tesamorelin');},level:'err',title:'CJC-1295 + Tesamorelin',msg:'Tesamorelin is specifically indicated for visceral fat reduction — if that is your goal, use it alone. For general GH optimisation use CJC/IPA instead. Never full-dose both.'},
+  {id:'glp1-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('glp1');}).length>1;},level:'err',title:'Multiple GLP-1/metabolic agonists',msg:'Combining Semaglutide, Tirzepatide or Retatrutide provides no additive fat-loss benefit and significantly increases GI side effects. Pick one.'},
+  {id:'ghrh-ghrp-solo',check:function(p){var ids=p.map(function(x){return x.id;});var soloGHRH=ids.includes('cjc-nodac')||ids.includes('sermorelin');var hasGHRP=ids.includes('ipamorelin')||ids.includes('cjc-ipa');return soloGHRH&&!hasGHRP;},level:'warn',title:'GHRH without GHRP',msg:'CJC-1295 (no DAC) and Sermorelin work best paired with a GHRP like Ipamorelin for synergistic GH pulses. Consider adding Ipamorelin or switching to the CJC+IPA blend.'},
+  {id:'gh-hgh-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var hasPep=ids.some(function(id){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin'].includes(id);});return hasPep&&ids.includes('hgh');},level:'warn',title:'GH peptides + exogenous HGH',msg:'Running GH secretagogues alongside exogenous HGH can over-stimulate the axis. Monitor IGF-1. Consider discontinuing CJC/IPA when HGH starts.'},
+];
+// ── User protocol state ──────────────────────────────────────────────────────
+let _userProtocol=null;
+let _protocolLoaded=false;
+let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false};
+// ── Build WEEKLY from protocol ───────────────────────────────────────────────
+function buildWeeklyFromProtocol(proto){
+  if(!proto||!proto.peptides||!proto.peptides.length)return[];
+  var built=[];
+  proto.peptides.forEach(function(p){
+    if(p.active===false)return;
+    var days=p.days||[0,1,2,3,4,5,6];
+    var times=p.times||['AM'];
+    var dot=p.dot||'#888';
+    var startDate=p.start_date?new Date(p.start_date):null;
+    var endDate=p.end_date?new Date(p.end_date):null;
+    if(times.includes('AM')&&times.includes('PM')){
+      var dAm=p.dose_am||p.dose||'';
+      var dPm=p.dose_pm||p.dose||'';
+      built.push({id:p.id+'-am',name:p.name,detail:dAm+(p.note_am?' — '+p.note_am:' — fasted AM'),dow:days,time:'AM',dot:dot,startDate:startDate,endDate:endDate});
+      built.push({id:p.id+'-pm',name:p.name,detail:dPm+(p.note_pm?' — '+p.note_pm:' — pre-sleep PM'),dow:days,time:'PM',dot:dot,startDate:startDate,endDate:endDate});
+    } else {
+      var t=times[0]||'AM';
+      var dose=t==='AM'?(p.dose_am||p.dose||''):(p.dose_pm||p.dose||'');
+      built.push({id:p.id,name:p.name,detail:dose+(p.note?' — '+p.note:''),dow:days,time:t,dot:dot,startDate:startDate,endDate:endDate});
+    }
+  });
+  return built;
+}
+// ── Load user protocol from backend ─────────────────────────────────────────
+async function loadUserProtocol(){
+  try{
+    var r=await fetch(AGENT_URL+'/protocol',{headers:{'x-app-token':WEIGHTS_TOKEN}});
+    if(!r.ok){_protocolLoaded=true;buildStack();return;}
+    var proto=await r.json();
+    if(proto&&proto.peptides&&proto.peptides.length){
+      _userProtocol=proto;
+      WEEKLY=buildWeeklyFromProtocol(proto);
+    } else {
+      _userProtocol=null;
+      WEEKLY=WEEKLY_DEFAULT.slice();
+    }
+    _protocolLoaded=true;
+    buildStack();
+    buildWeekStrip();
+    buildToday();
+  }catch(e){_protocolLoaded=true;WEEKLY=WEEKLY_DEFAULT.slice();buildStack();}
+}
+// ── Run rule checks ──────────────────────────────────────────────────────────
+function checkStack(peptides){
+  var results=[];
+  STACK_RULES.forEach(function(rule){
+    if(rule.check(peptides))results.push({level:rule.level,title:rule.title,msg:rule.msg,id:rule.id});
+  });
+  return results;
+}
+// ── Render Check Stack results ───────────────────────────────────────────────
+function renderCheckResults(peptides){
+  var issues=checkStack(peptides);
+  if(!issues.length)return '<div class="rule-box ok"><div class="rule-title ok">✓ Stack looks clean</div><div class="rule-msg">No contraindications or redundancies detected.</div></div>';
+  return issues.map(function(i){return '<div class="rule-box '+i.level+'"><div class="rule-title '+i.level+'">'+(i.level==='err'?'⛔':'⚠️')+' '+i.title+'</div><div class="rule-msg">'+i.msg+'</div></div>';}).join('');
+}
+// ── Save protocol to backend ─────────────────────────────────────────────────
+async function saveProtocolToBackend(proto){
+  try{
+    var r=await fetch(AGENT_URL+'/protocol',{method:'POST',headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify(proto)});
+    return r.ok;
+  }catch(e){return false;}
+}
+// ── Build Stack tab (3 states) ────────────────────────────────────────────────
+function buildStack(){
+  var body=document.getElementById('stack-body');
+  if(!body)return;
+  if(!_protocolLoaded){
+    body.innerHTML='<div class="stack-empty"><div class="today-spinner"><div class="today-spinner-dot"></div></div></div>';
+    return;
+  }
+  if(!_userProtocol||!_userProtocol.peptides||!_userProtocol.peptides.length){
+    body.innerHTML='<div class="stack-empty"><div class="stack-empty-icon">💉</div><div class="stack-empty-title">No Stack Defined</div><div class="stack-empty-desc">Set up your peptide protocol to track daily doses, get interaction warnings, and sync across devices.</div><button class="btn btn-primary" style="display:block;margin:0 auto;" onclick="showWizard(false)">Build My Stack</button></div>';
+    return;
+  }
+  var proto=_userProtocol;
+  var html='<div class="stack-actions"><button class="btn btn-primary" onclick="showWizard(true)">Edit Stack</button><button class="btn-check" onclick="showCheckPanel()">Check Stack</button></div>';
+  var groups={};
+  proto.peptides.forEach(function(p){
+    var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
+    var grp=cat?cat.group:'Other';
+    if(!groups[grp])groups[grp]=[];
+    groups[grp].push({p:p,cat:cat});
+  });
+  Object.keys(groups).forEach(function(grp){
+    html+='<div class="wiz-section">'+grp+'</div>';
+    groups[grp].forEach(function(item){
+      var p=item.p,cat=item.cat;
+      var dot=p.dot||(cat?cat.dot:'#888');
+      var times=(p.times||['AM']).join(' + ');
+      var dose='';
+      if(p.times&&p.times.includes('AM')&&p.times.includes('PM')&&p.dose_am!==p.dose_pm){
+        dose=(p.dose_am||'?')+' AM / '+(p.dose_pm||'?')+' PM';
+      } else {
+        dose=p.dose_am||p.dose_pm||p.dose||'';
+      }
+      var daysLabel=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].filter(function(_,i){return p.days.includes(i);}).join(', '):'—';
+      html+='<div class="card" style="margin-bottom:8px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:'+dot+'"></div><div class="card-title">'+p.name.toUpperCase()+'</div></div><span class="card-badge badge-today">ACTIVE</span></div><div class="card-body"><div class="info-row"><span class="info-label">Dose</span><span class="info-val" style="color:'+dot+'">'+dose+'</span></div><div class="info-row"><span class="info-label">Timing</span><span class="info-val">'+times+'</span></div><div class="info-row"><span class="info-label">Days</span><span class="info-val">'+daysLabel+'</span></div>'+(p.note?'<div class="divider"></div><div class="note">'+p.note+'</div>':'')+'</div></div>';
+    });
+  });
+  if(proto.trt&&proto.trt.compound){
+    html+='<div class="wiz-section">TRT</div><div class="card" style="margin-bottom:8px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">'+proto.trt.compound.toUpperCase()+'</div></div><span class="card-badge badge-upcoming">TRT</span></div><div class="card-body">'+(proto.trt.injections&&proto.trt.injections.length?proto.trt.injections.map(function(inj){return'<div class="info-row"><span class="info-label">'+inj.label+'</span><span class="info-val">'+inj.date+(inj.dose?' · '+inj.dose:'')+'</span></div>';}).join(''):'<div class="info-row"><span class="info-label">Injections</span><span class="info-val">None added</span></div>')+'</div></div>';
+  }
+  body.innerHTML=html;
+}
+// ── Check Stack panel ─────────────────────────────────────────────────────────
+function showCheckPanel(){
+  if(!_userProtocol||!_userProtocol.peptides)return;
+  var pepObjs=_userProtocol.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:300;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:80vh;overflow-y:auto;';
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+}
+// ── Wizard ────────────────────────────────────────────────────────────────────
+var _wizOverlay=null;
+function showWizard(editMode){
+  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:editMode};
+  if(editMode&&_userProtocol){
+    var proto=_userProtocol;
+    _wiz.peptides=proto.peptides.map(function(p){return JSON.parse(JSON.stringify(p));});
+    _wiz.trt=proto.trt?JSON.parse(JSON.stringify(proto.trt)):{enabled:false,compound:'',injections:[]};
+    if(!_wiz.trt.hasOwnProperty('enabled'))_wiz.trt.enabled=!!(_wiz.trt.compound);
+    var allGoals=[];
+    _wiz.peptides.forEach(function(p){
+      var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
+      if(cat)cat.goals.forEach(function(g){if(!allGoals.includes(g))allGoals.push(g);});
+    });
+    _wiz.goals=allGoals;
+  }
+  if(!_wizOverlay){
+    _wizOverlay=document.createElement('div');
+    _wizOverlay.className='wiz-overlay';
+    _wizOverlay.innerHTML='<div class="wiz-header"><button class="wiz-back" id="wiz-back-btn">‹</button><div class="wiz-title" id="wiz-title">BUILD STACK</div><div class="wiz-progress" id="wiz-progress"></div></div><div class="wiz-body" id="wiz-body"></div><div class="wiz-footer" id="wiz-footer"></div>';
+    document.body.appendChild(_wizOverlay);
+    document.getElementById('wiz-back-btn').onclick=wizBack;
+  }
+  setTimeout(function(){_wizOverlay.classList.add('open');},10);
+  wizRender();
+}
+function closeWizard(){if(_wizOverlay){_wizOverlay.classList.remove('open');}}
+function wizBack(){
+  if(_wiz.step===0){closeWizard();}
+  else{_wiz.step--;wizRender();}
+}
+var WIZ_TITLES=['GOALS','PEPTIDES','CONFIGURE','TRT','REVIEW'];
+function wizRender(){
+  var steps=5;
+  var prog='';
+  for(var i=0;i<steps;i++){
+    var cls=i<_wiz.step?'done':i===_wiz.step?'active':'';
+    prog+='<div class="wiz-dot '+cls+'"></div>';
+  }
+  document.getElementById('wiz-progress').innerHTML=prog;
+  document.getElementById('wiz-title').textContent=(_wiz.editMode?'EDIT ':'BUILD ')+WIZ_TITLES[_wiz.step];
+  var body=document.getElementById('wiz-body');
+  var footer=document.getElementById('wiz-footer');
+  body.scrollTop=0;
+  if(_wiz.step===0)wizStep0(body,footer);
+  else if(_wiz.step===1)wizStep1(body,footer);
+  else if(_wiz.step===2)wizStep2(body,footer);
+  else if(_wiz.step===3)wizStep3(body,footer);
+  else wizStep4(body,footer);
+}
+var GOAL_DEFS=[{id:'muscle',label:'Muscle & Recovery',icon:'💪'},{id:'recovery',label:'Injury & Healing',icon:'🩹'},{id:'skin',label:'Skin & Anti-aging',icon:'✨'},{id:'fat',label:'Fat Loss',icon:'🔥'},{id:'cognitive',label:'Cognitive',icon:'🧠'},{id:'antiaging',label:'Longevity',icon:'⏳'},{id:'trt',label:'TRT Support',icon:'⚡'}];
+function wizStep0(body,footer){
+  var html='<div class="wiz-section">What are your goals?</div><div class="goal-grid">';
+  GOAL_DEFS.forEach(function(g){
+    var sel=_wiz.goals.includes(g.id)?'sel':'';
+    html+='<div class="goal-chip '+sel+'" onclick="wizToggleGoal(\''+g.id+'\')">'+g.icon+' '+g.label+'</div>';
+  });
+  html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:12px;">Select all that apply. Used to filter the peptide catalogue.</div>';
+  body.innerHTML=html;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Peptides</button>';
+}
+function wizToggleGoal(id){
+  var i=_wiz.goals.indexOf(id);
+  if(i===-1)_wiz.goals.push(id);else _wiz.goals.splice(i,1);
+  var chips=document.querySelectorAll('.goal-chip');
+  chips.forEach(function(chip){
+    var gid=chip.getAttribute('onclick').replace("wizToggleGoal('","").replace("')","");
+    chip.className='goal-chip'+(_wiz.goals.includes(gid)?' sel':'');
+  });
+}
+function wizStep1(body,footer){
+  var filtered=PEPTIDE_CAT;
+  if(_wiz.goals.length){filtered=PEPTIDE_CAT.filter(function(p){return p.goals.some(function(g){return _wiz.goals.includes(g);});});}
+  var groups={};
+  filtered.forEach(function(p){if(!groups[p.group])groups[p.group]=[];groups[p.group].push(p);});
+  var allIds=PEPTIDE_CAT.map(function(x){return x.id;});
+  var selIds=_wiz.peptides.map(function(x){return x.id;});
+  // Also show selected peptides not in current filter
+  _wiz.peptides.forEach(function(sp){
+    if(!filtered.find(function(f){return f.id===sp.id;})){
+      var cat=PEPTIDE_CAT.find(function(c){return c.id===sp.id;});
+      if(cat){if(!groups['Selected'])groups['Selected']=[];groups['Selected'].push(cat);}
+    }
+  });
+  var html='';
+  if(!_wiz.goals.length)html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">Showing all peptides. Select goals on the previous step to filter.</div>';
+  Object.keys(groups).forEach(function(grp){
+    html+='<div class="wiz-section">'+grp+'</div>';
+    groups[grp].forEach(function(p){
+      var isSel=selIds.includes(p.id);
+      html+='<div class="pep-card'+(isSel?' sel':'')+'" id="pc-'+p.id+'" onclick="wizTogglePep(\''+p.id+'\')"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+p.desc+'</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><div class="pep-price">'+p.price+'</div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
+    });
+  });
+  body.innerHTML=html;
+  var checkBtn=_wiz.peptides.length>0?'<button class="btn-check" onclick="wizShowCheck()">Check Stack</button>':'';
+  footer.innerHTML=checkBtn+'<button class="btn btn-primary" style="flex:1" onclick="wizNext()">'+(selIds.length?'Next → Configure ('+selIds.length+')':'Skip →')+'</button>';
+}
+function wizTogglePep(id){
+  var idx=_wiz.peptides.findIndex(function(p){return p.id===id;});
+  if(idx===-1){
+    var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});
+    if(!cat)return;
+    var d=cat.dflt;
+    _wiz.peptides.push({id:id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),dose_am:d.doseAm,dose_pm:d.dosePm,unit_am:d.unitAm,unit_pm:d.unitPm,note:'',active:true});
+  } else {
+    _wiz.peptides.splice(idx,1);
+  }
+  wizStep1(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizShowCheck(){
+  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:400;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:70vh;overflow-y:auto;';
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+}
+var UNITS=['mg','mcg','IU','ml'];
+var DAYS_SHORT=['S','M','T','W','T','F','S'];
+function wizStep2(body,footer){
+  if(!_wiz.peptides.length){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2);">No peptides selected. Go back and add some.</div>';footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → TRT</button>';return;}
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;">Configure dose, timing and frequency for each peptide.</div>';
+  _wiz.peptides.forEach(function(p,pi){
+    var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
+    var dot=p.dot||(cat?cat.dot:'#888');
+    html+='<div class="cfg-block"><div class="cfg-name"><div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0"></div>'+p.name+'</div>';
+    // Timing
+    html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">';
+    ['AM','PM'].forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="wizToggleTime('+pi+',\''+t+'\')">'+t+'</div>';});
+    html+='</div></div>';
+    // Doses
+    if(p.times&&p.times.includes('AM')){
+      html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_am||'')+'" oninput="wizSetDose('+pi+',\'am\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'am\',this.value)">'+UNITS.map(function(u){return'<option'+(u===(p.unit_am||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+    }
+    if(p.times&&p.times.includes('PM')){
+      html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_pm||'')+'" oninput="wizSetDose('+pi+',\'pm\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'pm\',this.value)">'+UNITS.map(function(u){return'<option'+(u===(p.unit_pm||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+    }
+    // Days
+    html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
+    DAYS_SHORT.forEach(function(d,di){html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
+    html+='</div></div>';
+    // Note
+    html+='<div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
+    html+='</div>';
+  });
+  body.innerHTML=html;
+  footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Check Stack</button><button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → TRT</button>';
+}
+function wizToggleTime(pi,t){
+  var p=_wiz.peptides[pi];if(!p)return;
+  if(!p.times)p.times=[];
+  var i=p.times.indexOf(t);
+  if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);
+  wizStep2(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizToggleDay(pi,di){
+  var p=_wiz.peptides[pi];if(!p)return;
+  if(!p.days)p.days=[];
+  var i=p.days.indexOf(di);
+  if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);
+  wizStep2(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.dose_am=val;else p.dose_pm=val;}
+function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.unit_am=val;else p.unit_pm=val;}
+function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
+function wizStep3(body,footer){
+  var trt=_wiz.trt;
+  var html='<div class="trt-toggle" onclick="wizToggleTRT()"><div class="trt-toggle-label">Add testosterone protocol</div><div class="toggle-sw'+(trt.enabled?' on':'')+'"></div></div>';
+  if(trt.enabled){
+    html+='<div class="trt-form"><div class="cfg-lbl">Compound</div><input class="trt-in" type="text" value="'+String(trt.compound||'')+'" oninput="wizSetTRTCompound(this.value)" placeholder="e.g. Nebido, Testoviron, Enanthate"><div class="cfg-lbl" style="margin-top:8px">Injections</div>';
+    (trt.injections||[]).forEach(function(inj,i){
+      html+='<div class="inj-row"><input type="date" value="'+String(inj.date||'')+'" onchange="wizSetInjDate('+i+',this.value)"><input type="text" value="'+String(inj.label||'')+'" oninput="wizSetInjLabel('+i+',this.value)" placeholder="Label e.g. Injection 1"><input type="text" value="'+String(inj.dose||'')+'" oninput="wizSetInjDose('+i+',this.value)" placeholder="Dose e.g. 125mg" style="max-width:90px;"><button onclick="wizRemoveInj('+i+')">×</button></div>';
+    });
+    html+='<button class="btn-check" style="width:100%;margin-top:4px" onclick="wizAddInj()">+ Add Injection</button></div>';
+  }
+  body.innerHTML=html;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Review</button>';
+}
+function wizToggleTRT(){_wiz.trt.enabled=!_wiz.trt.enabled;wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizSetTRTCompound(v){_wiz.trt.compound=v;}
+function wizAddInj(){if(!_wiz.trt.injections)_wiz.trt.injections=[];_wiz.trt.injections.push({date:'',label:'Injection '+(_wiz.trt.injections.length+1),dose:''});wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizRemoveInj(i){_wiz.trt.injections.splice(i,1);wizStep3(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizSetInjDate(i,v){_wiz.trt.injections[i].date=v;}
+function wizSetInjLabel(i,v){_wiz.trt.injections[i].label=v;}
+function wizSetInjDose(i,v){_wiz.trt.injections[i].dose=v;}
+function wizStep4(body,footer){
+  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
+  var issues=checkStack(pepObjs);
+  var hasErrors=issues.some(function(i){return i.level==='err';});
+  var html='<div class="wiz-section">Stack Check</div>'+renderCheckResults(pepObjs);
+  html+='<div class="wiz-section">Summary</div>';
+  if(_wiz.peptides.length){
+    _wiz.peptides.forEach(function(p){
+      var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));
+      var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'× / week':'?';
+      html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';
+    });
+  } else {
+    html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';
+  }
+  if(_wiz.trt&&_wiz.trt.enabled&&_wiz.trt.compound){
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_wiz.trt.compound+'</div><div style="font-size:12px;color:var(--muted2)">'+(_wiz.trt.injections?_wiz.trt.injections.length+' injections':'TRT')+'</div></div>';
+  }
+  body.innerHTML=html;
+  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
+  footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Re-check</button><button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
+}
+async function wizSave(){
+  var btn=document.querySelector('.wiz-footer .btn.btn-primary');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  var proto={peptides:_wiz.peptides,trt:_wiz.trt.enabled?_wiz.trt:{}};
+  var ok=await saveProtocolToBackend(proto);
+  if(ok){
+    _userProtocol=proto;
+    WEEKLY=buildWeeklyFromProtocol(proto);
+    buildWeekStrip();
+    buildToday();
+    buildStack();
+    closeWizard();
+    switchTab('stack',document.querySelector('.tab'));
+  } else {
+    if(btn){btn.disabled=false;btn.textContent='Save Failed — Retry';}
+  }
+}
+function wizNext(){_wiz.step=Math.min(4,_wiz.step+1);wizRender();}
+
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserProtocol();}
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(function(dose){if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(function(t){if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){showDayInline(dd,ee);};})(d,el);const dotHtml=[...new Set(dots)].slice(0,3).map(function(col){return '<div class="week-dot" style="background:'+col+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
 function buildToday(){const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(!d.dow.includes(TODAY_DOW))return;if(d.startDate&&NOW<d.startDate)return;if(d.endDate&&NOW>d.endDate)return;doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron '+t.dose,detail:t.label+' — '+(t.route==='IM'?'IM deltoid':'27G×12mm SC, 18G filter'),time:null,dot:'#c084fc'});});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(function(dose){var isChk=checked.includes(dose.id);if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=isChk?'':dose.dot;nameEl.textContent=dose.name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}item.onclick=function(){toggle(dose.id);};list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
 function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);if(window._peptideLog){var _pe=window._peptideLog.find(function(e){return e.date===dk;});if(_pe)_pe.doses=chk.slice();else window._peptideLog.push({date:dk,doses:chk.slice()});}syncDayToAgent(dk,chk);if(_viewDate){const activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}
