@@ -247,7 +247,7 @@
   </div>
 </div>
 <script>
-const VERSION='1.76';
+const VERSION='1.77';
 const AGENT_URL="https://claude-agent-api-aged-sun-3616.fly.dev";
 const HEIGHT_CM=182;
 const NOW=new Date();
@@ -313,13 +313,9 @@ function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk
 async function syncDayToAgent(date,doses){try{await fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});}catch(e){}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN}});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
   window._peptideLog.forEach(function(entry){
-    if(!entry.doses||!entry.doses.length)return;
-    var lk='proto-chk-'+entry.date;
-    if(!localStorage.getItem(lk))localStorage.setItem(lk,JSON.stringify(entry.doses));
+    if(!entry.doses)return;
+    localStorage.setItem('proto-chk-'+entry.date,JSON.stringify(entry.doses));
   });
-  var todayKey='proto-chk-'+dateKey(NOW);
-  var todayEntry=window._peptideLog.find(function(e){return e.date===dateKey(NOW);});
-  if(todayEntry&&todayEntry.doses)localStorage.setItem(todayKey,JSON.stringify(todayEntry.doses));
   _syncPending=false;buildToday();if(_viewDate){var _at=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,_at);}buildHistory();}catch(e){_syncPending=false;buildToday();}}
 function getPastDoses(d){if(!window._peptideLog)return null;const dk=dateKey(d);const entry=window._peptideLog.find(e=>e.date===dk);return entry?entry.doses:null;}
 function buildHistory(){const tab=document.getElementById('tab-history');if(!tab)return;const log=window._peptideLog||[];if(!log.length){tab.innerHTML='<div class="content"><div class="empty"><div class="empty-icon">💊</div>No history yet</div></div>';return;}const days=[...log].reverse();tab.innerHTML='<div class="content">'+days.map(entry=>{const d=new Date(entry.date.replace(/-/g,'/'));const label=d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});const count=entry.doses.length;return'<div class="card" style="margin-bottom:10px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">'+label.toUpperCase()+'</div></div><span class="card-badge badge-done">'+count+' doses</span></div><div class="checklist">'+entry.doses.map(id=>{const name=id.replace(/_\d{4}-\d+-\d+$/,'').replace('glow-1','GLOW Stack').replace('glow-2','GLOW 2nd dose').replace('reta-sun','Retatrutide').replace('reta-wed','Retatrutide').replace('cjc-am','CJC/IPA AM').replace('cjc-pm','CJC/IPA PM').replace(/^testo_\d+$/,'Testoviron');return'<div class="check-item checked-item"><div class="check-box checked"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:var(--accent3)">'+name+'</div></div></div>';}).join('')+'</div></div>';}).join('')+'</div>';}
