@@ -646,19 +646,149 @@ async function wizSave(){
 // ── Updated buildStackStore to show cycle length ────────────────────────────
 function createNewStack(){initWizard();showWizard(false);}
 
-function editStack(idx){
+function editStack(idx){showStackEditor(idx);}
+// ── Inline Stack Editor ──────────────────────────────────────────────────────
+var _editBuf=null;var _editIdx=-1;
+function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function showStackEditor(idx){
   if(idx<0||idx>=_userStacks.length)return;
-  var st=_userStacks[idx];
-  _wiz={
-    step:0,
-    goals:st.peptides?st.peptides.map(function(p){var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});return cat?cat.goals:[]}).flat().filter(function(v,i,a){return a.indexOf(v)===i;}):[], 
-    peptides:st.peptides?st.peptides.map(function(p){return JSON.parse(JSON.stringify(p))}):[],
-    trt:st.trt?JSON.parse(JSON.stringify(st.trt)):{enabled:false,compound:'',injections:[]},
-    editMode:true,
-    stackIndex:idx,
-    stackName:st.name||'Stack '+(idx+1)
-  };
-  showWizard(true);
+  _editIdx=idx;_editBuf=JSON.parse(JSON.stringify(_userStacks[idx]));
+  if(!_editBuf.cycle_length)_editBuf.cycle_length=12;
+  if(!_editBuf.peptides)_editBuf.peptides=[];
+  renderStackEditor();
+}
+function _collectEditInputs(){
+  if(!_editBuf)return;
+  var nameEl=document.getElementById('edit-stack-name');
+  if(nameEl)_editBuf.name=nameEl.value;
+  (_editBuf.peptides||[]).forEach(function(p,pi){
+    var el;
+    if((el=document.getElementById('ed-dam-'+pi)))p.dose_am=el.value;
+    if((el=document.getElementById('ed-dpm-'+pi)))p.dose_pm=el.value;
+    if((el=document.getElementById('ed-uam-'+pi)))p.unit_am=el.value;
+    if((el=document.getElementById('ed-upm-'+pi)))p.unit_pm=el.value;
+    if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
+  });
+}
+function renderStackEditor(){
+  var body=document.getElementById('stack-body');if(!body)return;
+  var st=_editBuf;var cycle=st.cycle_length||12;
+  var html='';
+  html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
+  html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
+  html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
+  html+='</div>';
+  html+='<div class="wiz-section">Cycle Length</div>';
+  html+='<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">';
+  [8,10,12,16].forEach(function(w){html+='<div class="time-chip'+(cycle===w?' sel':'')+'" onclick="_collectEditInputs();_editBuf.cycle_length='+w+';renderStackEditor();">'+w+' wk</div>';});
+  html+='</div>';
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+  html+='<div class="wiz-section" style="margin:0;">Peptides</div>';
+  html+='<button onclick="_collectEditInputs();editAddPeptide();" style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">+ Add</button>';
+  html+='</div>';
+  if(!st.peptides||!st.peptides.length){
+    html+='<div style="color:var(--muted2);font-size:13px;padding:16px 0;text-align:center;">No peptides — tap + Add to get started.</div>';
+  }else{st.peptides.forEach(function(p,pi){html+=_renderEditPep(p,pi);});}
+  if(st.trt&&st.trt.enabled&&st.trt.compound){
+    html+='<div class="cfg-block" style="margin-top:8px;display:flex;align-items:center;gap:10px;">';
+    html+='<div style="width:9px;height:9px;border-radius:50%;background:var(--accent4);flex-shrink:0;"></div>';
+    html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(st.trt.compound)+'</div>';
+    html+='<div style="font-size:12px;color:var(--muted2);">'+(st.trt.injections?st.trt.injections.length+' inj':'TRT')+'</div></div>';
+  }
+  html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
+  html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Cancel</button>';
+  html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Stack</button>';
+  html+='</div>';
+  body.innerHTML=html;
+}
+function _renderEditPep(p,pi){
+  var dot=p.dot||'#888';
+  var html='<div class="cfg-block" style="margin-bottom:8px;">';
+  html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">';
+  html+='<div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
+  html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(p.name)+'</div>';
+  html+='<button onclick="_collectEditInputs();editRemovePeptide('+pi+')" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;padding:0;line-height:1;">×</button>';
+  html+='</div>';
+  html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">';
+  ['AM','PM'].forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="editToggleTime('+pi+',\''+t+'\')">'+t+'</div>';});
+  html+='</div></div>';
+  if(p.times&&p.times.includes('AM')){
+    html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row">';
+    html+='<input id="ed-dam-'+pi+'" class="dose-in" type="text" value="'+_esc(String(p.dose_am||''))+'" oninput="_editBuf.peptides['+pi+'].dose_am=this.value" placeholder="0">';
+    html+='<select id="ed-uam-'+pi+'" class="unit-sel" onchange="_editBuf.peptides['+pi+'].unit_am=this.value">'+UNITS.map(function(u){return'<option'+(u===(p.unit_am||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+    html+='</div></div>';
+  }
+  if(p.times&&p.times.includes('PM')){
+    html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row">';
+    html+='<input id="ed-dpm-'+pi+'" class="dose-in" type="text" value="'+_esc(String(p.dose_pm||''))+'" oninput="_editBuf.peptides['+pi+'].dose_pm=this.value" placeholder="0">';
+    html+='<select id="ed-upm-'+pi+'" class="unit-sel" onchange="_editBuf.peptides['+pi+'].unit_pm=this.value">'+UNITS.map(function(u){return'<option'+(u===(p.unit_pm||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+    html+='</div></div>';
+  }
+  html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
+  DAYS_SHORT.forEach(function(d,di){html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="editToggleDay(this,'+pi+','+di+')">'+d+'</div>';});
+  html+='</div></div>';
+  html+='<div class="cfg-row"><div class="cfg-lbl">Note</div>';
+  html+='<input id="ed-note-'+pi+'" class="note-in" type="text" value="'+_esc(String(p.note||''))+'" oninput="_editBuf.peptides['+pi+'].note=this.value" placeholder="e.g. fasted, pre-sleep...">';
+  html+='</div></div>';
+  return html;
+}
+function editToggleTime(pi,t){
+  _collectEditInputs();
+  var p=_editBuf.peptides[pi];if(!p)return;
+  if(!p.times)p.times=[];
+  var i=p.times.indexOf(t);
+  if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);
+  renderStackEditor();
+}
+function editToggleDay(el,pi,di){
+  var p=_editBuf.peptides[pi];if(!p)return;
+  if(!p.days)p.days=[];
+  var i=p.days.indexOf(di);
+  if(i===-1){p.days.push(di);el.classList.add('sel');}
+  else if(p.days.length>1){p.days.splice(i,1);el.classList.remove('sel');}
+}
+function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
+function editAddPeptide(){
+  var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:300;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:75vh;overflow-y:auto;';
+  var groups={};PEPTIDE_CAT.forEach(function(cat){if(!groups[cat.group])groups[cat.group]=[];groups[cat.group].push(cat);});
+  var html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">';
+  html+='<div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent);">ADD PEPTIDE</div>';
+  html+='<button onclick="this.closest(\'[style*=fixed]\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;">×</button>';
+  html+='</div>';
+  Object.keys(groups).forEach(function(grp){
+    html+='<div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted2);margin:12px 0 6px;">'+grp+'</div>';
+    groups[grp].forEach(function(cat){
+      var already=currentIds.includes(cat.id);
+      var doseStr=cat.dflt.doseAm+(cat.dflt.unitAm?' '+cat.dflt.unitAm:'');
+      if(cat.dflt.times&&cat.dflt.times.includes('PM'))doseStr+=' / '+cat.dflt.dosePm+(cat.dflt.unitPm?' '+cat.dflt.unitPm:'');
+      html+='<div class="pep-card" onclick="'+(already?'':'editPickPeptide(\''+cat.id+'\')')+'" style="opacity:'+(already?0.4:1)+';cursor:'+(already?'default':'pointer')+';">';
+      html+='<div class="pep-dot-sm" style="background:'+cat.dot+';"></div>';
+      html+='<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">'+cat.name+'</div>';
+      html+='<div style="font-size:11px;color:var(--muted2);">'+doseStr+'</div></div>';
+      if(already)html+='<div style="font-size:11px;color:var(--muted2);">in stack</div>';
+      html+='</div>';
+    });
+  });
+  sheet.innerHTML=html;overlay.appendChild(sheet);document.body.appendChild(overlay);window._addPepOverlay=overlay;
+}
+function editPickPeptide(id){
+  var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});if(!cat)return;
+  var d=cat.dflt;
+  _editBuf.peptides.push({id:cat.id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),dose_am:d.doseAm,dose_pm:d.dosePm,unit_am:d.unitAm,unit_pm:d.unitPm,note:'',active:true});
+  if(window._addPepOverlay){try{document.body.removeChild(window._addPepOverlay);}catch(e){}window._addPepOverlay=null;}
+  renderStackEditor();
+}
+async function saveEditBuf(){
+  _collectEditInputs();
+  _userStacks[_editIdx]=_editBuf;
+  if(_editIdx===_activeStackIndex){updateWEEKLY();buildWeekStrip();buildToday();}
+  await saveStacksToBackend();
+  buildStackStore();
 }
 // ── Modified wizard save ─────────────────────────────────────────────────────
 // ── Modified wizard step 4 review ────────────────────────────────────────────
