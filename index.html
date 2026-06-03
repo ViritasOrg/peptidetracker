@@ -458,6 +458,15 @@ async function loadUserStacks(){
     _userStacks[0].name='My Stack';
     _activeStackIndex=0;
   }
+  _userStacks.forEach(function(stack){
+    if(!stack.peptides)return;
+    stack.peptides.forEach(function(p){
+      var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
+      if(!cat||!cat.dflt)return;
+      if(p.unit_am==='IU'&&cat.dflt.unitAm&&cat.dflt.unitAm!=='IU')p.unit_am=cat.dflt.unitAm;
+      if(p.unit_pm==='IU'&&cat.dflt.unitPm&&cat.dflt.unitPm!=='IU')p.unit_pm=cat.dflt.unitPm;
+    });
+  });
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
@@ -685,8 +694,10 @@ function _synthesizeProtocol(weekly){
     var e=seen[baseId];
     var t=w.time||'AM';
     if(!e.times.includes(t))e.times.push(t);
-    var dosePart=w.detail?w.detail.split('—')[0].trim():'';
-    if(t==='AM')e.dose_am=dosePart;else e.dose_pm=dosePart;
+    var rawPart=w.detail?w.detail.split('—')[0].trim():'';
+    var dm=rawPart.match(/^([\d.]+)\s*(mg|mcg|IU|ml)?$/);
+    if(dm){if(t==='AM'){e.dose_am=dm[1];e.unit_am=dm[2]||'mg';}else{e.dose_pm=dm[1];e.unit_pm=dm[2]||'mg';}}
+    else{if(t==='AM')e.dose_am=rawPart;else e.dose_pm=rawPart;}
     if(w.startDate&&!e.start_date)e.start_date=w.startDate.toISOString().split('T')[0];
     if(w.endDate&&!e.end_date)e.end_date=w.endDate.toISOString().split('T')[0];
   });
