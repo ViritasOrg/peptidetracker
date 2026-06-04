@@ -399,6 +399,14 @@ G.wizSave().then(async ()=>{
   await G.loadUserStacks();
   check('migration: glow numeric dose 0.2 → 0.09',  G._userStacks[0].peptides[0].dose_am==='0.09', `got "${G._userStacks[0].peptides[0].dose_am}"`);
   check('migration: glow numeric dose unit → ml',   G._userStacks[0].peptides[0].unit_am==='ml',   `got "${G._userStacks[0].peptides[0].unit_am}"`);
+  // dose_am = 0.09 but unit_am = 'mg' (right number, wrong unit — the actual bug in prod)
+  const glowWrongUnitStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.09',unit_am:'mg'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowWrongUnitStack))],active_index:0})});
+  await G.loadUserStacks();
+  check('migration: glow 0.09mg unit fixed → ml', G._userStacks[0].peptides[0].unit_am==='ml',  `got "${G._userStacks[0].peptides[0].unit_am}"`);
+  check('migration: glow 0.09mg dose preserved',  G._userStacks[0].peptides[0].dose_am==='0.09',`got "${G._userStacks[0].peptides[0].dose_am}"`);
 
   // ── getChecked: old-style → canonical id mapping ──────────────────────────────
   console.log('\n── getChecked: id alias mapping ────────────────────────────');
