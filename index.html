@@ -522,12 +522,6 @@ async function loadUserStacks(){
   _userStacks.forEach(function(stack){
     if(!stack.peptides)return;
     stack.peptides.forEach(function(p){
-      // Remap synthesized-stack IDs (e.g. 'reta-sun') to canonical PEPTIDE_CAT IDs
-      if(!PEPTIDE_CAT.find(function(c){return c.id===p.id;})&&p.name){
-        var pn=p.name.toLowerCase().replace(/\s*\(.*$/,'').trim();
-        var catM=PEPTIDE_CAT.find(function(c){var cn=c.name.toLowerCase().replace(/\s*\(.*$/,'').trim();return pn===cn||cn.startsWith(pn)||pn.startsWith(cn);});
-        if(catM)p.id=catM.id;
-      }
       var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
       if(!cat&&p.name){var pn=p.name.toLowerCase().replace(/\s*\(.*$/,'').trim();cat=PEPTIDE_CAT.find(function(c){var cn=c.name.toLowerCase().replace(/\s*\(.*$/,'').trim();return pn===cn||cn.startsWith(pn)||pn.startsWith(cn);});}
       if(!cat||!cat.dflt)return;
