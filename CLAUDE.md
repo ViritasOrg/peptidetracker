@@ -4,6 +4,7 @@
 1. Make changes on a feature branch
 2. **Always create a PR, then merge it** — never push directly to main, never skip the PR step
 3. After merge the `version-bump` GitHub Action auto-increments the minor version in `version.json` and `const VERSION` in `index.html` and commits with `[skip ci]`
+4. **Always tell the user the version number to test** — after creating or merging a PR, explicitly state "test as **vX.XXX**" (current prod version + 1 per PR merged)
 
 ## Deployment
 - GitHub Pages at `https://henrikschaub.github.io/peptidetracker/`
