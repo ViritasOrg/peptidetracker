@@ -229,6 +229,94 @@ G.wizSave().then(()=>{
   process.exit(failed===0?0:1);
 });
 
+// ── Blend vial PEPTIDE_CAT defaults ──────────────────────────────────────────
+console.log('\n── Blend vial PEPTIDE_CAT defaults ────────────────────────');
+const glowCat  = G.PEPTIDE_CAT.find(p=>p.id==='glow');
+const klowCat  = G.PEPTIDE_CAT.find(p=>p.id==='klow');
+const bpcTbCat = G.PEPTIDE_CAT.find(p=>p.id==='bpc-tb');
+check('glow default unit is ml',    glowCat?.dflt?.unitAm==='ml',  `got "${glowCat?.dflt?.unitAm}"`);
+check('glow default dose is 0.2',   parseFloat(glowCat?.dflt?.doseAm)===0.2, `got "${glowCat?.dflt?.doseAm}"`);
+check('klow default unit is ml',    klowCat?.dflt?.unitAm==='ml',  `got "${klowCat?.dflt?.unitAm}"`);
+check('klow default dose is 0.2',   parseFloat(klowCat?.dflt?.doseAm)===0.2, `got "${klowCat?.dflt?.doseAm}"`);
+check('bpc-tb default unit is mg',  bpcTbCat?.dflt?.unitAm==='mg', `got "${bpcTbCat?.dflt?.unitAm}"`);
+check('bpc-tb default dose is 1',   parseFloat(bpcTbCat?.dflt?.doseAm)===1.0, `got "${bpcTbCat?.dflt?.doseAm}"`);
+
+// ── reconCalc ml unit ─────────────────────────────────────────────────────────
+console.log('\n── reconCalc: ml dose unit ─────────────────────────────────');
+// 0.2ml dose → ml=0.2, iu=20 (identity: ml input passes straight through)
+const rcMl1=G.reconCalc('0.2','ml',70,2,'mg');
+check('reconCalc ml: 0.2ml → ml=0.2',    rcMl1&&rcMl1.ml===0.2,  `got ${rcMl1?.ml}`);
+check('reconCalc ml: 0.2ml → iu=20',     rcMl1&&rcMl1.iu===20,   `got ${rcMl1?.iu}`);
+// 0.5ml dose on klow-type (80mg/2ml=40mg/ml) → 50 IU
+const rcMl2=G.reconCalc('0.5','ml',80,2,'mg');
+check('reconCalc ml: 0.5ml → ml=0.5',    rcMl2&&rcMl2.ml===0.5,  `got ${rcMl2?.ml}`);
+check('reconCalc ml: 0.5ml → iu=50',     rcMl2&&rcMl2.iu===50,   `got ${rcMl2?.iu}`);
+
+// ── reconDoseRow: ml unit and volume warnings ─────────────────────────────────
+console.log('\n── reconDoseRow: ml unit & warnings ───────────────────────');
+const rowMl  = G.reconDoseRow('AM','0.2','ml',70,2,'mg');
+check('reconDoseRow ml: shows 20 IU',           rowMl.includes('20 IU'),         `snippet: ${rowMl.slice(0,150)}`);
+check('reconDoseRow ml: no redundant arrow',    !rowMl.includes('→'),            'found arrow → in ml-input row');
+check('reconDoseRow ml: no tiny-vol warning',   !rowMl.includes('Very small'),   'spurious tiny warning');
+// 1.5mg at 35mg/ml = 0.0429ml < 0.05 → tiny volume warning
+const rowTiny = G.reconDoseRow('AM','1.5','mg',70,2,'mg');
+check('reconDoseRow: tiny vol < 0.05ml warns',  rowTiny.includes('Very small volume'), `snippet: ${rowTiny.slice(0,200)}`);
+// Large volume (3ml at 2.5mg/ml)
+const rowLarge= G.reconDoseRow('AM','3','ml',5,2,'mg');
+check('reconDoseRow: large vol > 1ml warns',    rowLarge.includes('Large injection volume'), `snippet: ${rowLarge.slice(0,200)}`);
+
+// ── buildReconCard HTML rendering ─────────────────────────────────────────────
+console.log('\n── buildReconCard HTML rendering ───────────────────────────');
+G._reconStackIdx=0; G._reconState={};
+
+// Glow: 0.2ml at 70mg/2ml=35mg/ml → 0.2ml → 20 IU
+const glowP  ={id:'glow',       name:'Glow Stack',        dose_am:'0.2',unit_am:'ml',dose_pm:'',unit_pm:'ml'};
+const glowH  =G.buildReconCard(glowP,0);
+check('buildReconCard glow: shows 20 IU',       glowH.includes('20 IU'),         `snippet: ${glowH.slice(0,200)}`);
+check('buildReconCard glow: no redundant →',    !glowH.includes('>→<'),          'found >→< in glow card');
+
+// Klow: 0.2ml at 80mg/2ml=40mg/ml → 20 IU
+G._reconState={};
+const klowP  ={id:'klow',       name:'Klow Stack',        dose_am:'0.2',unit_am:'ml',dose_pm:'',unit_pm:'ml'};
+const klowH  =G.buildReconCard(klowP,1);
+check('buildReconCard klow: shows 20 IU',       klowH.includes('20 IU'),         `snippet: ${klowH.slice(0,200)}`);
+
+// BPC-TB: 1mg at 10mg/2ml=5mg/ml → 0.2ml → 20 IU
+G._reconState={};
+const bpcTbP ={id:'bpc-tb',     name:'BPC+TB Blend',      dose_am:'1', unit_am:'mg',dose_pm:'',unit_pm:'mg'};
+const bpcTbH =G.buildReconCard(bpcTbP,2);
+check('buildReconCard bpc-tb: shows 20 IU',     bpcTbH.includes('20 IU'),        `snippet: ${bpcTbH.slice(0,200)}`);
+
+// Retatrutide: 3mg at 10mg/1ml=10mg/ml → 0.3ml → 30 IU
+G._reconState={};
+const retaP  ={id:'retatrutide',name:'Retatrutide',        dose_am:'3', unit_am:'mg',dose_pm:'',unit_pm:'mg'};
+const retaH  =G.buildReconCard(retaP,3);
+check('buildReconCard retatrutide: shows 30 IU', retaH.includes('30 IU'),        `snippet: ${retaH.slice(0,200)}`);
+
+// Tirzepatide: 5mg at 10mg/1ml=10mg/ml → 0.5ml → 50 IU
+G._reconState={};
+const tirzP  ={id:'tirzepatide',name:'Tirzepatide',        dose_am:'5', unit_am:'mg',dose_pm:'',unit_pm:'mg'};
+const tirzH  =G.buildReconCard(tirzP,4);
+check('buildReconCard tirzepatide: shows 50 IU', tirzH.includes('50 IU'),        `snippet: ${tirzH.slice(0,200)}`);
+
+// Semaglutide: 0.5mg at 5mg/2ml=2.5mg/ml → 0.2ml → 20 IU
+G._reconState={};
+const semaP  ={id:'semaglutide',name:'Semaglutide',        dose_am:'0.5',unit_am:'mg',dose_pm:'',unit_pm:'mg'};
+const semaH  =G.buildReconCard(semaP,5);
+check('buildReconCard semaglutide: shows 20 IU', semaH.includes('20 IU'),        `snippet: ${semaH.slice(0,200)}`);
+
+// Ipamorelin: 200mcg at 5mg/2ml=2.5mg/ml → 0.08ml → 8 IU
+G._reconState={};
+const ipaP   ={id:'ipamorelin', name:'Ipamorelin',         dose_am:'200',unit_am:'mcg',dose_pm:'',unit_pm:'mcg'};
+const ipaH   =G.buildReconCard(ipaP,6);
+check('buildReconCard ipamorelin: shows 8 IU',   ipaH.includes('8 IU'),          `snippet: ${ipaH.slice(0,200)}`);
+
+// HGH: 1 IU at 10IU/1ml → 0.1ml → 10 IU
+G._reconState={};
+const hghP   ={id:'hgh',        name:'HGH',                dose_am:'1',  unit_am:'IU',dose_pm:'',unit_pm:'IU'};
+const hghH   =G.buildReconCard(hghP,7);
+check('buildReconCard hgh: shows 10 IU',         hghH.includes('10 IU'),         `snippet: ${hghH.slice(0,200)}`);
+
 // ── Meta ──────────────────────────────────────────────────────────────────────
 console.log('\n── Meta ───────────────────────────────────────────────────');
 check('VERSION defined',                    typeof G.VERSION==='string');
