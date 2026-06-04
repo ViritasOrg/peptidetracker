@@ -5,8 +5,9 @@
 const fs = require('fs');
 const vm = require('vm');
 
-const html = fs.readFileSync('/tmp/pt_live.html', 'utf8');
-const rawScript = html.slice(html.indexOf('<script>') + 8, html.indexOf('</script>'));
+const htmlPath = process.argv[2] || '/tmp/pt_live.html';
+const html = fs.readFileSync(htmlPath, 'utf8');
+const rawScript = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
 
 const patchedScript = rawScript
   .replace('const PEPTIDE_CAT=',      'var PEPTIDE_CAT=')
@@ -269,3 +270,58 @@ check('reconCalc null on zero dose',        G.reconCalc('0','mg',5,2,'mg')===nul
 // Recon functions defined
 ['renderRecon','selectReconStack','setReconState','buildReconCard','buildReconGuide','reconDoseRow']
   .forEach(fn=>check(fn+' defined', typeof G[fn]==='function'));
+
+// ── RECON_DB defaults & clinical doses ────────────────────────────────────────
+console.log('\n── RECON_DB defaults & clinical doses ─────────────────────');
+const RDB=G.RECON_DB||{};
+check('all entries have defaultVi',         Object.values(RDB).every(e=>e.defaultVi!=null),
+  Object.entries(RDB).filter(([,e])=>e.defaultVi==null).map(([k])=>k).join(', '));
+check('all entries have defaultWi',         Object.values(RDB).every(e=>e.defaultWi!=null),
+  Object.entries(RDB).filter(([,e])=>e.defaultWi==null).map(([k])=>k).join(', '));
+check('all defaultVi valid index',          Object.values(RDB).every(e=>e.defaultVi<e.vials.length),
+  Object.entries(RDB).filter(([,e])=>e.defaultVi>=e.vials.length).map(([k])=>k).join(', '));
+check('all defaultWi valid index',          Object.values(RDB).every(e=>e.defaultWi<e.water.length),
+  Object.entries(RDB).filter(([,e])=>e.defaultWi>=e.water.length).map(([k])=>k).join(', '));
+
+function defVial(id){const e=RDB[id];return e.vials[e.defaultVi];}
+function defWater(id){const e=RDB[id];return e.water[e.defaultWi];}
+
+// retatrutide: defaultVi=1→10mg, defaultWi=1→1ml → 10mg/ml → 3mg = 0.3ml = 30 IU
+const rcReta=G.reconCalc('3','mg',defVial('retatrutide'),defWater('retatrutide'),'mg');
+check('retatrutide default: 3mg → 0.3ml',  rcReta&&rcReta.ml===0.3,   `got ${rcReta?.ml}`);
+check('retatrutide default: 3mg → 30 IU',  rcReta&&rcReta.iu===30,    `got ${rcReta?.iu}`);
+
+// tirzepatide: defaultVi=1→10mg, defaultWi=1→1ml → 10mg/ml → 5mg = 0.5ml = 50 IU
+const rcTirz=G.reconCalc('5','mg',defVial('tirzepatide'),defWater('tirzepatide'),'mg');
+check('tirzepatide default: 5mg → 0.5ml',  rcTirz&&rcTirz.ml===0.5,   `got ${rcTirz?.ml}`);
+check('tirzepatide default: 5mg → 50 IU',  rcTirz&&rcTirz.iu===50,    `got ${rcTirz?.iu}`);
+
+// semaglutide: defaultVi=1→5mg, defaultWi=1→2ml → 2.5mg/ml → 0.5mg = 0.2ml = 20 IU
+const rcSema=G.reconCalc('0.5','mg',defVial('semaglutide'),defWater('semaglutide'),'mg');
+check('semaglutide default: 0.5mg → 0.2ml',rcSema&&rcSema.ml===0.2,   `got ${rcSema?.ml}`);
+check('semaglutide default: 0.5mg → 20 IU',rcSema&&rcSema.iu===20,    `got ${rcSema?.iu}`);
+
+// hgh (IU vial): defaultVi=1→10IU, defaultWi=0→1ml → 10IU/ml → 1IU = 0.1ml = 10 IU
+const rcHgh=G.reconCalc('1','IU',defVial('hgh'),defWater('hgh'),'IU');
+check('hgh default: 1 IU → 0.1ml',         rcHgh&&rcHgh.ml===0.1,    `got ${rcHgh?.ml}`);
+check('hgh default: 1 IU → 10 IU',         rcHgh&&rcHgh.iu===10,     `got ${rcHgh?.iu}`);
+
+// hcg (IU vial): defaultVi=0→5000IU, defaultWi=0→1ml → 5000IU/ml → 500IU = 0.1ml = 10 IU
+const rcHcg=G.reconCalc('500','IU',defVial('hcg'),defWater('hcg'),'IU');
+check('hcg default: 500 IU → 0.1ml',       rcHcg&&rcHcg.ml===0.1,    `got ${rcHcg?.ml}`);
+check('hcg default: 500 IU → 10 IU',       rcHcg&&rcHcg.iu===10,     `got ${rcHcg?.iu}`);
+
+// ipamorelin: defaultVi=1→5mg, defaultWi=1→2ml → 2.5mg/ml → 200mcg = 0.08ml = 8 IU
+const rcIpa=G.reconCalc('200','mcg',defVial('ipamorelin'),defWater('ipamorelin'),'mg');
+check('ipamorelin default: 200mcg → 0.08ml',rcIpa&&rcIpa.ml===0.08,  `got ${rcIpa?.ml}`);
+check('ipamorelin default: 200mcg → 8 IU', rcIpa&&rcIpa.iu===8,      `got ${rcIpa?.iu}`);
+
+// bpc157: defaultVi=0→5mg, defaultWi=1→2ml → 2.5mg/ml → 250mcg = 0.1ml = 10 IU
+const rcBpc=G.reconCalc('250','mcg',defVial('bpc157'),defWater('bpc157'),'mg');
+check('bpc157 default: 250mcg → 0.1ml',    rcBpc&&rcBpc.ml===0.1,    `got ${rcBpc?.ml}`);
+check('bpc157 default: 250mcg → 10 IU',    rcBpc&&rcBpc.iu===10,     `got ${rcBpc?.iu}`);
+
+// cjc-ipa: defaultVi=0→5mg, defaultWi=1→2ml → 2.5mg/ml → 100mcg = 0.04ml = 4 IU
+const rcCjc=G.reconCalc('100','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg');
+check('cjc-ipa default: 100mcg → 0.04ml',  rcCjc&&rcCjc.ml===0.04,   `got ${rcCjc?.ml}`);
+check('cjc-ipa default: 100mcg → 4 IU',    rcCjc&&rcCjc.iu===4,      `got ${rcCjc?.iu}`);
