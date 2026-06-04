@@ -18,5 +18,19 @@
 - `const VERSION='x.xx'` in index.html must match `version.json`
 - Version bump workflow updates both on merge to main
 
+## Feature parity with Workout App — be proactive
+The two apps (peptidetracker + workout) should stay in sync on UX/settings features.
+Whenever working on either app, check if a feature exists in the other and **proactively suggest or implement parity** without waiting to be asked.
+
+### Known gaps — Peptide Tracker is MISSING these Workout features
+- **Update checker in Settings** — Workout has an explicit "Check for updates" button in Settings. Peptide only shows a passive banner when a new version is detected on load.
+
+### Known gaps — Workout is MISSING these Peptide Tracker features
+- **Configurable tabs** — Peptide has per-tab ON/OFF toggles in Settings (stored in `proto-tab-vis` localStorage key). Workout does not.
+- *(document here as discovered)*
+
+### Rule
+If you add a settings feature, UX polish, or structural improvement to one app, immediately note "the other app doesn't have this yet — want me to add it?" at the end of your reply.
+
 ## Pushing large files
 Same approach as workout repo — use the MCP HTTP endpoint with session ingress token if `push_files` struggles with size. See workout/CLAUDE.md for the pattern.
