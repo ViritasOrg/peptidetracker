@@ -326,8 +326,7 @@ const WEEKLY_DEFAULT=[
   {id:'reta-wed',name:'Retatrutide',detail:'3 mg — SC',dow:[3],time:'AM',dot:'#e8ff3c'},
   {id:'cjc-am',name:'CJC-1295 / IPA',detail:'4 IU — fasted AM',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3cffa0'},
   {id:'cjc-pm',name:'CJC-1295 / IPA',detail:'5 IU — pre-sleep PM',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3cffa0'},
-  {id:'glow-1',name:'GLOW Stack',detail:'0.2 ml — GHK-Cu 5mg / TB-500 1mg / BPC-157 1mg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
-  {id:'glow-2',name:'GLOW Stack (2nd dose)',detail:'0.2 ml — double dose period, ends 3 Jun',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#3b9eff',startDate:new Date(2026,4,20),endDate:new Date(2026,5,4)},
+  {id:'glow-1',name:'GLOW Stack',detail:'0.09 ml (9 IU) — TB-500 300mcg / BPC-157 300mcg / GHK-Cu 1.5mg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
 ];
 let WEEKLY=WEEKLY_DEFAULT.slice();
 const TESTO=[
@@ -394,7 +393,7 @@ const PEPTIDE_CAT=[
   {id:'sermorelin',name:'Sermorelin',sku:'SMO5',price:'$73/box',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh'],desc:'GHRH analog, shorter half-life than CJC. Best at bedtime.',dflt:{times:['PM'],days:[0,1,2,3,4,5,6],doseAm:'',dosePm:'200',unitAm:'mcg',unitPm:'mcg'}},
   {id:'tesamorelin',name:'Tesamorelin',sku:'TSM2',price:'$60/box',group:'GH Axis',goals:['fat'],dot:'#e8ff3c',cg:['ghrh'],desc:'GHRH specifically for visceral fat. Do NOT combine with CJC/Sermorelin.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'2',dosePm:'',unitAm:'mg',unitPm:'mg'}},
   {id:'hgh',name:'HGH',sku:'H24',price:'$118/box',group:'GH Axis',goals:['muscle','fat'],dot:'#3cffa0',cg:['hgh'],desc:'Exogenous HGH. 5-on/2-off. Replaces GH peptides when started.',dflt:{times:['AM'],days:[1,2,3,4,5],doseAm:'1',dosePm:'',unitAm:'IU',unitPm:'IU'}},
-  {id:'glow',name:'Glow Stack (GHK-Cu+BPC+TB)',sku:'BBG70',price:'$229/box',group:'Skin & Healing',goals:['skin','recovery'],dot:'#3b9eff',cg:[],desc:'70% GHK-Cu + 15% BPC-157 + 15% TB-500. Best value for skin+repair.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'0.2',dosePm:'',unitAm:'ml',unitPm:'ml'}},
+  {id:'glow',name:'Glow Stack (GHK-Cu+BPC+TB)',sku:'BBG70',price:'$229/box',group:'Skin & Healing',goals:['skin','recovery'],dot:'#3b9eff',cg:[],desc:'70% GHK-Cu + 15% BPC-157 + 15% TB-500. Best value for skin+repair.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'0.09',dosePm:'',unitAm:'ml',unitPm:'ml'}},
   {id:'klow',name:'Klow Stack (Glow+KPV)',sku:'Klow80',price:'$245/box',group:'Skin & Healing',goals:['skin','recovery'],dot:'#3b9eff',cg:[],desc:'Glow + KPV for enhanced anti-inflammation (gut, joints).',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'0.2',dosePm:'',unitAm:'ml',unitPm:'ml'}},
   {id:'bpc-tb',name:'BPC-157 + TB-500 Blend',sku:'BB10',price:'$122/box',group:'Skin & Healing',goals:['recovery'],dot:'#3b9eff',cg:[],desc:'Wolverine stack. Systemic (TB-500) + localised (BPC-157) repair.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'1',dosePm:'',unitAm:'mg',unitPm:'mg'}},
   {id:'bpc157',name:'BPC-157',sku:'BC5',price:'$50/box',group:'Skin & Healing',goals:['recovery'],dot:'#3b9eff',cg:[],desc:'Localised repair. Gut lining, tendons, joints.',dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'250',dosePm:'',unitAm:'mcg',unitPm:'mcg'}},
@@ -433,8 +432,8 @@ const RECON_DB={
   // hgh: 10IU/1ml=10IU/ml → 1IU=0.1ml=10 IU ✓
   'hgh':        {vials:[10,12,15,24],water:[1,2],unit:'IU',defaultVi:0,defaultWi:0,notes:'1 mg ≈ 3 IU. Rotate injection sites daily. Do not freeze.'},
   // Skin & Healing ──────────────────────────────────────────────────────────
-  // glow: 70mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg)/2ml=35mg/ml → 7mg=0.2ml=20 IU ✓
-  'glow':       {vials:[70],water:[1,2],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg = 70 mg total. Mix 70 mg/2 ml → 35 mg/ml. Dose 7–14 mg (0.2–0.4 ml) per injection. Swirl gently, never shake.'},
+  // glow: 70mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg)/3ml=23.333mg/ml → 0.09ml=9 IU ✓
+  'glow':       {vials:[70],water:[2,3],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg = 70 mg total. Mix 70 mg/3 ml → 23.33 mg/ml. Dose 0.09 ml (9 IU) per injection. Swirl gently, never shake.'},
   // klow: 80mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg+KPV 10mg)/2ml=40mg/ml → 8mg=0.2ml=20 IU ✓
   'klow':       {vials:[80],water:[1,2],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg + KPV 10 mg = 80 mg total. Mix 80 mg/2 ml → 40 mg/ml. Dose 8–16 mg (0.2–0.4 ml) per injection. Swirl gently, never shake.'},
   // bpc-tb: combo 10mg (BPC5+TB5)/2ml=5mg/ml → 1mg blend=500mcg each=0.2ml=20 IU ✓
@@ -480,8 +479,8 @@ function buildWeeklyFromProtocol(proto){
     var days=p.days||[0,1,2,3,4,5,6];
     var times=p.times||['AM'];
     var dot=p.dot||'#888';
-    var startDate=p.start_date?new Date(p.start_date):null;
-    var endDate=p.end_date?new Date(p.end_date):null;
+    var startDate=p.start_date?parseLocalDate(p.start_date):null;
+    var endDate=p.end_date?parseLocalDate(p.end_date):null;
     if(times.includes('AM')&&times.includes('PM')){
       var uAm=p.unit_am||'';var uPm=p.unit_pm||'';
       var dAm=(p.dose_am||p.dose||'')+(uAm?' '+uAm:'');
@@ -527,6 +526,12 @@ async function loadUserStacks(){
       if(!cat||!cat.dflt)return;
       if(p.unit_am==='IU'&&cat.dflt.unitAm&&cat.dflt.unitAm!=='IU')p.unit_am=cat.dflt.unitAm;
       if(p.unit_pm==='IU'&&cat.dflt.unitPm&&cat.dflt.unitPm!=='IU')p.unit_pm=cat.dflt.unitPm;
+      // Glow is a permanent daily protocol — clear any expired end_date that was incorrectly
+      // inherited from the temporary glow-2 double-dose entry when _synthesizeProtocol merged them
+      if((p.id==='glow'||p.id==='glow-1')&&p.end_date){
+        var today=new Date();today.setHours(0,0,0,0);
+        if(parseLocalDate(p.end_date)<=today){delete p.end_date;delete p.start_date;}
+      }
     });
   });
   updateWEEKLY();
@@ -898,8 +903,8 @@ function _synthesizeProtocol(weekly){
     var dm=rawPart.match(/^([\d.]+)\s*(mg|mcg|IU|ml)?$/);
     if(dm){if(t==='AM'){e.dose_am=dm[1];e.unit_am=dm[2]||'mg';}else{e.dose_pm=dm[1];e.unit_pm=dm[2]||'mg';}}
     else{if(t==='AM')e.dose_am=rawPart;else e.dose_pm=rawPart;}
-    if(w.startDate&&!e.start_date)e.start_date=w.startDate.toISOString().split('T')[0];
-    if(w.endDate&&!e.end_date)e.end_date=w.endDate.toISOString().split('T')[0];
+    if(!w.startDate&&!w.endDate){e._permanentDose=true;delete e.start_date;delete e.end_date;}
+    else if(!e._permanentDose){var _fmt=function(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};if(w.startDate&&!e.start_date)e.start_date=_fmt(w.startDate);if(w.endDate&&!e.end_date)e.end_date=_fmt(w.endDate);}
   });
   return{peptides:peptides,trt:{},_unsaved:true};
 }
