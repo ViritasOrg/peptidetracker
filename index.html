@@ -420,52 +420,52 @@ const STACK_RULES=[
 ];
 const RECON_DB={
   // GH Axis ─────────────────────────────────────────────────────────────────
-  // cjc-ipa: 5mg/2ml=2.5mg/ml → 4 IU pen=0.04ml=100mcg ✓
-  'cjc-ipa':    {vials:[5,10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Stable 4–6 weeks refrigerated. Inject within 20 min of reconstitution for best potency.'},
+  // cjc-ipa: combo 10mg (CJC noDac 5mg+IPA 5mg)/2ml=5mg/ml total; each component 2.5mg/ml → 400mcg blend=200mcg each=0.08ml=8 IU ✓
+  'cjc-ipa':    {vials:[10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Combo vial: 5 mg CJC-1295 (no DAC) + 5 mg Ipamorelin. Mix 10 mg/2 ml → 2.5 mg/ml of each peptide. Enter total blend dose: 400 mcg = 200 mcg of each = 0.08 ml = 8 IU.'},
   // cjc-nodac: 5mg/2ml=2.5mg/ml → 100mcg=0.04ml=4 IU ✓
-  'cjc-nodac':  {vials:[2,5],water:[1,2],defaultVi:1,defaultWi:1,notes:'Short-acting GHRH. Inject immediately before desired GH pulse window.'},
+  'cjc-nodac':  {vials:[2,5,10],water:[1,2],defaultVi:1,defaultWi:1,notes:'Short-acting GHRH. Inject immediately before desired GH pulse window.'},
   // ipamorelin: 5mg/2ml=2.5mg/ml → 200mcg=0.08ml=8 IU ✓
-  'ipamorelin': {vials:[2,5],water:[1,2],defaultVi:1,defaultWi:1,notes:'Minimal side effects. Pair with CJC-1295 (no DAC) for synergistic GH pulses.'},
-  // sermorelin: 3mg/1ml=3mg/ml → 200mcg=0.067ml≈7 IU ✓
-  'sermorelin': {vials:[3,6,9],water:[1,2],defaultVi:0,defaultWi:0,notes:'Best injected 30 min before sleep for a natural GH pulse overnight.'},
-  // tesamorelin: 2mg/0.5ml=4mg/ml → 2mg=0.5ml=50 IU ✓
-  'tesamorelin':{vials:[1,2],water:[0.5,1],defaultVi:1,defaultWi:0,notes:'Use within 3 weeks of reconstitution. Keep refrigerated at all times.'},
+  'ipamorelin': {vials:[5,10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Minimal side effects. Pair with CJC-1295 (no DAC) for synergistic GH pulses.'},
+  // sermorelin: 5mg/1ml=5mg/ml → 200mcg=0.04ml=4 IU ✓
+  'sermorelin': {vials:[5,10],water:[1,2],defaultVi:0,defaultWi:0,notes:'Best injected 30 min before sleep for a natural GH pulse overnight.'},
+  // tesamorelin: 5mg/1ml=5mg/ml → 2mg=0.4ml=40 IU ✓
+  'tesamorelin':{vials:[2,5,10,20],water:[0.5,1,2],defaultVi:1,defaultWi:1,notes:'Use within 3 weeks of reconstitution. Keep refrigerated at all times.'},
   // hgh: 10IU/1ml=10IU/ml → 1IU=0.1ml=10 IU ✓
-  'hgh':        {vials:[4,10,12],water:[1,2],unit:'IU',defaultVi:1,defaultWi:0,notes:'1 mg ≈ 3 IU. Rotate injection sites daily. Do not freeze.'},
+  'hgh':        {vials:[10,12,15,24],water:[1,2],unit:'IU',defaultVi:0,defaultWi:0,notes:'1 mg ≈ 3 IU. Rotate injection sites daily. Do not freeze.'},
   // Skin & Healing ──────────────────────────────────────────────────────────
-  // glow: 10mg/1ml=10mg/ml → 2mg=0.2ml=20 IU ✓
-  'glow':       {vials:[5,10],water:[1,2],defaultVi:1,defaultWi:0,notes:'Multi-peptide blend — swirl gently, never shake. Cloudy solution = discard.'},
-  // klow: 10mg/1ml=10mg/ml → 2mg=0.2ml=20 IU ✓
-  'klow':       {vials:[5,10],water:[1,2],defaultVi:1,defaultWi:0,notes:'Multi-peptide blend — swirl gently, never shake. Keep at 4°C after reconstitution.'},
-  // bpc-tb: 5mg/2ml=2.5mg/ml → 500mcg=0.2ml=20 IU ✓
-  'bpc-tb':     {vials:[5,10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Inject near injury site for localised (BPC-157) plus systemic (TB-500) repair.'},
+  // glow: 70mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg)/2ml=35mg/ml → 7mg=0.2ml=20 IU ✓
+  'glow':       {vials:[70],water:[1,2],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg = 70 mg total. Mix 70 mg/2 ml → 35 mg/ml. Dose 7–14 mg (0.2–0.4 ml) per injection. Swirl gently, never shake.'},
+  // klow: 80mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg+KPV 10mg)/2ml=40mg/ml → 8mg=0.2ml=20 IU ✓
+  'klow':       {vials:[80],water:[1,2],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg + KPV 10 mg = 80 mg total. Mix 80 mg/2 ml → 40 mg/ml. Dose 8–16 mg (0.2–0.4 ml) per injection. Swirl gently, never shake.'},
+  // bpc-tb: combo 10mg (BPC5+TB5)/2ml=5mg/ml → 1mg blend=500mcg each=0.2ml=20 IU ✓
+  'bpc-tb':     {vials:[10,20],water:[1,2],defaultVi:0,defaultWi:1,notes:'Combo vial: BPC-157 50% + TB-500 50%. 1 mg blend dose = 500 mcg of each = 0.2 ml. Inject near injury site for localised + systemic repair.'},
   // bpc157: 5mg/2ml=2.5mg/ml → 250mcg=0.1ml=10 IU ✓
-  'bpc157':     {vials:[5],water:[1,2],defaultVi:0,defaultWi:1,notes:'Stable up to 6 weeks in BAC water at 4°C. Effective even at low doses.'},
+  'bpc157':     {vials:[5,10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Stable up to 6 weeks in BAC water at 4°C. Effective even at low doses.'},
   // tb500: 5mg/1ml=5mg/ml → 2mg=0.4ml=40 IU ✓
-  'tb500':      {vials:[2,5],water:[1,2],defaultVi:1,defaultWi:0,notes:'Systemic peptide — inject anywhere subcutaneously. Full-body repair.'},
+  'tb500':      {vials:[2,5,10],water:[1,2],defaultVi:1,defaultWi:0,notes:'Systemic peptide — inject anywhere subcutaneously. Full-body repair.'},
   // ghkcu: 50mg/5ml=10mg/ml → 1.4mg=0.14ml=14 IU ✓
-  'ghkcu':      {vials:[50,200],water:[5,10],defaultVi:0,defaultWi:0,notes:'High-dose vials. Available injectable or topical. Potent collagen stimulator.'},
+  'ghkcu':      {vials:[50,100],water:[5,10],defaultVi:0,defaultWi:0,notes:'Available injectable or topical. Potent collagen stimulator. 71% of Glow stack.'},
   // Fat Loss ────────────────────────────────────────────────────────────────
   // retatrutide: 10mg/1ml=10mg/ml → 3mg=0.3ml=30 IU ✓
-  'retatrutide':{vials:[5,10],water:[0.5,1],defaultVi:1,defaultWi:1,notes:'Weekly injection. Titrate up every 4 weeks starting at 1–2 mg.'},
+  'retatrutide':{vials:[5,10,20,30],water:[0.5,1,2],defaultVi:1,defaultWi:1,notes:'Weekly injection. Titrate up every 4 weeks starting at 1–2 mg.'},
   // tirzepatide: 10mg/1ml=10mg/ml → 5mg=0.5ml=50 IU ✓
-  'tirzepatide':{vials:[5,10],water:[0.5,1],defaultVi:1,defaultWi:1,notes:'Weekly injection. Start at 2.5 mg, increase by 2.5 mg every 4 weeks.'},
+  'tirzepatide':{vials:[5,10,15,20,30],water:[0.5,1,2],defaultVi:1,defaultWi:1,notes:'Weekly injection. Start at 2.5 mg, increase by 2.5 mg every 4 weeks.'},
   // semaglutide: 5mg/2ml=2.5mg/ml → 0.5mg=0.2ml=20 IU ✓
-  'semaglutide':{vials:[3,5],water:[1,2],defaultVi:1,defaultWi:1,notes:'Weekly injection. Start at 0.25 mg for the first 4 weeks.'},
+  'semaglutide':{vials:[2,5,10],water:[1,2],defaultVi:1,defaultWi:1,notes:'Weekly injection. Start at 0.25 mg for the first 4 weeks.'},
   // aod9604: 5mg/2ml=2.5mg/ml → 300mcg=0.12ml≈12 IU ✓
-  'aod9604':    {vials:[2,5],water:[1,2],defaultVi:1,defaultWi:1,notes:'Fasted AM injection for optimal fat metabolism effect.'},
+  'aod9604':    {vials:[2,5,10],water:[1,2],defaultVi:1,defaultWi:1,notes:'Fasted AM injection for optimal fat metabolism effect.'},
   // Cognitive ───────────────────────────────────────────────────────────────
   // semax: 5mg/2ml=2.5mg/ml → 200mcg=0.08ml=8 IU ✓
-  'semax':      {vials:[5,10],water:[1,2],nasal:true,defaultVi:0,defaultWi:1,notes:'Can be used intranasally — 1 nasal drop ≈ 50 mcg. Refrigerate immediately.'},
+  'semax':      {vials:[5,10,50],water:[1,2],nasal:true,defaultVi:0,defaultWi:1,notes:'Can be used intranasally — 1 nasal drop ≈ 50 mcg. Refrigerate immediately.'},
   // selank: 5mg/2ml=2.5mg/ml → 250mcg=0.1ml=10 IU ✓
   'selank':     {vials:[5,10],water:[1,2],nasal:true,defaultVi:0,defaultWi:1,notes:'Can be used intranasally — 1 nasal drop ≈ 50 mcg. Strong anxiolytic effect.'},
   // Anti-aging ──────────────────────────────────────────────────────────────
-  // epitalon: 10mg/1ml=10mg/ml → 5mg=0.5ml=50 IU ✓
-  'epitalon':   {vials:[10,20],water:[1,2],defaultVi:0,defaultWi:0,notes:'Short pulse protocol: 10 mg/day × 10–20 days, twice yearly.'},
-  // motsc: 10mg/1ml=10mg/ml → 10mg=1ml=100 IU ✓
-  'motsc':      {vials:[5,10],water:[1,2],defaultVi:1,defaultWi:0,notes:'Inject 3×/week. Best timed on training days for metabolic benefit.'},
-  // nad: 500mg/5ml=100mg/ml → 100mg=1ml=100 IU ✓
-  'nad':        {vials:[500,1000],water:[5,10],defaultVi:0,defaultWi:0,notes:'Push IV slowly — rapid infusion causes flushing and nausea. Dilute generously.'},
+  // epitalon: 10mg/1ml=10mg/ml → 5mg=0.5ml=50 IU ✓ (vial = 2 doses)
+  'epitalon':   {vials:[10,50],water:[1,2],defaultVi:0,defaultWi:0,notes:'Short pulse protocol: 10 mg/day × 10–20 days, twice yearly.'},
+  // motsc: 10mg/1ml=10mg/ml → 10mg=1ml=100 IU ✓ (1 vial = 1 dose)
+  'motsc':      {vials:[10,20,30,40],water:[1,2],defaultVi:0,defaultWi:0,notes:'Inject 3×/week. Best timed on training days for metabolic benefit.'},
+  // nad: 100mg/5ml=20mg/ml → 100mg=5ml (slow IV push) ✓
+  'nad':        {vials:[100,500,1000],water:[5,10],defaultVi:0,defaultWi:0,notes:'Push IV slowly — rapid infusion causes flushing and nausea. Dilute generously.'},
   // TRT Support ─────────────────────────────────────────────────────────────
   // hcg: 5000IU/1ml=5000IU/ml → 500IU=0.1ml=10 IU ✓
   'hcg':        {vials:[5000,10000],water:[1],unit:'IU',defaultVi:0,defaultWi:0,notes:'1 ml BAC water per 5000 IU vial. Use within 30 days of reconstitution.'},
