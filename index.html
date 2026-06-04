@@ -420,8 +420,8 @@ const STACK_RULES=[
 ];
 const RECON_DB={
   // GH Axis ─────────────────────────────────────────────────────────────────
-  // cjc-ipa: combo 10mg (CJC noDac 5mg+IPA 5mg)/2ml=5mg/ml total; each component 2.5mg/ml → 400mcg blend=200mcg each=0.08ml=8 IU ✓
-  'cjc-ipa':    {vials:[10],water:[1,2],defaultVi:0,defaultWi:1,notes:'Combo vial: 5 mg CJC-1295 (no DAC) + 5 mg Ipamorelin. Mix 10 mg/2 ml → 2.5 mg/ml of each peptide. Enter total blend dose: 400 mcg = 200 mcg of each = 0.08 ml = 8 IU.'},
+  // cjc-ipa: 2×10mg combo vials (2×CJC5mg+IPA5mg) + 3ml BAC water → 20mg/3ml=6.667mg/ml; 4 IU AM=0.04ml=267mcg blend ✓
+  'cjc-ipa':    {vials:[20],water:[3],defaultVi:0,defaultWi:0,notes:'2 combo vials: 10 mg CJC-1295 (no DAC) + 10 mg Ipamorelin. Dissolve each 10 mg vial in 1.5 ml BAC water, combine into 3 ml cartridge → 6.67 mg/ml total. Dose by insulin pen IU: 4 IU AM = 0.04 ml, 5 IU PM = 0.05 ml.'},
   // cjc-nodac: 5mg/2ml=2.5mg/ml → 100mcg=0.04ml=4 IU ✓
   'cjc-nodac':  {vials:[2,5,10],water:[1,2],defaultVi:1,defaultWi:1,notes:'Short-acting GHRH. Inject immediately before desired GH pulse window.'},
   // ipamorelin: 5mg/2ml=2.5mg/ml → 200mcg=0.08ml=8 IU ✓
@@ -522,12 +522,6 @@ async function loadUserStacks(){
   _userStacks.forEach(function(stack){
     if(!stack.peptides)return;
     stack.peptides.forEach(function(p){
-      // Remap synthesized-stack IDs (e.g. 'reta-sun') to canonical PEPTIDE_CAT IDs
-      if(!PEPTIDE_CAT.find(function(c){return c.id===p.id;})&&p.name){
-        var pn=p.name.toLowerCase().replace(/\s*\(.*$/,'').trim();
-        var catM=PEPTIDE_CAT.find(function(c){var cn=c.name.toLowerCase().replace(/\s*\(.*$/,'').trim();return pn===cn||cn.startsWith(pn)||pn.startsWith(cn);});
-        if(catM)p.id=catM.id;
-      }
       var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
       if(!cat&&p.name){var pn=p.name.toLowerCase().replace(/\s*\(.*$/,'').trim();cat=PEPTIDE_CAT.find(function(c){var cn=c.name.toLowerCase().replace(/\s*\(.*$/,'').trim();return pn===cn||cn.startsWith(pn)||pn.startsWith(cn);});}
       if(!cat||!cat.dflt)return;
