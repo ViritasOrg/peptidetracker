@@ -391,6 +391,14 @@ G.wizSave().then(async ()=>{
   G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowCustomDoseStack))],active_index:0})});
   await G.loadUserStacks();
   check('migration: custom glow dose 0.12 not overridden', G._userStacks[0].peptides[0].dose_am==='0.12', `got "${G._userStacks[0].peptides[0].dose_am}"`);
+  // migration must fire when backend stores dose_am as a number (not a string)
+  const glowNumericStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:0.2,unit_am:'mg'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowNumericStack))],active_index:0})});
+  await G.loadUserStacks();
+  check('migration: glow numeric dose 0.2 → 0.09',  G._userStacks[0].peptides[0].dose_am==='0.09', `got "${G._userStacks[0].peptides[0].dose_am}"`);
+  check('migration: glow numeric dose unit → ml',   G._userStacks[0].peptides[0].unit_am==='ml',   `got "${G._userStacks[0].peptides[0].unit_am}"`);
 
   // ── getChecked: old-style → canonical id mapping ──────────────────────────────
   console.log('\n── getChecked: id alias mapping ────────────────────────────');
@@ -482,6 +490,40 @@ check('reconDoseRow: tiny vol < 0.05ml warns',  rowTiny.includes('Very small vol
 // Large volume (3ml at 2.5mg/ml)
 const rowLarge= G.reconDoseRow('AM','3','ml',5,2,'mg');
 check('reconDoseRow: large vol > 1ml warns',    rowLarge.includes('Large injection volume'), `snippet: ${rowLarge.slice(0,200)}`);
+
+// ── reconDoseRow: 1mg threshold display logic ────────────────────────────────
+console.log('\n── reconDoseRow: 1mg threshold display ────────────────────');
+// IU input <1mg → IU only (no ml, no mcg) — CJC 4 IU at 6.667mg/ml = 0.267mg
+const rowIuSmall = G.reconDoseRow('AM','4','IU',20,3,'mg');
+check('reconDoseRow IU<1mg: shows 4 IU',       rowIuSmall.includes('4 IU'),    `snippet: ${rowIuSmall.slice(0,150)}`);
+check('reconDoseRow IU<1mg: no syringe label', !rowIuSmall.includes('syringe'),`snippet: ${rowIuSmall.slice(0,150)}`);
+check('reconDoseRow IU<1mg: no mcg',           !rowIuSmall.includes('mcg'),    `snippet: ${rowIuSmall.slice(0,150)}`);
+// IU input >=1mg → IU + mg (no ml) — 9 IU at 23.333mg/ml = 2.1mg
+const rowIuLarge = G.reconDoseRow('AM','9','IU',70,3,'mg');
+check('reconDoseRow IU>=1mg: shows 9 IU',      rowIuLarge.includes('9 IU'),    `snippet: ${rowIuLarge.slice(0,150)}`);
+check('reconDoseRow IU>=1mg: shows 2.1 mg',    rowIuLarge.includes('2.1 mg'), `snippet: ${rowIuLarge.slice(0,150)}`);
+check('reconDoseRow IU>=1mg: no ml',           !rowIuLarge.includes(' ml'),    `snippet: ${rowIuLarge.slice(0,150)}`);
+// ml input <1mg → IU only — 0.04ml at 6.667mg/ml = 0.267mg
+const rowMlSmall = G.reconDoseRow('AM','0.04','ml',20,3,'mg');
+check('reconDoseRow ml<1mg: shows 4 IU',       rowMlSmall.includes('4 IU'),   `snippet: ${rowMlSmall.slice(0,150)}`);
+check('reconDoseRow ml<1mg: no syringe label',  !rowMlSmall.includes('syringe'),`snippet: ${rowMlSmall.slice(0,150)}`);
+// ml input >=1mg → IU · ml = Xmg — GLOW 0.09ml at 23.333mg/ml = 2.1mg
+const rowMlLarge = G.reconDoseRow('AM','0.09','ml',70,3,'mg');
+check('reconDoseRow ml>=1mg: shows 9 IU',      rowMlLarge.includes('9 IU'),   `snippet: ${rowMlLarge.slice(0,150)}`);
+check('reconDoseRow ml>=1mg: shows 0.09 ml',   rowMlLarge.includes('0.09 ml'),`snippet: ${rowMlLarge.slice(0,150)}`);
+check('reconDoseRow ml>=1mg: shows 2.1 mg',    rowMlLarge.includes('2.1 mg'), `snippet: ${rowMlLarge.slice(0,150)}`);
+// mg input <1mg → IU only — Sema 0.5mg at 2.5mg/ml = 20 IU
+const rowMgSmall = G.reconDoseRow('AM','0.5','mg',5,2,'mg');
+check('reconDoseRow mg<1mg: shows 20 IU',      rowMgSmall.includes('20 IU'),  `snippet: ${rowMgSmall.slice(0,150)}`);
+check('reconDoseRow mg<1mg: no 0.5 mg text',   !rowMgSmall.includes('0.5 mg'),`snippet: ${rowMgSmall.slice(0,150)}`);
+// mg input >=1mg → original format — Reta 3mg at 10mg/ml = 30 IU
+const rowMgLarge = G.reconDoseRow('AM','3','mg',10,1,'mg');
+check('reconDoseRow mg>=1mg: shows 3 mg',      rowMgLarge.includes('3 mg'),   `snippet: ${rowMgLarge.slice(0,150)}`);
+check('reconDoseRow mg>=1mg: shows 30 IU',     rowMgLarge.includes('30 IU'),  `snippet: ${rowMgLarge.slice(0,150)}`);
+// mcg input <1mg → IU only — 200mcg at 2.5mg/ml = 8 IU
+const rowMcgSmall = G.reconDoseRow('AM','200','mcg',5,2,'mg');
+check('reconDoseRow mcg<1mg: shows 8 IU',      rowMcgSmall.includes('8 IU'),  `snippet: ${rowMcgSmall.slice(0,150)}`);
+check('reconDoseRow mcg<1mg: no mcg text',     !rowMcgSmall.includes('mcg'), `snippet: ${rowMcgSmall.slice(0,150)}`);
 
 // ── buildReconCard HTML rendering ─────────────────────────────────────────────
 console.log('\n── buildReconCard HTML rendering ───────────────────────────');
