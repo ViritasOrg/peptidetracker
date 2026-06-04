@@ -234,6 +234,85 @@ check('WEEKLY contains glow-1',       G.WEEKLY.some(w=>w.id==='glow-1'));
 G._userStacks=[];G.updateWEEKLY();
 check('empty stacks → WEEKLY_DEFAULT',G.WEEKLY.length===G.WEEKLY_DEFAULT.length);
 
+// ── Stack → daily schedule ────────────────────────────────────────────────────
+console.log('\n── Stack → daily schedule ─────────────────────────────────');
+// Helper: simulate buildToday's filtering for a given date + WEEKLY list
+function dosesForDate(d, weekly){
+  var dow=d.getDay();
+  return weekly.filter(function(w){
+    if(!w.dow.includes(dow))return false;
+    if(w.startDate&&d<w.startDate)return false;
+    if(w.endDate&&d>w.endDate)return false;
+    return true;
+  }).map(function(w){return{id:w.id+'_'+G.dateKey(d),name:w.name,time:w.time,dot:w.dot};});
+}
+// Date helpers — fixed dates for deterministic tests
+var SUN=new Date(2026,5,7);  // Sunday   (dow 0)
+var MON=new Date(2026,5,8);  // Monday   (dow 1)
+var WED=new Date(2026,5,10); // Wednesday (dow 3)
+var SAT=new Date(2026,5,13); // Saturday  (dow 6)
+
+// 1. Reta (Sunday + Wednesday only)
+const retaStack={name:'Reta Only',peptides:[
+  {id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg',active:true},
+]};
+G._userStacks=[retaStack];G._activeStackIndex=0;G.updateWEEKLY();
+check('reta: WEEKLY entry present',           G.WEEKLY.some(w=>w.id==='retatrutide'));
+check('reta: shows on Sunday (dow 0)',        dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+check('reta: shows on Wednesday (dow 3)',     dosesForDate(WED,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+check('reta: absent on Monday (dow 1)',       !dosesForDate(MON,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+check('reta: absent on Saturday (dow 6)',     !dosesForDate(SAT,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+check('reta: time is AM',                     G.WEEKLY.find(w=>w.id==='retatrutide')?.time==='AM');
+check('reta: dose id format YYYY-M-D',        dosesForDate(SUN,G.WEEKLY)[0]?.id==='retatrutide_2026-6-7');
+
+// 2. CJC-IPA (daily AM + PM → 2 WEEKLY entries)
+const cjcStack={name:'CJC Stack',peptides:[
+  {id:'cjc-ipa',name:'CJC-1295 / IPA',dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM','PM'],dose_am:'4',dose_pm:'5',unit_am:'IU',unit_pm:'IU',active:true},
+]};
+G._userStacks=[cjcStack];G._activeStackIndex=0;G.updateWEEKLY();
+check('cjc: 2 WEEKLY entries (AM+PM)',        G.WEEKLY.filter(w=>w.name.includes('CJC')).length===2);
+check('cjc-am: appears every day',           [SUN,MON,WED,SAT].every(d=>dosesForDate(d,G.WEEKLY).some(x=>x.id.startsWith('cjc-ipa-am'))));
+check('cjc-pm: appears every day',           [SUN,MON,WED,SAT].every(d=>dosesForDate(d,G.WEEKLY).some(x=>x.id.startsWith('cjc-ipa-pm'))));
+check('cjc: AM entry time=AM',               G.WEEKLY.find(w=>w.id==='cjc-ipa-am')?.time==='AM');
+check('cjc: PM entry time=PM',               G.WEEKLY.find(w=>w.id==='cjc-ipa-pm')?.time==='PM');
+
+// 3. Inactive peptide excluded
+const mixedStack={name:'Mixed',peptides:[
+  {id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg',active:true},
+  {id:'ipamorelin', name:'Ipamorelin', dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'200',unit_am:'mcg',active:false},
+]};
+G._userStacks=[mixedStack];G._activeStackIndex=0;G.updateWEEKLY();
+check('inactive peptide excluded from WEEKLY',!G.WEEKLY.some(w=>w.name==='Ipamorelin'));
+check('active peptide still in WEEKLY',       G.WEEKLY.some(w=>w.name==='Retatrutide'));
+
+// 4. startDate filtering — peptide not started yet
+var FUTURE=new Date(2026,11,1); // far future
+const futureStack={name:'Future',peptides:[
+  {id:'semaglutide',name:'Semaglutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.5',unit_am:'mg',start_date:'2026-12-01',active:true},
+]};
+G._userStacks=[futureStack];G._activeStackIndex=0;G.updateWEEKLY();
+check('future startDate: absent today (June)',!dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Semaglutide'));
+check('future startDate: shows on start day', dosesForDate(FUTURE,G.WEEKLY).some(d=>d.name==='Semaglutide'));
+
+// 5. endDate filtering — expired peptide
+const expiredStack={name:'Expired',peptides:[
+  {id:'aod9604',name:'AOD9604',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'300',unit_am:'mcg',end_date:'2026-05-31',active:true},
+]};
+G._userStacks=[expiredStack];G._activeStackIndex=0;G.updateWEEKLY();
+check('expired endDate: absent on June 7',   !dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='AOD9604'));
+check('expired endDate: present on May 30',  dosesForDate(new Date(2026,4,30),G.WEEKLY).some(d=>d.name==='AOD9604'));
+
+// 6. Multi-stack: active stack drives WEEKLY
+const stackA={name:'Stack A',peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
+const stackB={name:'Stack B',peptides:[{id:'semaglutide', name:'Semaglutide',dot:'#f59e0b',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.5',unit_am:'mg',active:true}]};
+G._userStacks=[stackA,stackB];
+G._activeStackIndex=0;G.updateWEEKLY();
+check('active stack A: shows Reta on Sunday', dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+check('active stack A: no Sema',              !dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Semaglutide'));
+G._activeStackIndex=1;G.updateWEEKLY();
+check('active stack B: shows Sema on Sunday', dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Semaglutide'));
+check('active stack B: no Reta',              !dosesForDate(SUN,G.WEEKLY).some(d=>d.name==='Retatrutide'));
+
 // ── New stack saved includes cycle_length ─────────────────────────────────────
 console.log('\n── wizSave includes cycle_length ──────────────────────────');
 G.initWizard();
