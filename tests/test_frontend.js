@@ -225,10 +225,36 @@ G._userStacks=[];
 // Mock saveStacksToBackend to capture what gets saved
 let savedProto=null;
 G.saveStacksToBackend=async function(){savedProto=G._userStacks[0];return true;};
-G.wizSave().then(()=>{
+G.wizSave().then(async ()=>{
   check('saved stack has cycle_length', savedProto&&savedProto.cycle_length===8,  `got ${savedProto?.cycle_length}`);
   check('saved stack has name',         savedProto&&savedProto.name==='Bulk Phase');
   check('saved stack has peptides',     savedProto&&savedProto.peptides.length===1);
+
+  // ── Check state stability: loadUserStacks must not remap p.id ────────────────
+  console.log('\n── Check state stability (id remapping regression) ──────────');
+  // Simulate a stack saved before PR#10 with WEEKLY_DEFAULT-style ids
+  const oldStyleStack={
+    name:'My Stack',
+    peptides:[
+      {id:'reta-sun',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg'},
+      {id:'cjc-am',  name:'CJC-1295 / IPA',dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'4',unit_am:'IU'},
+      {id:'glow-1',  name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.2',unit_am:'IU'},
+    ]
+  };
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(oldStyleStack))],active_index:0})});
+  await G.loadUserStacks();
+  const lp=G._userStacks[0].peptides;
+  check('loadUserStacks: reta-sun id not remapped', lp[0].id==='reta-sun',  `got "${lp[0].id}" (would break check state)`);
+  check('loadUserStacks: cjc-am id not remapped',   lp[1].id==='cjc-am',   `got "${lp[1].id}" (would break check state)`);
+  check('loadUserStacks: glow-1 id not remapped',   lp[2].id==='glow-1',   `got "${lp[2].id}" (would break check state)`);
+  check('loadUserStacks: glow-1 unit_am IU→ml',     lp[2].unit_am==='ml',  `got "${lp[2].unit_am}" (unit migration broken)`);
+  const wklyChk=G.buildWeeklyFromProtocol(G._userStacks[0]);
+  const wklyIds=wklyChk.map(w=>w.id);
+  check('WEEKLY: reta-sun id preserved',            wklyIds.includes('reta-sun'),       `ids: ${wklyIds.join(', ')}`);
+  check('WEEKLY: cjc-am id preserved',              wklyIds.includes('cjc-am'),         `ids: ${wklyIds.join(', ')}`);
+  check('WEEKLY: glow-1 id preserved',              wklyIds.includes('glow-1'),         `ids: ${wklyIds.join(', ')}`);
+  check('WEEKLY: no retatrutide (check state safe)',!wklyIds.includes('retatrutide'),   `retatrutide appeared — stored check state would not match`);
+
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
