@@ -2,8 +2,9 @@
  * Frontend logic tests — peptide tracker
  * Run: node /tmp/test_frontend.js
  */
-const fs = require('fs');
-const vm = require('vm');
+const fs   = require('fs');
+const vm   = require('vm');
+const path = require('path');
 
 const htmlPath = process.argv[2] || '/tmp/pt_live.html';
 const html = fs.readFileSync(htmlPath, 'utf8');
@@ -321,7 +322,68 @@ const rcBpc=G.reconCalc('250','mcg',defVial('bpc157'),defWater('bpc157'),'mg');
 check('bpc157 default: 250mcg → 0.1ml',    rcBpc&&rcBpc.ml===0.1,    `got ${rcBpc?.ml}`);
 check('bpc157 default: 250mcg → 10 IU',    rcBpc&&rcBpc.iu===10,     `got ${rcBpc?.iu}`);
 
-// cjc-ipa: defaultVi=0→5mg, defaultWi=1→2ml → 2.5mg/ml → 100mcg = 0.04ml = 4 IU
-const rcCjc=G.reconCalc('100','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg');
-check('cjc-ipa default: 100mcg → 0.04ml',  rcCjc&&rcCjc.ml===0.04,   `got ${rcCjc?.ml}`);
-check('cjc-ipa default: 100mcg → 4 IU',    rcCjc&&rcCjc.iu===4,      `got ${rcCjc?.iu}`);
+// cjc-ipa: combo 10mg/2ml=5mg/ml total; each component 2.5mg/ml → 400mcg blend=200mcg each=0.08ml=8 IU
+const rcCjc=G.reconCalc('400','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg');
+check('cjc-ipa default: 400mcg blend → 0.08ml',rcCjc&&rcCjc.ml===0.08, `got ${rcCjc?.ml}`);
+check('cjc-ipa default: 400mcg blend → 8 IU',  rcCjc&&rcCjc.iu===8,    `got ${rcCjc?.iu}`);
+
+// ── Price list validation ─────────────────────────────────────────────────────
+console.log('\n── Price list: RECON_DB vials match pricelist.csv ─────────');
+const plPath = path.join(__dirname, 'pricelist.csv');
+// Map RECON_DB key → product name(s) in pricelist.csv (partial match on column 1)
+const PRICELIST_MAP = {
+  'cjc-ipa':    ['CJC1295(without DAC)5mg+IPA 5mg'],
+  'cjc-nodac':  ['CJC-1295 Without DAC'],
+  'ipamorelin': ['Ipamorelin'],
+  'sermorelin': ['Sermorelin'],
+  'tesamorelin':['Tesamorelin'],
+  'hgh':        ['HGH'],
+  'glow':       ['Glow(TB500 10mg + BPC-157 10mg + GHK-CU 50mg)'],
+  'klow':       ['Klow(TB500 10mg + BPC-157 10mg + GHK-CU 50mg + KPV 10mg)'],
+  'bpc-tb':     ['BPC 5mg + TB 5mg','BPC 10mg + TB 10mg'],
+  'bpc157':     ['BPC 157'],
+  'tb500':      ['TB500'],
+  'ghkcu':      ['GHK-CU'],
+  'retatrutide':['Retatrutide'],
+  'tirzepatide':['Tirzepatide'],
+  'semaglutide':['Semaglutide'],
+  'aod9604':    ['AOD9604'],
+  'semax':      ['Semax'],
+  'selank':     ['Selank'],
+  'epitalon':   ['Epitalon'],
+  'motsc':      ['MOTS-C'],
+  'nad':        ['NAD+'],
+  'hcg':        ['HCG'],
+};
+check('pricelist.csv exists',               fs.existsSync(plPath));
+if(fs.existsSync(plPath)){
+  // Parse CSV: track current product name across continuation rows
+  const plLines=fs.readFileSync(plPath,'utf8').split('\n');
+  const plSizes={}; // productName → Set of numeric sizes
+  let curProd='';
+  for(const line of plLines){
+    const cols=line.split(';');
+    const name=(cols[1]||'').trim();
+    const mg=(cols[2]||'').trim();
+    if(name)curProd=name;
+    if(curProd&&mg){
+      const m=mg.match(/^(\d+(?:\.\d+)?)(mg|iu|ml)/i);
+      if(m){
+        if(!plSizes[curProd])plSizes[curProd]=new Set();
+        plSizes[curProd].add(parseFloat(m[1]));
+      }
+    }
+  }
+  // For each RECON_DB key, verify every vial size appears in the price list
+  for(const [dbKey,plNames] of Object.entries(PRICELIST_MAP)){
+    const entry=RDB[dbKey];
+    if(!entry){check(`${dbKey}: in RECON_DB`,false,'missing');continue;}
+    // Merge available sizes from all matching product names
+    const available=new Set();
+    for(const pn of plNames)(plSizes[pn]||new Set()).forEach(s=>available.add(s));
+    check(`${dbKey}: pricelist found`,available.size>0,`no rows for "${plNames.join('","')}"`);
+    const bad=entry.vials.filter(v=>!available.has(v));
+    check(`${dbKey}: all vials in pricelist`,bad.length===0,
+      bad.length?`vials [${bad.join(',')}] not in pricelist (available: ${[...available].join(',')})`:'');
+  }
+}
