@@ -506,6 +506,7 @@ const rowIuSmall = G.reconDoseRow('AM','4','IU',20,3,'mg');
 check('reconDoseRow IU<1mg: shows 4 IU',       rowIuSmall.includes('4 IU'),    `snippet: ${rowIuSmall.slice(0,150)}`);
 check('reconDoseRow IU<1mg: no syringe label', !rowIuSmall.includes('syringe'),`snippet: ${rowIuSmall.slice(0,150)}`);
 check('reconDoseRow IU<1mg: no mcg',           !rowIuSmall.includes('mcg'),    `snippet: ${rowIuSmall.slice(0,150)}`);
+check('reconDoseRow IU<1mg: no small-vol warn',!rowIuSmall.includes('Very small'),`snippet: ${rowIuSmall.slice(0,200)}`);
 // IU input >=1mg → IU + mg (no ml) — 9 IU at 23.333mg/ml = 2.1mg
 const rowIuLarge = G.reconDoseRow('AM','9','IU',70,3,'mg');
 check('reconDoseRow IU>=1mg: shows 9 IU',      rowIuLarge.includes('9 IU'),    `snippet: ${rowIuLarge.slice(0,150)}`);
