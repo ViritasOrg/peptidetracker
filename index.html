@@ -382,7 +382,7 @@ function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sy
 function dateKey(d){return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
 function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});}
 function parseLocalDate(s){var p=s.split('-');return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2]));}
-function getChecked(){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);try{var v=JSON.parse(localStorage.getItem('proto-chk-'+dk)||'[]');return Array.isArray(v)?v:[];}catch{return[];}}
+function getChecked(){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);try{var v=JSON.parse(localStorage.getItem('proto-chk-'+dk)||'[]');if(!Array.isArray(v))return[];var _a={'cjc-am':'cjc-ipa-am','cjc-pm':'cjc-ipa-pm','glow-1':'glow','glow-2':'glow','reta-sun':'retatrutide','reta-wed':'retatrutide'};return v.map(function(id){var i=id.lastIndexOf('_');if(i>0){var pfx=id.slice(0,i);if(_a[pfx])return _a[pfx]+id.slice(i);}return id;});}catch{return[];}}
 function setChecked(arr){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);localStorage.setItem('proto-chk-'+dk,JSON.stringify(arr));}
 async function checkSyncStatus(){const dot=document.getElementById('sync-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl.signal});if(!r.ok){dot.className='agent-dot down';dot.title='Backend unreachable';return;}const remote=await r.json();const remoteDates=new Set(remote.map(e=>e.date));const localKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const unsynced=localKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;dot.className='agent-dot '+(unsynced===0?'up':'warn');dot.title=unsynced===0?'Doses synced ✓ • Body comp synced ✓':'Doses: ⚠ '+unsynced+' day(s) not on backend';}catch(e){dot.className='agent-dot down';dot.title='Sync check failed';}}
 // ── Peptide catalogue ────────────────────────────────────────────────────────
@@ -434,8 +434,8 @@ const RECON_DB={
   // Skin & Healing ──────────────────────────────────────────────────────────
   // glow: 70mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg)/3ml=23.333mg/ml → 0.09ml=9 IU ✓
   'glow':       {vials:[70],water:[2,3],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg = 70 mg total. Mix 70 mg/3 ml → 23.33 mg/ml. Dose 0.09 ml (9 IU) per injection. Swirl gently, never shake.'},
-  // klow: 80mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg+KPV 10mg)/2ml=40mg/ml → 8mg=0.2ml=20 IU ✓
-  'klow':       {vials:[80],water:[1,2],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg + KPV 10 mg = 80 mg total. Mix 80 mg/2 ml → 40 mg/ml. Dose 8–16 mg (0.2–0.4 ml) per injection. Swirl gently, never shake.'},
+  // klow: 80mg vial (TB500 10mg+BPC157 10mg+GHK-Cu 50mg+KPV 10mg)/3ml=26.667mg/ml; bigger vial ~5ml but pen cartridge caps at 3ml ✓
+  'klow':       {vials:[80],water:[2,3],defaultVi:0,defaultWi:1,notes:'One vial: TB-500 10 mg + BPC-157 10 mg + GHK-Cu 50 mg + KPV 10 mg = 80 mg total. Mix 80 mg/3 ml → 26.67 mg/ml. Swirl gently, never shake.'},
   // bpc-tb: combo 10mg (BPC5+TB5)/2ml=5mg/ml → 1mg blend=500mcg each=0.2ml=20 IU ✓
   'bpc-tb':     {vials:[10,20],water:[1,2],defaultVi:0,defaultWi:1,notes:'Combo vial: BPC-157 50% + TB-500 50%. 1 mg blend dose = 500 mcg of each = 0.2 ml. Inject near injury site for localised + systemic repair.'},
   // bpc157: 5mg/2ml=2.5mg/ml → 250mcg=0.1ml=10 IU ✓
@@ -532,11 +532,15 @@ async function loadUserStacks(){
         var today=new Date();today.setHours(0,0,0,0);
         if(parseLocalDate(p.end_date)<=today){delete p.end_date;delete p.start_date;}
       }
+      // Glow dose was incorrectly defaulted to 0.2 ml before PR #13 fixed it to 0.09 ml (9 IU)
+      if((p.id==='glow'||p.id==='glow-1')&&p.dose_am==='0.2'){p.dose_am='0.09';p.unit_am='ml';}
     });
   });
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
+  buildWeekStrip();
+  buildToday();
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){
@@ -1138,7 +1142,7 @@ function detectCycleStart(){
   buildTimeline();
 }
 function getPastDoses(d){if(!window._peptideLog)return null;const dk=dateKey(d);const entry=window._peptideLog.find(e=>e.date===dk);return entry?entry.doses:null;}
-function buildHistory(){const tab=document.getElementById('tab-history');if(!tab)return;const log=window._peptideLog||[];if(!log.length){tab.innerHTML='<div class="content"><div class="empty"><div class="empty-icon">💊</div>No history yet</div></div>';return;}const days=[...log].reverse();tab.innerHTML='<div class="content">'+days.map(entry=>{const d=new Date(entry.date.replace(/-/g,'/'));const label=d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});const count=entry.doses.length;return'<div class="card" style="margin-bottom:10px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">'+label.toUpperCase()+'</div></div><span class="card-badge badge-done">'+count+' doses</span></div><div class="checklist">'+entry.doses.map(id=>{const name=id.replace(/_\d{4}-\d+-\d+$/,'').replace('glow-1','GLOW Stack').replace('glow-2','GLOW 2nd dose').replace('reta-sun','Retatrutide').replace('reta-wed','Retatrutide').replace('cjc-am','CJC/IPA AM').replace('cjc-pm','CJC/IPA PM').replace(/^testo_\d+$/,'Testoviron');return'<div class="check-item checked-item"><div class="check-box checked"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:var(--accent3)">'+name+'</div></div></div>';}).join('')+'</div></div>';}).join('')+'</div>';}
+function buildHistory(){const tab=document.getElementById('tab-history');if(!tab)return;const log=window._peptideLog||[];if(!log.length){tab.innerHTML='<div class="content"><div class="empty"><div class="empty-icon">💊</div>No history yet</div></div>';return;}const days=[...log].reverse();tab.innerHTML='<div class="content">'+days.map(entry=>{const d=new Date(entry.date.replace(/-/g,'/'));const label=d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});const count=entry.doses.length;return'<div class="card" style="margin-bottom:10px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">'+label.toUpperCase()+'</div></div><span class="card-badge badge-done">'+count+' doses</span></div><div class="checklist">'+entry.doses.map(id=>{const name=id.replace(/_\d{4}-\d+-\d+$/,'').replace('glow-1','GLOW Stack').replace('glow-2','GLOW 2nd dose').replace('glow','GLOW Stack').replace('reta-sun','Retatrutide').replace('reta-wed','Retatrutide').replace('retatrutide','Retatrutide').replace('cjc-ipa-am','CJC/IPA AM').replace('cjc-ipa-pm','CJC/IPA PM').replace('cjc-am','CJC/IPA AM').replace('cjc-pm','CJC/IPA PM').replace(/^testo_\d+$/,'Testoviron');return'<div class="check-item checked-item"><div class="check-box checked"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:var(--accent3)">'+name+'</div></div></div>';}).join('')+'</div></div>';}).join('')+'</div>';}
 function resetToday(){setChecked([]);buildToday();}
 async function checkAppVersion(){try{const r=await fetch('https://henrikschaub.github.io/peptidetracker/version.json?t='+Date.now());if(!r.ok)return;const {version}=await r.json();const current=VERSION;if(version!==current){const b=document.createElement('div');b.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent4);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:400;font-size:13px;';b.innerHTML='<span style="color:var(--text)">New version <strong style="color:var(--accent4)">v'+version+'</strong> available</span><button onclick="window.location.reload(true)" style="background:var(--accent4);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:DM Sans,sans-serif">Update</button>';document.body.appendChild(b);}}catch(e){}}
 function showDayInline(date,tileEl){
