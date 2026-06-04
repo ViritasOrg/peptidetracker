@@ -372,6 +372,75 @@ G.wizSave().then(async ()=>{
   check('glow 3ml: 0.09ml → 9 IU',    rcGlow9&&rcGlow9.iu===9,      `got ${rcGlow9?.iu}`);
   check('glow default water is 3ml',   G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi]===3, `got ${G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi]}`);
 
+  // ── Glow dose_am migration (0.2 ml → 0.09 ml) ────────────────────────────────
+  console.log('\n── Glow dose_am migration (0.2→0.09) ──────────────────────');
+  const glowOldDoseStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.2',unit_am:'ml'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowOldDoseStack))],active_index:0})});
+  await G.loadUserStacks();
+  const glowMigP=G._userStacks[0].peptides[0];
+  check('migration: glow dose_am 0.2→0.09',    glowMigP.dose_am==='0.09', `got "${glowMigP.dose_am}"`);
+  check('migration: glow unit_am preserved ml', glowMigP.unit_am==='ml',   `got "${glowMigP.unit_am}"`);
+  const wklyMig=G.buildWeeklyFromProtocol(G._userStacks[0]);
+  check('migration: glow WEEKLY detail has 0.09', wklyMig[0]?.detail?.includes('0.09'), `got "${wklyMig[0]?.detail}"`);
+  // Custom dose (not 0.2) must NOT be overridden
+  const glowCustomDoseStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.12',unit_am:'ml'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowCustomDoseStack))],active_index:0})});
+  await G.loadUserStacks();
+  check('migration: custom glow dose 0.12 not overridden', G._userStacks[0].peptides[0].dose_am==='0.12', `got "${G._userStacks[0].peptides[0].dose_am}"`);
+
+  // ── getChecked: old-style → canonical id mapping ──────────────────────────────
+  console.log('\n── getChecked: id alias mapping ────────────────────────────');
+  // Use a fixed date via _viewDate so we control the key (G.NOW is a const, not on sandbox)
+  var chkDate=new Date(2026,5,4);  // June 4, 2026 (Thursday)
+  G._viewDate=chkDate;
+  const chkDk=G.dateKey(chkDate);
+  // CJC aliases: cjc-am/cjc-pm → cjc-ipa-am/cjc-ipa-pm
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['cjc-am_'+chkDk,'cjc-pm_'+chkDk]);
+  var chkCjc=G.getChecked();
+  check('getChecked: cjc-am → cjc-ipa-am',   chkCjc.includes('cjc-ipa-am_'+chkDk), `got ${JSON.stringify(chkCjc)}`);
+  check('getChecked: cjc-pm → cjc-ipa-pm',   chkCjc.includes('cjc-ipa-pm_'+chkDk), `got ${JSON.stringify(chkCjc)}`);
+  // GLOW aliases: glow-1/glow-2 → glow
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['glow-1_'+chkDk,'glow-2_'+chkDk]);
+  var chkGlow=G.getChecked();
+  check('getChecked: glow-1 → glow',          chkGlow.includes('glow_'+chkDk), `got ${JSON.stringify(chkGlow)}`);
+  check('getChecked: glow-2 → glow',          chkGlow.every(id=>id==='glow_'+chkDk), `got ${JSON.stringify(chkGlow)}`);
+  // Reta aliases: reta-sun/reta-wed → retatrutide
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['reta-sun_'+chkDk,'reta-wed_'+chkDk]);
+  var chkReta=G.getChecked();
+  check('getChecked: reta-sun → retatrutide', chkReta.includes('retatrutide_'+chkDk), `got ${JSON.stringify(chkReta)}`);
+  check('getChecked: reta-wed → retatrutide', chkReta.every(id=>id==='retatrutide_'+chkDk), `got ${JSON.stringify(chkReta)}`);
+  // Canonical ids pass through unchanged
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['cjc-ipa-am_'+chkDk,'glow_'+chkDk,'retatrutide_'+chkDk]);
+  var chkCanon=G.getChecked();
+  check('getChecked: canonical ids unchanged', JSON.stringify(chkCanon)===JSON.stringify(['cjc-ipa-am_'+chkDk,'glow_'+chkDk,'retatrutide_'+chkDk]), `got ${JSON.stringify(chkCanon)}`);
+  // Mixed old+canonical
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['cjc-am_'+chkDk,'glow_'+chkDk]);
+  var chkMix=G.getChecked();
+  check('getChecked: mixed old+canonical → all canonical', chkMix.includes('cjc-ipa-am_'+chkDk)&&chkMix.includes('glow_'+chkDk), `got ${JSON.stringify(chkMix)}`);
+  // testo ids are unaffected (multi-underscore prefix)
+  sandbox.localStorage._s['proto-chk-'+chkDk]=JSON.stringify(['testo_0_'+chkDk]);
+  var chkTesto=G.getChecked();
+  check('getChecked: testo id unchanged',      chkTesto[0]==='testo_0_'+chkDk, `got ${JSON.stringify(chkTesto)}`);
+  delete sandbox.localStorage._s['proto-chk-'+chkDk];
+  G._viewDate=null;
+
+  // ── loadUserStacks: WEEKLY updated (post-load re-render coverage) ─────────────
+  console.log('\n── loadUserStacks: WEEKLY updated after load ───────────────');
+  const canonicalLoadStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.09',unit_am:'ml',active:true},
+    {id:'cjc-ipa',name:'CJC-1295 / IPA',dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM','PM'],dose_am:'4',unit_am:'IU',dose_pm:'5',unit_pm:'IU',active:true},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(canonicalLoadStack))],active_index:0})});
+  await G.loadUserStacks();
+  check('post-load: WEEKLY has glow',        G.WEEKLY.some(w=>w.id==='glow'),        `ids: ${G.WEEKLY.map(w=>w.id).join(', ')}`);
+  check('post-load: WEEKLY has cjc-ipa-am',  G.WEEKLY.some(w=>w.id==='cjc-ipa-am'), `ids: ${G.WEEKLY.map(w=>w.id).join(', ')}`);
+  check('post-load: WEEKLY has cjc-ipa-pm',  G.WEEKLY.some(w=>w.id==='cjc-ipa-pm'), `ids: ${G.WEEKLY.map(w=>w.id).join(', ')}`);
+  check('post-load: glow has no endDate',    !G.WEEKLY.find(w=>w.id==='glow')?.endDate, 'glow endDate set after load');
+
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
