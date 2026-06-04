@@ -132,6 +132,25 @@ check('reta-wed on Wednesday (dow 3)',      G.WEEKLY_DEFAULT.some(w=>w.id==='ret
 check('cjc-am is AM, 7 days',              G.WEEKLY_DEFAULT.some(w=>w.id==='cjc-am'&&w.time==='AM'&&w.dow.length===7));
 check('cjc-pm is PM, 7 days',              G.WEEKLY_DEFAULT.some(w=>w.id==='cjc-pm'&&w.time==='PM'&&w.dow.length===7));
 check('glow-1 is 7 days AM',               G.WEEKLY_DEFAULT.some(w=>w.id==='glow-1'&&w.time==='AM'&&w.dow.length===7));
+check('glow-2 removed (period ended)',     !G.WEEKLY_DEFAULT.some(w=>w.id==='glow-2'), 'glow-2 still in WEEKLY_DEFAULT');
+
+// ── _synthesizeProtocol date propagation ──────────────────────────────────────
+console.log('\n── _synthesizeProtocol: date propagation ───────────────────');
+check('synth: glow has no end_date (permanent)',
+  (()=>{const g=G._synthesizeProtocol(G.WEEKLY_DEFAULT).peptides.find(p=>p.id==='glow');return g&&!g.end_date;})(),
+  'glow got end_date from a temporary entry — check _synthesizeProtocol');
+// Simulate a WEEKLY list where one entry is permanent and one is timed
+const mixedWeekly=[
+  {id:'x-am',name:'TestPep',detail:'1 mg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#fff'},
+  {id:'x-pm',name:'TestPep',detail:'2 mg',dow:[0,1,2,3,4,5,6],time:'PM',dot:'#fff',
+   startDate:new Date(2025,0,1),endDate:new Date(2025,5,30)},
+];
+const mixedSynth=G._synthesizeProtocol(mixedWeekly);
+const testPep=mixedSynth.peptides.find(p=>p.name==='TestPep');
+check('synth: permanent+timed entry → no end_date on merged peptide',
+  testPep&&!testPep.end_date, `end_date: ${testPep?.end_date}`);
+check('synth: permanent+timed entry → has AM+PM times',
+  testPep&&testPep.times.includes('AM')&&testPep.times.includes('PM'));
 
 // ── Stack Store state & functions ─────────────────────────────────────────────
 console.log('\n── Stack Store ────────────────────────────────────────────');
@@ -255,6 +274,25 @@ G.wizSave().then(async ()=>{
   check('WEEKLY: glow-1 id preserved',              wklyIds.includes('glow-1'),         `ids: ${wklyIds.join(', ')}`);
   check('WEEKLY: no retatrutide (check state safe)',!wklyIds.includes('retatrutide'),   `retatrutide appeared — stored check state would not match`);
 
+  // ── Glow end_date migration (glow disappeared regression) ────────────────────
+  console.log('\n── Glow end_date migration ─────────────────────────────────');
+  // Simulate a stack where _synthesizeProtocol wrongly set end_date on merged glow peptide
+  const glowExpiredStack={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM','PM'],dose_am:'0.09',unit_am:'ml',end_date:'2026-06-03'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowExpiredStack))],active_index:0})});
+  await G.loadUserStacks();
+  const glowP2=G._userStacks[0].peptides[0];
+  check('migration: expired end_date cleared from glow',   !glowP2.end_date,  `end_date still set: ${glowP2.end_date}`);
+  check('migration: start_date also cleared from glow',    !glowP2.start_date,`start_date still set: ${glowP2.start_date}`);
+  const wklyGlow=G.buildWeeklyFromProtocol(G._userStacks[0]);
+  check('migration: glow-am entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-am')?.endDate, 'glow-am still has endDate');
+  check('migration: glow-pm entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-pm')?.endDate, 'glow-pm still has endDate');
+  // Glow recon: 70mg/3ml = 23.333mg/ml, 9 IU = 0.09ml
+  const rcGlow9=G.reconCalc('0.09','ml',G.RECON_DB['glow'].vials[G.RECON_DB['glow'].defaultVi],G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi],'mg');
+  check('glow 3ml: 0.09ml → 9 IU',    rcGlow9&&rcGlow9.iu===9,      `got ${rcGlow9?.iu}`);
+  check('glow default water is 3ml',   G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi]===3, `got ${G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi]}`);
+
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -267,7 +305,7 @@ const glowCat  = G.PEPTIDE_CAT.find(p=>p.id==='glow');
 const klowCat  = G.PEPTIDE_CAT.find(p=>p.id==='klow');
 const bpcTbCat = G.PEPTIDE_CAT.find(p=>p.id==='bpc-tb');
 check('glow default unit is ml',    glowCat?.dflt?.unitAm==='ml',  `got "${glowCat?.dflt?.unitAm}"`);
-check('glow default dose is 0.2',   parseFloat(glowCat?.dflt?.doseAm)===0.2, `got "${glowCat?.dflt?.doseAm}"`);
+check('glow default dose is 0.09',  parseFloat(glowCat?.dflt?.doseAm)===0.09, `got "${glowCat?.dflt?.doseAm}"`);
 check('klow default unit is ml',    klowCat?.dflt?.unitAm==='ml',  `got "${klowCat?.dflt?.unitAm}"`);
 check('klow default dose is 0.2',   parseFloat(klowCat?.dflt?.doseAm)===0.2, `got "${klowCat?.dflt?.doseAm}"`);
 check('bpc-tb default unit is mg',  bpcTbCat?.dflt?.unitAm==='mg', `got "${bpcTbCat?.dflt?.unitAm}"`);
@@ -365,10 +403,10 @@ check('buildReconCard cjc-am: resolves to cjc-ipa db',cjcAmSynH.includes('6.667 
 check('buildReconCard cjc-am: shows 6 IU',            cjcAmSynH.includes('6 IU'),        `snippet: ${cjcAmSynH.slice(0,300)}`);
 
 G._reconState={};
-const glow1SynP={id:'glow-1',  name:'GLOW Stack',     dose_am:'0.2',unit_am:'ml', dose_pm:'',unit_pm:'ml'};
+const glow1SynP={id:'glow-1',  name:'GLOW Stack',     dose_am:'0.09',unit_am:'ml', dose_pm:'',unit_pm:'ml'};
 const glow1SynH=G.buildReconCard(glow1SynP,2);
-check('buildReconCard glow-1: resolves to 35mg/ml',   glow1SynH.includes('35 mg/ml'), `snippet: ${glow1SynH.slice(0,300)}`);
-check('buildReconCard glow-1: shows 20 IU',           glow1SynH.includes('20 IU'),    `snippet: ${glow1SynH.slice(0,300)}`);
+check('buildReconCard glow-1: resolves to 23.333mg/ml',glow1SynH.includes('23.333 mg/ml'),`snippet: ${glow1SynH.slice(0,300)}`);
+check('buildReconCard glow-1: shows 9 IU',             glow1SynH.includes('9 IU'),         `snippet: ${glow1SynH.slice(0,300)}`);
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
 console.log('\n── Meta ───────────────────────────────────────────────────');
