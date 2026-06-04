@@ -361,8 +361,8 @@ check('buildReconCard reta-sun: shows 30 IU',          retaSynH.includes('30 IU'
 G._reconState={};
 const cjcAmSynP={id:'cjc-am',  name:'CJC-1295 / IPA', dose_am:'400',unit_am:'mcg',dose_pm:'',unit_pm:'mcg'};
 const cjcAmSynH=G.buildReconCard(cjcAmSynP,1);
-check('buildReconCard cjc-am: resolves to cjc-ipa db',cjcAmSynH.includes('5 mg/ml'),  `snippet: ${cjcAmSynH.slice(0,300)}`);
-check('buildReconCard cjc-am: shows 8 IU',            cjcAmSynH.includes('8 IU'),     `snippet: ${cjcAmSynH.slice(0,300)}`);
+check('buildReconCard cjc-am: resolves to cjc-ipa db',cjcAmSynH.includes('6.667 mg/ml'), `snippet: ${cjcAmSynH.slice(0,300)}`);
+check('buildReconCard cjc-am: shows 6 IU',            cjcAmSynH.includes('6 IU'),        `snippet: ${cjcAmSynH.slice(0,300)}`);
 
 G._reconState={};
 const glow1SynP={id:'glow-1',  name:'GLOW Stack',     dose_am:'0.2',unit_am:'ml', dose_pm:'',unit_pm:'ml'};
@@ -463,10 +463,10 @@ const rcBpc=G.reconCalc('250','mcg',defVial('bpc157'),defWater('bpc157'),'mg');
 check('bpc157 default: 250mcg → 0.1ml',    rcBpc&&rcBpc.ml===0.1,    `got ${rcBpc?.ml}`);
 check('bpc157 default: 250mcg → 10 IU',    rcBpc&&rcBpc.iu===10,     `got ${rcBpc?.iu}`);
 
-// cjc-ipa: combo 10mg/2ml=5mg/ml total; each component 2.5mg/ml → 400mcg blend=200mcg each=0.08ml=8 IU
+// cjc-ipa: 2×10mg combo vials / 3ml = 6.667mg/ml → 400mcg blend = 0.06ml = 6 IU
 const rcCjc=G.reconCalc('400','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg');
-check('cjc-ipa default: 400mcg blend → 0.08ml',rcCjc&&rcCjc.ml===0.08, `got ${rcCjc?.ml}`);
-check('cjc-ipa default: 400mcg blend → 8 IU',  rcCjc&&rcCjc.iu===8,    `got ${rcCjc?.iu}`);
+check('cjc-ipa default: 400mcg blend → 0.06ml',rcCjc&&rcCjc.ml===0.06, `got ${rcCjc?.ml}`);
+check('cjc-ipa default: 400mcg blend → 6 IU',  rcCjc&&rcCjc.iu===6,    `got ${rcCjc?.iu}`);
 
 // ── Price list validation ─────────────────────────────────────────────────────
 console.log('\n── Price list: RECON_DB vials match pricelist.csv ─────────');
@@ -522,6 +522,8 @@ if(fs.existsSync(plPath)){
     // Merge available sizes from all matching product names
     const available=new Set();
     for(const pn of plNames)(plSizes[pn]||new Set()).forEach(s=>available.add(s));
+    // cjc-ipa RECON_DB uses 20mg = 2 × 10mg combo vials combined into one cartridge
+    if(dbKey==='cjc-ipa')for(const pn of plNames)(plSizes[pn]||new Set()).forEach(s=>available.add(s*2));
     check(`${dbKey}: pricelist found`,available.size>0,`no rows for "${plNames.join('","')}"`);
     const bad=entry.vials.filter(v=>!available.has(v));
     check(`${dbKey}: all vials in pricelist`,bad.length===0,
