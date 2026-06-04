@@ -25,7 +25,10 @@ const patchedScript = rawScript
   .replace('let _activeStackIndex=',  'var _activeStackIndex=')
   .replace('let _stacksLoaded=',      'var _stacksLoaded=')
   .replace('let _userWeight=',        'var _userWeight=')
-  .replace('var _wizOverlay=',        'var _wizOverlay=');
+  .replace('var _wizOverlay=',        'var _wizOverlay=')
+  .replace('const RECON_DB=',         'var RECON_DB=')
+  .replace('let _reconStackIdx=',     'var _reconStackIdx=')
+  .replace('let _reconState=',        'var _reconState=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -231,3 +234,38 @@ check('VERSION is x.xx (no suffix)',        /^\d+\.\d+$/.test(G.VERSION),       
 check('AGENT_URL is https',                 G.AGENT_URL?.startsWith('https://'));
 check('WEIGHTS_TOKEN defined',              G.WEIGHTS_TOKEN?.length>0);
 check('no duplicate functions',             (()=>{const fs=rawScript.match(/(?:async )?function (\w+)\s*\(/g)||[];const names=fs.map(s=>s.replace(/async |function |\s*\(/g,''));return names.every((n,i)=>names.indexOf(n)===i);})());
+
+// ── RECON_DB ──────────────────────────────────────────────────────────────────
+console.log('\n── RECON_DB & reconCalc ───────────────────────────────────');
+check('RECON_DB defined',                   typeof G.RECON_DB==='object'&&G.RECON_DB!==null);
+check('20+ entries in RECON_DB',            Object.keys(G.RECON_DB||{}).length>=20,  `got ${Object.keys(G.RECON_DB||{}).length}`);
+check('all PEPTIDE_CAT ids in RECON_DB',    G.PEPTIDE_CAT.every(p=>G.RECON_DB[p.id]),
+  G.PEPTIDE_CAT.filter(p=>!G.RECON_DB[p.id]).map(p=>p.id).join(', '));
+check('each entry has vials array',         Object.values(G.RECON_DB).every(e=>Array.isArray(e.vials)&&e.vials.length>0));
+check('each entry has water array',         Object.values(G.RECON_DB).every(e=>Array.isArray(e.water)&&e.water.length>0));
+check('hgh unit=IU',                        G.RECON_DB['hgh']?.unit==='IU');
+check('hcg unit=IU',                        G.RECON_DB['hcg']?.unit==='IU');
+check('semax nasal=true',                   G.RECON_DB['semax']?.nasal===true);
+check('reconCalc defined',                  typeof G.reconCalc==='function');
+// mcg dose on mg vial: 200mcg, 5mg/2ml → 2.5mg/ml → 0.08ml, 8 IU
+const rc1=G.reconCalc('200','mcg',5,2,'mg');
+check('200mcg/5mg@2ml → 0.08ml',           rc1&&rc1.ml===0.08,                     `got ${rc1?.ml}`);
+check('200mcg/5mg@2ml → 8 IU',             rc1&&rc1.iu===8,                        `got ${rc1?.iu}`);
+// mg dose on mg vial: 3mg, 5mg/1ml → 5mg/ml → 0.6ml, 60 IU
+const rc2=G.reconCalc('3','mg',5,1,'mg');
+check('3mg/5mg@1ml → 0.6ml',               rc2&&rc2.ml===0.6,                      `got ${rc2?.ml}`);
+check('3mg/5mg@1ml → 60 IU',               rc2&&rc2.iu===60,                       `got ${rc2?.iu}`);
+// IU pen dose on mg vial: 4 IU, 5mg/2ml → 0.04ml, 4 IU, 100mcg equiv
+const rc3=G.reconCalc('4','IU',5,2,'mg');
+check('4 IU pen/5mg@2ml → 0.04ml',         rc3&&rc3.ml===0.04,                     `got ${rc3?.ml}`);
+check('4 IU pen/5mg@2ml → 100mcg equiv',   rc3&&rc3.mcgEquiv===100,                `got ${rc3?.mcgEquiv}`);
+// IU/IU (HGH): 1 IU, 10IU/1ml → 0.1ml, 10 IU
+const rc4=G.reconCalc('1','IU',10,1,'IU');
+check('1 IU/10IU@1ml → 0.1ml',             rc4&&rc4.ml===0.1,                      `got ${rc4?.ml}`);
+check('1 IU/10IU@1ml → 10 IU',             rc4&&rc4.iu===10,                       `got ${rc4?.iu}`);
+// null cases
+check('reconCalc null on empty dose',       G.reconCalc('','mg',5,2,'mg')===null);
+check('reconCalc null on zero dose',        G.reconCalc('0','mg',5,2,'mg')===null);
+// Recon functions defined
+['renderRecon','selectReconStack','setReconState','buildReconCard','buildReconGuide','reconDoseRow']
+  .forEach(fn=>check(fn+' defined', typeof G[fn]==='function'));
