@@ -116,6 +116,12 @@ check('marked _unsaved=true',                synth._unsaved===true);
 check('no duplicate IDs',                    (()=>{const ids=synth.peptides.map(p=>p.id);return ids.length===new Set(ids).size;})());
 check('each peptide has times array',        synth.peptides.every(p=>Array.isArray(p.times)));
 check('each peptide has days array',         synth.peptides.every(p=>Array.isArray(p.days)));
+check('synth peptides use PEPTIDE_CAT ids', synth.peptides.every(p=>G.PEPTIDE_CAT.some(c=>c.id===p.id)),
+  synth.peptides.filter(p=>!G.PEPTIDE_CAT.some(c=>c.id===p.id)).map(p=>p.id).join(', '));
+check('synth: reta maps to canonical id',   synth.peptides.some(p=>p.id==='retatrutide'));
+check('synth: cjc maps to canonical id',    synth.peptides.some(p=>p.id==='cjc-ipa'));
+check('synth: glow maps to canonical id',   synth.peptides.some(p=>p.id==='glow'));
+check('synth: reta days includes Sun+Wed',  (()=>{const r=synth.peptides.find(p=>p.id==='retatrutide');return r&&r.days.includes(0)&&r.days.includes(3);})());
 
 // ── WEEKLY_DEFAULT ────────────────────────────────────────────────────────────
 console.log('\n── WEEKLY_DEFAULT ─────────────────────────────────────────');
@@ -316,6 +322,27 @@ G._reconState={};
 const hghP   ={id:'hgh',        name:'HGH',                dose_am:'1',  unit_am:'IU',dose_pm:'',unit_pm:'IU'};
 const hghH   =G.buildReconCard(hghP,7);
 check('buildReconCard hgh: shows 10 IU',         hghH.includes('10 IU'),         `snippet: ${hghH.slice(0,200)}`);
+
+// Synthesized-stack IDs (WEEKLY_DEFAULT style) must resolve correctly
+console.log('\n── buildReconCard: synthesized-stack (WEEKLY_DEFAULT) IDs ──');
+// 'reta-sun' is the id _synthesizeProtocol used to create before this fix
+G._reconState={};
+const retaSynP ={id:'reta-sun', name:'Retatrutide',   dose_am:'3',  unit_am:'mg',dose_pm:'',unit_pm:'mg'};
+const retaSynH =G.buildReconCard(retaSynP,0);
+check('buildReconCard reta-sun: resolves to 10mg/ml',  retaSynH.includes('10 mg/ml'),  `snippet: ${retaSynH.slice(0,300)}`);
+check('buildReconCard reta-sun: shows 30 IU',          retaSynH.includes('30 IU'),     `snippet: ${retaSynH.slice(0,300)}`);
+
+G._reconState={};
+const cjcAmSynP={id:'cjc-am',  name:'CJC-1295 / IPA', dose_am:'400',unit_am:'mcg',dose_pm:'',unit_pm:'mcg'};
+const cjcAmSynH=G.buildReconCard(cjcAmSynP,1);
+check('buildReconCard cjc-am: resolves to cjc-ipa db',cjcAmSynH.includes('5 mg/ml'),  `snippet: ${cjcAmSynH.slice(0,300)}`);
+check('buildReconCard cjc-am: shows 8 IU',            cjcAmSynH.includes('8 IU'),     `snippet: ${cjcAmSynH.slice(0,300)}`);
+
+G._reconState={};
+const glow1SynP={id:'glow-1',  name:'GLOW Stack',     dose_am:'0.2',unit_am:'ml', dose_pm:'',unit_pm:'ml'};
+const glow1SynH=G.buildReconCard(glow1SynP,2);
+check('buildReconCard glow-1: resolves to 35mg/ml',   glow1SynH.includes('35 mg/ml'), `snippet: ${glow1SynH.slice(0,300)}`);
+check('buildReconCard glow-1: shows 20 IU',           glow1SynH.includes('20 IU'),    `snippet: ${glow1SynH.slice(0,300)}`);
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
 console.log('\n── Meta ───────────────────────────────────────────────────');
