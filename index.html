@@ -500,12 +500,14 @@ function buildWeeklyFromProtocol(proto){
 // ── Stack store state ────────────────────────────────────────────────────────
 // ── Load all stacks ─────────────────────────────────────────────────────────
 async function loadUserStacks(){
+  var _fromBackend=false;
   try{
     var r=await fetch(AGENT_URL+'/protocol/stacks',{headers:{'x-app-token':WEIGHTS_TOKEN}});
     if(r.ok){
       var data=await r.json();
       _userStacks=data.stacks||[];
       _activeStackIndex=data.active_index||0;
+      _fromBackend=true;
     } else {
       throw new Error('Endpoint unavailable');
     }
@@ -532,12 +534,29 @@ async function loadUserStacks(){
       // inherited from the temporary glow-2 double-dose entry when _synthesizeProtocol merged them
       if((p.id==='glow'||p.id==='glow-1')&&p.end_date){
         var today=new Date();today.setHours(0,0,0,0);
-        if(parseLocalDate(p.end_date)<=today){delete p.end_date;delete p.start_date;}
+        if(parseLocalDate(p.end_date)<=today){delete p.end_date;}
       }
       // Glow dose was incorrectly defaulted to 0.2 ml before PR #13 fixed it to 0.09 ml (9 IU)
       if((p.id==='glow'||p.id==='glow-1')&&(parseFloat(p.dose_am)===0.2||(parseFloat(p.dose_am)===0.09&&p.unit_am!=='ml'))){p.dose_am='0.09';p.unit_am='ml';}
     });
   });
+  // One-time migration: restore correct April start dates corrupted by the now-fixed
+  // start_date deletion bug. Only fires once per device (localStorage gated).
+  // Targets peptides with dates >= May 2026 (auto-detected from 19-day log window).
+  if(_fromBackend&&!localStorage.getItem('_sd_migrated_apr26')){
+    var _CORRECT={'retatrutide':'2026-04-04','cjc-ipa':'2026-04-04','glow':'2026-04-16','glow-1':'2026-04-16'};
+    var _sdFixed=false;
+    _userStacks.forEach(function(stack){
+      (stack.peptides||[]).forEach(function(p){
+        var _c=_CORRECT[p.id];
+        if(_c&&(!p.start_date||p.start_date>='2026-05-01')){p.start_date=_c;_sdFixed=true;}
+      });
+      var _min=_deriveEarliestStartDate(stack.peptides||[]);
+      if(_min&&(!stack.cycle_start||_min<stack.cycle_start)){stack.cycle_start=_min;_sdFixed=true;}
+    });
+    localStorage.setItem('_sd_migrated_apr26','1');
+    if(_sdFixed)saveStacksToBackend();
+  }
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
@@ -925,7 +944,7 @@ function _synthesizeProtocol(weekly){
     var dm=rawPart.match(/^([\d.]+)\s*(mg|mcg|IU|ml)?$/);
     if(dm){if(t==='AM'){e.dose_am=dm[1];e.unit_am=dm[2]||'mg';}else{e.dose_pm=dm[1];e.unit_pm=dm[2]||'mg';}}
     else{if(t==='AM')e.dose_am=rawPart;else e.dose_pm=rawPart;}
-    if(!w.startDate&&!w.endDate){e._permanentDose=true;delete e.start_date;delete e.end_date;}
+    if(!w.startDate&&!w.endDate){e._permanentDose=true;}
     else if(!e._permanentDose){var _fmt=function(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};if(w.startDate&&!e.start_date)e.start_date=_fmt(w.startDate);if(w.endDate&&!e.end_date)e.end_date=_fmt(w.endDate);}
   });
   return{peptides:peptides,trt:{},_unsaved:true};
