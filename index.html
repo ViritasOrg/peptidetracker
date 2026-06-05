@@ -124,6 +124,7 @@
   .wiz-back{background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;padding:0;line-height:1;flex-shrink:0;}
   .wiz-title{font-family:'Bebas Neue',sans-serif;font-size:21px;letter-spacing:1px;color:var(--accent);flex:1;}
   .wiz-progress{display:flex;gap:4px;align-items:center;}
+  .wiz-cancel{background:none;border:none;color:var(--muted2);font-size:13px;cursor:pointer;padding:4px 0;font-family:inherit;flex-shrink:0;}
   .wiz-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all 0.2s;}
   .wiz-dot.done{background:var(--accent3);}
   .wiz-dot.active{background:var(--accent);width:18px;border-radius:3px;}
@@ -1229,7 +1230,7 @@ function showWizard(editModeUnused){
   if(!_wizOverlay){
     _wizOverlay=document.createElement('div');
     _wizOverlay.className='wiz-overlay';
-    _wizOverlay.innerHTML='<div class="wiz-header"><button class="wiz-back" id="wiz-back-btn">&#8249;</button><div class="wiz-title" id="wiz-title">BUILD STACK</div><div class="wiz-progress" id="wiz-progress"></div></div><div class="wiz-body" id="wiz-body"></div><div class="wiz-footer" id="wiz-footer"></div>';
+    _wizOverlay.innerHTML='<div class="wiz-header"><button class="wiz-back" id="wiz-back-btn">&#8249;</button><div class="wiz-title" id="wiz-title">BUILD STACK</div><div class="wiz-progress" id="wiz-progress"></div><button class="wiz-cancel" onclick="closeWizard()">Cancel</button></div><div class="wiz-body" id="wiz-body"></div><div class="wiz-footer" id="wiz-footer"></div>';
     document.body.appendChild(_wizOverlay);
     document.getElementById('wiz-back-btn').onclick=wizBack;
   }
