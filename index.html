@@ -420,6 +420,7 @@ const STACK_RULES=[
   {id:'glp1-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('glp1');}).length>1;},level:'err',title:'Multiple GLP-1/metabolic agonists',msg:'Combining Semaglutide, Tirzepatide or Retatrutide provides no additive fat-loss benefit and significantly increases GI side effects. Pick one.'},
   {id:'ghrh-ghrp-solo',check:function(p){var ids=p.map(function(x){return x.id;});var soloGHRH=ids.includes('cjc-nodac')||ids.includes('sermorelin');var hasGHRP=ids.includes('ipamorelin')||ids.includes('cjc-ipa');return soloGHRH&&!hasGHRP;},level:'warn',title:'GHRH without GHRP',msg:'CJC-1295 (no DAC) and Sermorelin work best paired with a GHRP like Ipamorelin for synergistic GH pulses. Consider adding Ipamorelin or switching to the CJC+IPA blend.'},
   {id:'gh-hgh-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var hasPep=ids.some(function(id){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin'].includes(id);});return hasPep&&ids.includes('hgh');},level:'warn',title:'GH peptides + exogenous HGH',msg:'Running GH secretagogues alongside exogenous HGH can over-stimulate the axis. Monitor IGF-1. Consider discontinuing CJC/IPA when HGH starts.'},
+  {id:'klow-glow-overlap',check:function(p){var ids=p.map(function(x){return x.id;});return ids.includes('klow')&&(ids.includes('glow')||ids.includes('glow-1'));},level:'err',title:'Klow Stack + Glow Stack — redundant',msg:'Klow Stack already contains all Glow Stack components (GHK-Cu, BPC-157, TB-500). Adding both doubles the dose with no additional benefit. Use Klow alone OR Glow alone.'},
 ];
 const RECON_DB={
   // GH Axis ─────────────────────────────────────────────────────────────────
@@ -510,12 +511,18 @@ async function loadUserStacks(){
       var data=await r.json();
       _userStacks=data.stacks||[];
       _activeStackIndex=data.active_index||0;
+      // Cache to localStorage for offline fallback
+      try{localStorage.setItem('stacks_cache',JSON.stringify({stacks:_userStacks,active_index:_activeStackIndex}));}catch(e){}
     } else {
       throw new Error('Endpoint unavailable');
     }
   }catch(e){
-    _userStacks=[];
-    _activeStackIndex=0;
+    // Try localStorage cache before falling back to synthesized stack
+    try{
+      var cached=JSON.parse(localStorage.getItem('stacks_cache')||'null');
+      if(cached&&cached.stacks&&cached.stacks.length){_userStacks=cached.stacks;_activeStackIndex=cached.active_index||0;}
+      else{_userStacks=[];_activeStackIndex=0;}
+    }catch(e2){_userStacks=[];_activeStackIndex=0;}
   }
   if(!_userStacks.length){
     _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
@@ -575,7 +582,10 @@ async function saveStacksToBackend(){
     try{
       if(attempt>0)await new Promise(function(r){setTimeout(r,attempt*1500);});
       var resp=await fetch(AGENT_URL+'/protocol/stacks',{method:'POST',headers:hdrs,body:body});
-      if(resp.ok)return {ok:true};
+      if(resp.ok){
+        try{localStorage.setItem('stacks_cache',body);}catch(e){}
+        return {ok:true};
+      }
       lastCode=resp.status;
     }catch(e){lastCode='net';}
   }

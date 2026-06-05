@@ -74,9 +74,9 @@ check('sermorelin exists',                 G.PEPTIDE_CAT.some(p=>p.id==='sermore
 // ── Stack rules ───────────────────────────────────────────────────────────────
 console.log('\n── checkStack / STACK_RULES ───────────────────────────────');
 check('STACK_RULES is array',              Array.isArray(G.STACK_RULES));
-check('5 rules defined',                   G.STACK_RULES.length===5,             `got ${G.STACK_RULES.length}`);
+check('6 rules defined',                   G.STACK_RULES.length===6,             `got ${G.STACK_RULES.length}`);
 check('checkStack defined',                typeof G.checkStack==='function');
-['ghrh-multi','cjc-tesa','glp1-multi','ghrh-ghrp-solo','gh-hgh-overlap']
+['ghrh-multi','cjc-tesa','glp1-multi','ghrh-ghrp-solo','gh-hgh-overlap','klow-glow-overlap']
   .forEach(id=>check(`rule "${id}" exists`, G.STACK_RULES.some(r=>r.id===id)));
 const r1=G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'tesamorelin',cg:['ghrh']}]);
 check('CJC+Tesa → err: ghrh-multi',        r1.some(r=>r.level==='err'&&r.id==='ghrh-multi'));
