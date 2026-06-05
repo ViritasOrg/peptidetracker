@@ -570,14 +570,16 @@ function updateWEEKLY(){
 async function saveStacksToBackend(){
   var body=JSON.stringify({stacks:_userStacks,active_index:_activeStackIndex});
   var hdrs={'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'};
+  var lastCode='net';
   for(var attempt=0;attempt<3;attempt++){
     try{
       if(attempt>0)await new Promise(function(r){setTimeout(r,attempt*1500);});
       var resp=await fetch(AGENT_URL+'/protocol/stacks',{method:'POST',headers:hdrs,body:body});
-      if(resp.ok)return true;
-    }catch(e){}
+      if(resp.ok)return {ok:true};
+      lastCode=resp.status;
+    }catch(e){lastCode='net';}
   }
-  return false;
+  return {ok:false,code:lastCode};
 }
 // ── Switch active stack ──────────────────────────────────────────────────────
 async function useStack(idx){
@@ -742,8 +744,8 @@ async function wizSave(){
     if(_userStacks.length===1)_activeStackIndex=0;
   }
   _userStacks=_userStacks.slice(0,4);
-  var ok=await saveStacksToBackend();
-  if(ok){
+  var res=await saveStacksToBackend();
+  if(res.ok){
     updateWEEKLY();
     buildWeekStrip();
     buildToday();
@@ -751,7 +753,7 @@ async function wizSave(){
     closeWizard();
     switchTab('stack',document.querySelector('.tab'));
   } else {
-    if(btn){btn.disabled=false;btn.textContent='Save Failed — Retry';}
+    if(btn){btn.disabled=false;btn.textContent='Save Failed ('+res.code+') — Retry';}
   }
 }
 // ── Updated buildStackStore to show cycle length ────────────────────────────
