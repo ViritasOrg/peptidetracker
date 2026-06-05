@@ -568,14 +568,16 @@ function updateWEEKLY(){
 }
 // ── Save all stacks to backend ───────────────────────────────────────────────
 async function saveStacksToBackend(){
-  try{
-    var r=await fetch(AGENT_URL+'/protocol/stacks',{
-      method:'POST',
-      headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},
-      body:JSON.stringify({stacks:_userStacks,active_index:_activeStackIndex})
-    });
-    return r.ok;
-  }catch(e){return false;}
+  var body=JSON.stringify({stacks:_userStacks,active_index:_activeStackIndex});
+  var hdrs={'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'};
+  for(var attempt=0;attempt<3;attempt++){
+    try{
+      if(attempt>0)await new Promise(function(r){setTimeout(r,attempt*1500);});
+      var resp=await fetch(AGENT_URL+'/protocol/stacks',{method:'POST',headers:hdrs,body:body});
+      if(resp.ok)return true;
+    }catch(e){}
+  }
+  return false;
 }
 // ── Switch active stack ──────────────────────────────────────────────────────
 async function useStack(idx){
@@ -736,6 +738,7 @@ async function wizSave(){
     _userStacks[_wiz.stackIndex]=proto;
   } else {
     _userStacks.push(proto);
+    _wiz.stackIndex=_userStacks.length-1; // prevent double-push on retry
     if(_userStacks.length===1)_activeStackIndex=0;
   }
   _userStacks=_userStacks.slice(0,4);
