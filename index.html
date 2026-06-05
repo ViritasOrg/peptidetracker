@@ -519,6 +519,7 @@ async function loadUserStacks(){
     _activeStackIndex=0;
   }
   _userStacks.forEach(function(stack){
+    if(stack.cycle_start){var _csp=stack.cycle_start.split('-');stack.cycle_start=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}
     if(!stack.peptides)return;
     stack.peptides.forEach(function(p){
       var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
@@ -1137,7 +1138,7 @@ function detectCycleStart(){
   var retaDates=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-')||d.startsWith('retatrutide_');});}).map(function(e){return e.date;});
   if(!retaDates.length)return;
   retaDates.sort();
-  active.cycle_start=retaDates[0];
+  var _rdp=retaDates[0].split('-');active.cycle_start=_rdp[0]+'-'+(_rdp[1]||'1').padStart(2,'0')+'-'+(_rdp[2]||'1').padStart(2,'0');
   saveStacksToBackend();
   buildTimeline();
 }
