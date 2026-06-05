@@ -364,7 +364,7 @@ G.wizSave().then(async ()=>{
   await G.loadUserStacks();
   const glowP2=G._userStacks[0].peptides[0];
   check('migration: expired end_date cleared from glow',   !glowP2.end_date,  `end_date still set: ${glowP2.end_date}`);
-  check('migration: start_date absent when not set on glow', !glowP2.start_date,`start_date still set: ${glowP2.start_date}`);
+  check('migration: start_date corrected to apr16 for glow', glowP2.start_date==='2026-04-16',`start_date: ${glowP2.start_date}`);
   const wklyGlow=G.buildWeeklyFromProtocol(G._userStacks[0]);
   check('migration: glow-am entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-am')?.endDate, 'glow-am still has endDate');
   check('migration: glow-pm entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-pm')?.endDate, 'glow-pm still has endDate');
