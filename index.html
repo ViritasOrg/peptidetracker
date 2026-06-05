@@ -184,12 +184,16 @@
   .stack-empty-title{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--text);letter-spacing:1px;margin-bottom:8px;}
   .stack-empty-desc{font-size:13px;color:var(--muted2);line-height:1.6;max-width:270px;margin:0 auto 24px;}
   .stack-actions{display:flex;gap:8px;margin-bottom:12px;}
-  .stack-card{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--surface2);display:flex;flex-direction:column;gap:10px;transition:all 0.15s;}
-  .stack-card.active{border-color:var(--accent);background:rgba(232,255,60,0.04);}
-  .stack-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:6px;}
-  .stack-card-name{font-size:13px;font-weight:600;color:var(--text);flex:1;}
+  .stack-card{border:1px solid var(--border);border-radius:10px;padding:12px;background:rgba(255,255,255,0.03);display:flex;flex-direction:column;gap:8px;transition:all 0.15s;cursor:pointer;position:relative;}
+  .stack-card:active{opacity:0.8;}
+  .stack-card.active{border-color:var(--accent);background:rgba(232,255,60,0.08);}
+  .stack-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:4px;}
+  .stack-card-name{font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .stack-card-meta{font-size:11px;color:var(--muted2);display:flex;flex-direction:column;gap:2px;}
-  .stack-card-actions{display:flex;gap:5px;}
+  .stack-card-empty{border:1.5px dashed rgba(255,255,255,0.12);border-radius:10px;padding:12px;background:transparent;display:flex;align-items:center;justify-content:center;min-height:86px;}
+  .stack-icon-btn{background:none;border:none;color:var(--muted2);cursor:pointer;padding:3px 5px;border-radius:4px;font-size:14px;line-height:1;transition:color 0.12s;flex-shrink:0;}
+  .stack-icon-btn:active{color:var(--text);}
+  .stack-icon-btn.danger:active{color:var(--danger);}
   .btn-sm{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.15s;}
   .btn-sm:active{background:var(--accent);color:#000;}
   .btn-sm.btn-danger:active{background:var(--danger);color:#fff;}
@@ -605,18 +609,42 @@ function buildStackStore(){
     body.innerHTML='<div class="stack-empty"><div class="today-spinner"><div class="today-spinner-dot"></div></div></div>';
     return;
   }
-  var html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">';
-  _userStacks.forEach(function(st,i){
+  var SLOTS=4;
+  var html='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+  for(var i=0;i<Math.min(_userStacks.length,SLOTS);i++){
+    var st=_userStacks[i];
     var pCount=st.peptides?st.peptides.length:0;
     var hasTrt=st.trt&&st.trt.compound;
     var isActive=i===_activeStackIndex;
-    var badge=isActive?'<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>':'';
-    html+='<div class="stack-card'+(isActive?' active':'')+'"><div class="stack-card-header">'+badge+'<div class="stack-card-name">'+(st.name||'Stack '+(i+1))+'</div></div><div class="stack-card-meta">';
+    html+='<div class="stack-card'+(isActive?' active':'')+'" onclick="viewStack('+i+')">';
+    html+='<div class="stack-card-header">';
+    html+='<div style="flex:1;min-width:0;">';
+    if(isActive)html+='<span style="background:var(--accent);color:#000;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase;display:inline-block;margin-bottom:3px;">ACTIVE</span>';
+    html+='<div class="stack-card-name">'+_esc(st.name||'Stack '+(i+1))+'</div>';
+    html+='</div>';
+    html+='<div style="display:flex;gap:1px;">';
+    html+='<button class="stack-icon-btn" onclick="event.stopPropagation();editStack('+i+')" title="Edit">✎</button>';
+    html+='<button class="stack-icon-btn danger" onclick="event.stopPropagation();deleteStack('+i+')" title="Delete">✕</button>';
+    html+='</div>';
+    html+='</div>';
+    html+='<div class="stack-card-meta">';
     html+='<div>'+pCount+' peptide'+(pCount===1?'':'s')+'</div>';
-    if(hasTrt)html+='<div style="color:var(--accent4)">TRT</div>';
-    html+='</div><div class="stack-card-actions">'+(isActive?'':'<button class="btn-sm" onclick="useStack('+i+')">Use</button>')+'<button class="btn-sm" onclick="editStack('+i+')">Edit</button><button class="btn-sm btn-danger" onclick="deleteStack('+i+')">Delete</button></div></div>';
-  });
-  html+='</div><div style="margin-top:16px;text-align:center;"><button class="btn btn-primary" onclick="createNewStack()">+ New Stack</button></div>';
+    if(hasTrt)html+='<div style="color:var(--accent4);">+ TRT</div>';
+    html+='</div>';
+    html+='</div>';
+  }
+  var firstEmpty=true;
+  for(var j=_userStacks.length;j<SLOTS;j++){
+    html+='<div class="stack-card-empty">';
+    if(firstEmpty){
+      html+='<button onclick="createNewStack()" style="background:none;border:none;color:var(--muted2);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;font-family:inherit;font-size:12px;padding:8px;line-height:1;">';
+      html+='<span style="font-size:22px;font-weight:300;">+</span><span>Add Stack</span>';
+      html+='</button>';
+      firstEmpty=false;
+    }
+    html+='</div>';
+  }
+  html+='</div>';
   body.innerHTML=html;
 }
 // ── Create or edit stack ─────────────────────────────────────────────────────
@@ -729,9 +757,10 @@ async function wizSave(){
 // ── Updated buildStackStore to show cycle length ────────────────────────────
 function createNewStack(){initWizard();showWizard(false);}
 
-function editStack(idx){showStackEditor(idx);}
+function viewStack(idx){_editReadOnly=true;showStackEditor(idx);}
+function editStack(idx){_editReadOnly=false;showStackEditor(idx);}
 // ── Inline Stack Editor ──────────────────────────────────────────────────────
-var _editBuf=null;var _editIdx=-1;
+var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;
 function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function showStackEditor(idx){
   if(idx<0||idx>=_userStacks.length)return;
@@ -767,13 +796,70 @@ function _deriveEarliestStartDate(peptides){
 function renderStackEditor(){
   var body=document.getElementById('stack-body');if(!body)return;
   var st=_editBuf;var cycle=st.cycle_length||12;
+  var isActive=_editIdx===_activeStackIndex;
+  var _effCs=(function(){var _ec=_deriveEarliestStartDate(st.peptides);var _sc=st.cycle_start||'';if(_ec&&(!_sc||_ec<_sc))_sc=_ec;if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
   var html='';
+
+  if(_editReadOnly){
+    html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
+    html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
+    html+='<div style="flex:1;font-size:17px;font-weight:700;color:var(--text);">'+_esc(st.name||'Stack '+(_editIdx+1))+'</div>';
+    if(isActive)html+='<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>';
+    html+='<button onclick="_editReadOnly=false;renderStackEditor()" style="background:none;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-left:6px;">Edit</button>';
+    html+='</div>';
+    html+='<div class="wiz-section">Cycle</div>';
+    if(_effCs){
+      var _sd2=parseLocalDate(_effCs);
+      var _ed2=new Date(_sd2.getTime()+cycle*7*86400000);
+      var _dDone2=Math.max(0,Math.floor((NOW-_sd2)/86400000));
+      var _wk2=Math.min(cycle,Math.floor(_dDone2/7)+1);
+      html+='<div style="font-size:13px;color:var(--text);margin-bottom:2px;">Start: '+fmtDate(_sd2)+'</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk2+' of '+cycle+' · Ends '+fmtDate(_ed2)+'</div>';
+    }else{
+      html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">'+cycle+' wk cycle · No start date</div>';
+    }
+    html+='<div class="wiz-section">Peptides</div>';
+    if(!st.peptides||!st.peptides.length){
+      html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No peptides added.</div>';
+    }else{
+      st.peptides.forEach(function(p){
+        var dot=p.dot||'#888';
+        var dayLabels=['S','M','T','W','T','F','S'];
+        var daysStr=(p.days||[]).map(function(d){return dayLabels[d];}).join(' ');
+        html+='<div class="cfg-block" style="margin-bottom:8px;">';
+        html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">';
+        html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
+        html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(p.name)+'</div>';
+        html+='</div>';
+        var doseStr='';
+        if(p.dose_am)doseStr+='AM: '+_esc(p.dose_am)+(p.unit_am||'mcg');
+        if(p.dose_pm)doseStr+=(doseStr?' · ':'')+'PM: '+_esc(p.dose_pm)+(p.unit_pm||'mcg');
+        if(doseStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+doseStr+'</div>';
+        if(daysStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+_esc(daysStr)+'</div>';
+        if(p.start_date)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">Start: '+_esc(p.start_date)+'</div>';
+        html+='</div>';
+      });
+    }
+    if(st.trt&&st.trt.enabled&&st.trt.compound){
+      html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
+      html+='<div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0;"></div>';
+      html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(st.trt.compound)+'</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);">TRT</div>';
+      html+='</div>';
+    }
+    html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
+    html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
+    if(!isActive)html+='<button onclick="useStack('+_editIdx+')" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Use Stack</button>';
+    html+='</div>';
+    body.innerHTML=html;
+    return;
+  }
+
   html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
   html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
   html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
   html+='</div>';
   html+='<div class="wiz-section">Cycle Start</div>';
-  var _effCs=(function(){var _ec=_deriveEarliestStartDate(st.peptides);var _sc=st.cycle_start||'';if(_ec&&(!_sc||_ec<_sc))_sc=_ec;if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
   html+='<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="_collectEditInputs();renderStackEditor();" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;margin-bottom:6px;">';
   if(_effCs&&cycle){var _sd=parseLocalDate(_effCs);var _ed=new Date(_sd.getTime()+cycle*7*86400000);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Ends '+fmtDate(_ed)+' · Week '+_wk+' of '+cycle+'</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
   html+='<div class="wiz-section">Cycle Length</div>';
