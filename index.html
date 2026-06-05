@@ -1134,7 +1134,7 @@ function detectCycleStart(){
   if(!window._peptideLog||!_userStacks.length)return;
   var active=_userStacks[_activeStackIndex];
   if(!active||active.cycle_start)return;
-  var retaDates=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-');});}).map(function(e){return e.date;});
+  var retaDates=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-')||d.startsWith('retatrutide_');});}).map(function(e){return e.date;});
   if(!retaDates.length)return;
   retaDates.sort();
   active.cycle_start=retaDates[0];
