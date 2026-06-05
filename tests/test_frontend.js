@@ -74,9 +74,9 @@ check('sermorelin exists',                 G.PEPTIDE_CAT.some(p=>p.id==='sermore
 // ── Stack rules ───────────────────────────────────────────────────────────────
 console.log('\n── checkStack / STACK_RULES ───────────────────────────────');
 check('STACK_RULES is array',              Array.isArray(G.STACK_RULES));
-check('6 rules defined',                   G.STACK_RULES.length===6,             `got ${G.STACK_RULES.length}`);
+check('8 rules defined',                   G.STACK_RULES.length===8,             `got ${G.STACK_RULES.length}`);
 check('checkStack defined',                typeof G.checkStack==='function');
-['ghrh-multi','cjc-tesa','glp1-multi','ghrh-ghrp-solo','gh-hgh-overlap','klow-glow-overlap']
+['ghrh-multi','cjc-tesa','glp1-multi','ghrh-ghrp-solo','gh-hgh-overlap','healing-blend-overlap','healing-blend-component','cjc-ipa-double']
   .forEach(id=>check(`rule "${id}" exists`, G.STACK_RULES.some(r=>r.id===id)));
 const r1=G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'tesamorelin',cg:['ghrh']}]);
 check('CJC+Tesa → err: ghrh-multi',        r1.some(r=>r.level==='err'&&r.id==='ghrh-multi'));
@@ -86,6 +86,12 @@ check('Reta+Sema → err: glp1-multi',       G.checkStack([{id:'retatrutide',cg:
 check('CJC-noDac alone → warn: ghrp-solo', G.checkStack([{id:'cjc-nodac',cg:['ghrh']}]).some(r=>r.level==='warn'&&r.id==='ghrh-ghrp-solo'));
 check('CJC+HGH → warn: gh-hgh-overlap',   G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'hgh',cg:['hgh']}]).some(r=>r.id==='gh-hgh-overlap'));
 check('single Reta → 0 issues',            G.checkStack([{id:'retatrutide',cg:['glp1']}]).length===0);
+check('Klow+Glow → err: healing-blend-overlap',      G.checkStack([{id:'klow',cg:[]},{id:'glow',cg:[]}]).some(r=>r.id==='healing-blend-overlap'));
+check('bpc-tb+Glow → err: healing-blend-overlap',    G.checkStack([{id:'bpc-tb',cg:[]},{id:'glow',cg:[]}]).some(r=>r.id==='healing-blend-overlap'));
+check('Glow+bpc157 → warn: healing-blend-component', G.checkStack([{id:'glow',cg:[]},{id:'bpc157',cg:[]}]).some(r=>r.id==='healing-blend-component'));
+check('klow+tb500 → warn: healing-blend-component',  G.checkStack([{id:'klow',cg:[]},{id:'tb500',cg:[]}]).some(r=>r.id==='healing-blend-component'));
+check('cjc-ipa+ipa → warn: cjc-ipa-double',          G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'ipamorelin',cg:['ghrp']}]).some(r=>r.id==='cjc-ipa-double'));
+check('cjc-ipa alone → no cjc-ipa-double',           !G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']}]).some(r=>r.id==='cjc-ipa-double'));
 
 // ── buildWeeklyFromProtocol ───────────────────────────────────────────────────
 console.log('\n── buildWeeklyFromProtocol ────────────────────────────────');
