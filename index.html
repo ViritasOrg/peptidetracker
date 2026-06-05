@@ -639,10 +639,6 @@ function buildStackStore(){
     if(isActive)html+='<span style="background:var(--accent);color:#000;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase;display:inline-block;margin-bottom:3px;">ACTIVE</span>';
     html+='<div class="stack-card-name">'+_esc(st.name||'Stack '+(i+1))+'</div>';
     html+='</div>';
-    html+='<div style="display:flex;gap:1px;">';
-    html+='<button class="stack-icon-btn" onclick="event.stopPropagation();editStack('+i+')" title="Edit">✎</button>';
-    html+='<button class="stack-icon-btn danger" onclick="event.stopPropagation();deleteStack('+i+')" title="Delete">✕</button>';
-    html+='</div>';
     html+='</div>';
     html+='<div class="stack-card-meta">';
     html+='<div>'+pCount+' peptide'+(pCount===1?'':'s')+'</div>';
@@ -824,7 +820,6 @@ function renderStackEditor(){
     html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
     html+='<div style="flex:1;font-size:17px;font-weight:700;color:var(--text);">'+_esc(st.name||'Stack '+(_editIdx+1))+'</div>';
     if(isActive)html+='<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>';
-    html+='<button onclick="_editReadOnly=false;renderStackEditor()" style="background:none;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-left:6px;">Edit</button>';
     html+='</div>';
     html+='<div class="wiz-section">Cycle</div>';
     if(_effCs){
@@ -867,8 +862,12 @@ function renderStackEditor(){
       html+='</div>';
     }
     html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
-    html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
-    if(!isActive)html+='<button onclick="useStack('+_editIdx+')" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Use Stack</button>';
+    html+='<button onclick="buildStackStore()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
+    html+='<button onclick="_editReadOnly=false;renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
+    if(!isActive)html+='<button onclick="useStack('+_editIdx+')" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Use Stack</button>';
+    html+='</div>';
+    html+='<div style="padding-bottom:20px;">';
+    html+='<button onclick="deleteStack('+_editIdx+')" style="width:100%;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:0.7;">Delete Stack</button>';
     html+='</div>';
     body.innerHTML=html;
     return;
