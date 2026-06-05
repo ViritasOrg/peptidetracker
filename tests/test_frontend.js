@@ -29,6 +29,7 @@ const patchedScript = rawScript
   .replace('let _userWeight=',        'var _userWeight=')
   .replace('var _wizOverlay=',        'var _wizOverlay=')
   .replace('const RECON_DB=',         'var RECON_DB=')
+  .replace('let _viewDate=',          'var _viewDate=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
   .replace('let _reconState=',        'var _reconState=');
 
