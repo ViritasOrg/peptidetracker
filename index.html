@@ -744,6 +744,11 @@ function _collectEditInputs(){
     if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
     if((el=document.getElementById('ed-sd-'+pi))){if(el.value)p.start_date=el.value;else delete p.start_date;}
   });
+  // Auto-fill cycle_start from earliest per-peptide start_date if the field is empty
+  if(!_editBuf.cycle_start){
+    var _sdDates=(_editBuf.peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
+    if(_sdDates.length){_sdDates.sort();_editBuf.cycle_start=_sdDates[0];}
+  }
 }
 function renderStackEditor(){
   var body=document.getElementById('stack-body');if(!body)return;
@@ -871,6 +876,7 @@ async function saveEditBuf(){
   if(_editIdx===_activeStackIndex){updateWEEKLY();buildWeekStrip();buildToday();}
   await saveStacksToBackend();
   buildStackStore();
+  buildTimeline();
 }
 // ── Modified wizard save ─────────────────────────────────────────────────────
 // ── Modified wizard step 4 review ────────────────────────────────────────────
