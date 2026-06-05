@@ -643,7 +643,7 @@ function buildStackStore(){
     html+='<div class="stack-card'+(isActive?' active':'')+'" onclick="viewStack('+i+')">';
     html+='<div class="stack-card-header">';
     html+='<div style="flex:1;min-width:0;">';
-    if(isActive)html+='<span style="background:var(--accent);color:#000;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase;display:inline-block;margin-bottom:3px;">ACTIVE</span>';
+    html+='<button onclick="event.stopPropagation();useStack('+i+')" style="background:'+(isActive?'var(--accent)':'transparent')+';color:'+(isActive?'#000':'var(--muted2)')+';border:'+(isActive?'none':'1px solid var(--border)')+';padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:uppercase;cursor:pointer;font-family:inherit;display:inline-block;margin-bottom:3px;letter-spacing:0.5px;">'+(isActive?'● Active':'Set Active')+'</button>';
     html+='<div class="stack-card-name">'+_esc(st.name||'Stack '+(i+1))+'</div>';
     html+='</div>';
     html+='</div>';
