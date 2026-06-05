@@ -520,6 +520,7 @@ async function loadUserStacks(){
   }
   _userStacks.forEach(function(stack){
     if(stack.cycle_start){var _csp=stack.cycle_start.split('-');stack.cycle_start=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}
+    (stack.peptides||[]).forEach(function(pp){if(pp.start_date){var _psp=pp.start_date.split('-');pp.start_date=_psp[0]+'-'+(_psp[1]||'1').padStart(2,'0')+'-'+(_psp[2]||'1').padStart(2,'0');}});
     if(!stack.peptides)return;
     stack.peptides.forEach(function(p){
       var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
@@ -741,6 +742,7 @@ function _collectEditInputs(){
     if((el=document.getElementById('ed-uam-'+pi)))p.unit_am=el.value;
     if((el=document.getElementById('ed-upm-'+pi)))p.unit_pm=el.value;
     if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
+    if((el=document.getElementById('ed-sd-'+pi))){if(el.value)p.start_date=el.value;else delete p.start_date;}
   });
 }
 function renderStackEditor(){
@@ -805,6 +807,10 @@ function _renderEditPep(p,pi){
   html+='</div></div>';
   html+='<div class="cfg-row"><div class="cfg-lbl">Note</div>';
   html+='<input id="ed-note-'+pi+'" class="note-in" type="text" value="'+_esc(String(p.note||''))+'" oninput="_editBuf.peptides['+pi+'].note=this.value" placeholder="e.g. fasted, pre-sleep...">';
+  html+='</div>';
+  var _sdVal=p.start_date||'';if(_sdVal){var _sdp=_sdVal.split('-');_sdVal=_sdp[0]+'-'+(_sdp[1]||'1').padStart(2,'0')+'-'+(_sdp[2]||'1').padStart(2,'0');}
+  html+='<div class="cfg-row"><div class="cfg-lbl">Start</div>';
+  html+='<input id="ed-sd-'+pi+'" type="date" value="'+_esc(_sdVal)+'" oninput="_collectEditInputs()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none;flex:1;">';
   html+='</div></div>';
   return html;
 }
@@ -1134,13 +1140,33 @@ async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/pep
 function detectCycleStart(){
   if(!window._peptideLog||!_userStacks.length)return;
   var active=_userStacks[_activeStackIndex];
-  if(!active||active.cycle_start)return;
-  var retaDates=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-')||d.startsWith('retatrutide_');});}).map(function(e){return e.date;});
-  if(!retaDates.length)return;
-  retaDates.sort();
-  var _rdp=retaDates[0].split('-');active.cycle_start=_rdp[0]+'-'+(_rdp[1]||'1').padStart(2,'0')+'-'+(_rdp[2]||'1').padStart(2,'0');
-  saveStacksToBackend();
-  buildTimeline();
+  if(!active)return;
+  var allSet=active.cycle_start&&(active.peptides||[]).every(function(p){return !!p.start_date;});
+  if(allSet)return;
+  var changed=false;
+  // Auto-detect per-peptide start date from log
+  (active.peptides||[]).forEach(function(p){
+    if(p.start_date)return;
+    var pid=p.id;
+    var earliest=null;
+    window._peptideLog.forEach(function(entry){
+      if(!entry.doses)return;
+      var hit=entry.doses.some(function(d){return d.startsWith(pid+'_')||d.startsWith(pid+'-am_')||d.startsWith(pid+'-pm_')||d.startsWith(pid+'-1_')||d.startsWith(pid+'-2_');});
+      if(hit&&(!earliest||entry.date<earliest))earliest=entry.date;
+    });
+    if(earliest){var _pp=earliest.split('-');p.start_date=_pp[0]+'-'+(_pp[1]||'1').padStart(2,'0')+'-'+(_pp[2]||'1').padStart(2,'0');changed=true;}
+  });
+  // Set cycle_start from earliest peptide start_date (or fallback Reta scan)
+  if(!active.cycle_start){
+    var pdates=(active.peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
+    if(!pdates.length){
+      var rd=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-')||d.startsWith('retatrutide_');});}).map(function(e){return e.date;});
+      if(rd.length){rd.sort();var _rp=rd[0].split('-');active.cycle_start=_rp[0]+'-'+(_rp[1]||'1').padStart(2,'0')+'-'+(_rp[2]||'1').padStart(2,'0');changed=true;}
+    } else {
+      pdates.sort();var _dp=pdates[0].split('-');active.cycle_start=_dp[0]+'-'+(_dp[1]||'1').padStart(2,'0')+'-'+(_dp[2]||'1').padStart(2,'0');changed=true;
+    }
+  }
+  if(changed){saveStacksToBackend();buildTimeline();}
 }
 function getPastDoses(d){if(!window._peptideLog)return null;const dk=dateKey(d);const entry=window._peptideLog.find(e=>e.date===dk);return entry?entry.doses:null;}
 function buildHistory(){const tab=document.getElementById('tab-history');if(!tab)return;const log=window._peptideLog||[];if(!log.length){tab.innerHTML='<div class="content"><div class="empty"><div class="empty-icon">💊</div>No history yet</div></div>';return;}const days=[...log].reverse();tab.innerHTML='<div class="content">'+days.map(entry=>{const d=new Date(entry.date.replace(/-/g,'/'));const label=d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});const count=entry.doses.length;return'<div class="card" style="margin-bottom:10px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">'+label.toUpperCase()+'</div></div><span class="card-badge badge-done">'+count+' doses</span></div><div class="checklist">'+entry.doses.map(id=>{const name=id.replace(/_\d{4}-\d+-\d+$/,'').replace('glow-1','GLOW Stack').replace('glow-2','GLOW 2nd dose').replace('glow','GLOW Stack').replace('reta-sun','Retatrutide').replace('reta-wed','Retatrutide').replace('retatrutide','Retatrutide').replace('cjc-ipa-am','CJC/IPA AM').replace('cjc-ipa-pm','CJC/IPA PM').replace('cjc-am','CJC/IPA AM').replace('cjc-pm','CJC/IPA PM').replace(/^testo_\d+$/,'Testoviron');return'<div class="check-item checked-item"><div class="check-box checked"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:var(--accent3)">'+name+'</div></div></div>';}).join('')+'</div></div>';}).join('')+'</div>';}
@@ -1212,15 +1238,29 @@ function buildTimeline(){
       const ed2=new Date(sd2.getTime()+active.cycle_length*7*86400000);
       all.push({date:ed2,name:'Cycle End',desc:'Week '+active.cycle_length+' — cycle complete',_cycle:true});
     }
-    all.sort((a,b)=>a.date-b.date);
   }
+  // Per-peptide start milestones for peptides that started after cycle_start
+  if(active&&active.peptides){
+    const byDate={};
+    active.peptides.forEach(function(p){
+      if(!p.start_date||p.start_date===active.cycle_start)return;
+      if(!byDate[p.start_date])byDate[p.start_date]={names:[],dot:p.dot||'var(--accent4)'};
+      byDate[p.start_date].names.push(p.name||p.id);
+    });
+    Object.keys(byDate).forEach(function(sd){
+      const info=byDate[sd];
+      all.push({date:parseLocalDate(sd),name:info.names.join(' + '),desc:'Added to protocol',_cycle:true,_dot:info.dot});
+    });
+  }
+  if(active&&(active.cycle_start||active.peptides)){all.sort((a,b)=>a.date-b.date);}
   all.forEach((m,i)=>{
     const past=m.date<NOW&&m.date.toDateString()!==NOW.toDateString();
     const isToday=m.date.toDateString()===NOW.toDateString();
     const last=i===all.length-1;
-    const accentColor=m._cycle?'var(--accent4)':'';
+    const _mc=m._dot||(m._cycle?'var(--accent4)':'');
+    const accentColor=_mc;
     const row=document.createElement('div');row.className='milestone';
-    row.innerHTML=`<div class="milestone-line"><div class="milestone-dot ${past?'past':isToday?'today-dot':'future'}" style="${m._cycle&&!past?'border-color:var(--accent4);background:var(--accent4);opacity:0.7;':''}"></div>${!last?'<div class="milestone-connector"></div>':''}</div><div class="milestone-body"><div class="milestone-date">${fmtDate(m.date)}${isToday?' · TODAY':''}</div><div class="milestone-name" style="color:${past?'var(--muted2)':isToday?'var(--accent)':accentColor||'var(--text)'}">${m.name}</div><div class="milestone-desc">${m.desc}</div></div>`;
+    row.innerHTML=`<div class="milestone-line"><div class="milestone-dot ${past?'past':isToday?'today-dot':'future'}" style="${(m._cycle||m._dot)&&!past?'border-color:'+_mc+';background:'+_mc+';opacity:0.7;':''}"></div>${!last?'<div class="milestone-connector"></div>':''}</div><div class="milestone-body"><div class="milestone-date">${fmtDate(m.date)}${isToday?' · TODAY':''}</div><div class="milestone-name" style="color:${past?'var(--muted2)':isToday?'var(--accent)':accentColor||'var(--text)'}">${m.name}</div><div class="milestone-desc">${m.desc}</div></div>`;
     body.appendChild(row);
   });
 }
