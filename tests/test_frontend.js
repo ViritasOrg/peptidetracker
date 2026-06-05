@@ -364,10 +364,18 @@ G.wizSave().then(async ()=>{
   await G.loadUserStacks();
   const glowP2=G._userStacks[0].peptides[0];
   check('migration: expired end_date cleared from glow',   !glowP2.end_date,  `end_date still set: ${glowP2.end_date}`);
-  check('migration: start_date also cleared from glow',    !glowP2.start_date,`start_date still set: ${glowP2.start_date}`);
+  check('migration: start_date absent when not set on glow', !glowP2.start_date,`start_date still set: ${glowP2.start_date}`);
   const wklyGlow=G.buildWeeklyFromProtocol(G._userStacks[0]);
   check('migration: glow-am entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-am')?.endDate, 'glow-am still has endDate');
   check('migration: glow-pm entry has no endDate',         !wklyGlow.find(w=>w.id==='glow-pm')?.endDate, 'glow-pm still has endDate');
+  // Verify start_date is PRESERVED when an expired end_date is cleared (the real bug fix)
+  const glowWithSdExpired={name:'My Stack',peptides:[
+    {id:'glow',name:'GLOW Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.09',unit_am:'ml',start_date:'2026-04-16',end_date:'2026-06-03'},
+  ]};
+  G.fetch=async()=>({ok:true,json:async()=>({stacks:[JSON.parse(JSON.stringify(glowWithSdExpired))],active_index:0})});
+  await G.loadUserStacks();
+  const glowP3=G._userStacks[0].peptides[0];
+  check('migration: start_date preserved when expired end_date cleared', glowP3.start_date==='2026-04-16'&&!glowP3.end_date, `start_date=${glowP3.start_date} end_date=${glowP3.end_date}`);
   // Glow recon: 70mg/3ml = 23.333mg/ml, 9 IU = 0.09ml
   const rcGlow9=G.reconCalc('0.09','ml',G.RECON_DB['glow'].vials[G.RECON_DB['glow'].defaultVi],G.RECON_DB['glow'].water[G.RECON_DB['glow'].defaultWi],'mg');
   check('glow 3ml: 0.09ml → 9 IU',    rcGlow9&&rcGlow9.iu===9,      `got ${rcGlow9?.iu}`);
