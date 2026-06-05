@@ -458,6 +458,42 @@ G.wizSave().then(async ()=>{
   check('post-load: WEEKLY has cjc-ipa-pm',  G.WEEKLY.some(w=>w.id==='cjc-ipa-pm'), `ids: ${G.WEEKLY.map(w=>w.id).join(', ')}`);
   check('post-load: glow has no endDate',    !G.WEEKLY.find(w=>w.id==='glow')?.endDate, 'glow endDate set after load');
 
+  // ── _deriveEarliestStartDate ────────────────────────────────────────────────
+  console.log('\n── _deriveEarliestStartDate ────────────────────────────────');
+  check('derive: null for empty array',              G._deriveEarliestStartDate([])===null);
+  check('derive: null when no start_dates',          G._deriveEarliestStartDate([{id:'x'},{id:'y'}])===null);
+  check('derive: single peptide',                    G._deriveEarliestStartDate([{start_date:'2026-04-04'}])==='2026-04-04');
+  check('derive: returns earliest of multiple',      G._deriveEarliestStartDate([{start_date:'2026-04-16'},{start_date:'2026-04-04'},{start_date:'2026-05-01'}])==='2026-04-04');
+  check('derive: ignores peptides without start_date', G._deriveEarliestStartDate([{id:'x'},{start_date:'2026-04-16'},{start_date:'2026-04-04'}])==='2026-04-04');
+
+  // ── cycle_start auto-sync via _collectEditInputs ────────────────────────────
+  console.log('\n── cycle_start auto-sync ───────────────────────────────────');
+  const noop2=()=>{};
+  const mkInp=v=>({value:v,style:{},classList:{add:noop2,remove:noop2},appendChild:noop2});
+  function runCollect(cycleDateInInput, peptides){
+    G._editBuf={name:'t',cycle_start:cycleDateInInput,cycle_length:12,peptides};
+    const origGet=G.document.getElementById;
+    G.document.getElementById=function(id){
+      if(id==='edit-cycle-start')return mkInp(cycleDateInInput);
+      if(id==='edit-stack-name')return mkInp('t');
+      const m=id.match(/^ed-sd-(\d+)$/);
+      if(m)return mkInp(peptides[+m[1]]?.start_date||'');
+      return mkInp('');
+    };
+    G._collectEditInputs();
+    G.document.getElementById=origGet;
+    return G._editBuf.cycle_start;
+  }
+  const pepApr4=[{id:'retatrutide',name:'Reta',start_date:'2026-04-04',times:['AM'],days:[0,3],dose_am:'3',unit_am:'mg'}];
+  const pepApr4andApr16=[...pepApr4,{id:'glow',name:'GLOW',start_date:'2026-04-16',times:['AM'],days:[0,1,2,3,4,5,6],dose_am:'0.09',unit_am:'ml'}];
+
+  check('collect: fills empty cycle_start from peptide',        runCollect('',pepApr4)==='2026-04-04',                       `got ${runCollect('',pepApr4)}`);
+  check('collect: updates later cycle_start to earlier peptide',runCollect('2026-05-18',pepApr4)==='2026-04-04',             `got ${runCollect('2026-05-18',pepApr4)}`);
+  check('collect: keeps correct cycle_start unchanged',         runCollect('2026-04-04',pepApr4)==='2026-04-04',             `got ${runCollect('2026-04-04',pepApr4)}`);
+  check('collect: picks earliest of multiple peptides',         runCollect('2026-05-18',pepApr4andApr16)==='2026-04-04',     `got ${runCollect('2026-05-18',pepApr4andApr16)}`);
+  check('collect: does not override later cycle_start with earlier user-set date',
+    runCollect('2026-03-01',pepApr4)==='2026-03-01', `got ${runCollect('2026-03-01',pepApr4)}`);
+
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
