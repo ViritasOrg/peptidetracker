@@ -744,11 +744,15 @@ function _collectEditInputs(){
     if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
     if((el=document.getElementById('ed-sd-'+pi))){if(el.value)p.start_date=el.value;else delete p.start_date;}
   });
-  // Auto-fill cycle_start from earliest per-peptide start_date if the field is empty
-  if(!_editBuf.cycle_start){
-    var _sdDates=(_editBuf.peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
-    if(_sdDates.length){_sdDates.sort();_editBuf.cycle_start=_sdDates[0];}
-  }
+  // Keep cycle_start ≤ earliest peptide start_date
+  var _ed=_deriveEarliestStartDate(_editBuf.peptides);
+  if(_ed&&(!_editBuf.cycle_start||_ed<_editBuf.cycle_start)){_editBuf.cycle_start=_ed;}
+}
+function _deriveEarliestStartDate(peptides){
+  var dates=(peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
+  if(!dates.length)return null;
+  dates.sort();
+  return dates[0];
 }
 function renderStackEditor(){
   var body=document.getElementById('stack-body');if(!body)return;
@@ -759,8 +763,9 @@ function renderStackEditor(){
   html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
   html+='</div>';
   html+='<div class="wiz-section">Cycle Start</div>';
-  html+='<input type="date" id="edit-cycle-start" value="'+_esc(st.cycle_start||'')+'" onchange="_collectEditInputs();renderStackEditor();" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;margin-bottom:6px;">';
-  if(st.cycle_start&&cycle){var _sd=parseLocalDate(st.cycle_start);var _ed=new Date(_sd.getTime()+cycle*7*86400000);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Ends '+fmtDate(_ed)+' · Week '+_wk+' of '+cycle+'</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
+  var _effCs=(function(){var _ec=_deriveEarliestStartDate(st.peptides);var _sc=st.cycle_start||'';if(_ec&&(!_sc||_ec<_sc))_sc=_ec;if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
+  html+='<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="_collectEditInputs();renderStackEditor();" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;margin-bottom:6px;">';
+  if(_effCs&&cycle){var _sd=parseLocalDate(_effCs);var _ed=new Date(_sd.getTime()+cycle*7*86400000);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Ends '+fmtDate(_ed)+' · Week '+_wk+' of '+cycle+'</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
   html+='<div class="wiz-section">Cycle Length</div>';
   html+='<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">';
   [8,10,12,16].forEach(function(w){html+='<div class="time-chip'+(cycle===w?' sel':'')+'" onclick="_collectEditInputs();_editBuf.cycle_length='+w+';renderStackEditor();">'+w+' wk</div>';});
