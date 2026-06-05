@@ -575,21 +575,23 @@ function updateWEEKLY(){
 }
 // ── Save all stacks to backend ───────────────────────────────────────────────
 async function saveStacksToBackend(){
-  var body=JSON.stringify({stacks:_userStacks,active_index:_activeStackIndex});
+  var payload={stacks:_userStacks,active_index:_activeStackIndex};
+  var body=JSON.stringify(payload);
+  // localStorage is the primary store — always write first so data is never lost
+  try{localStorage.setItem('stacks_cache',body);}catch(e){}
+  // Backend sync is best-effort
   var hdrs={'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'};
   var lastCode='net';
-  for(var attempt=0;attempt<3;attempt++){
+  for(var attempt=0;attempt<2;attempt++){
     try{
-      if(attempt>0)await new Promise(function(r){setTimeout(r,attempt*1500);});
+      if(attempt>0)await new Promise(function(r){setTimeout(r,1500);});
       var resp=await fetch(AGENT_URL+'/protocol/stacks',{method:'POST',headers:hdrs,body:body});
-      if(resp.ok){
-        try{localStorage.setItem('stacks_cache',body);}catch(e){}
-        return {ok:true};
-      }
+      if(resp.ok)return {ok:true,synced:true};
       lastCode=resp.status;
     }catch(e){lastCode='net';}
   }
-  return {ok:false,code:lastCode};
+  // Backend unavailable but data is safe in localStorage
+  return {ok:true,synced:false,code:lastCode};
 }
 // ── Switch active stack ──────────────────────────────────────────────────────
 async function useStack(idx){
@@ -755,15 +757,19 @@ async function wizSave(){
   }
   _userStacks=_userStacks.slice(0,4);
   var res=await saveStacksToBackend();
-  if(res.ok){
-    updateWEEKLY();
-    buildWeekStrip();
-    buildToday();
-    buildStackStore();
-    closeWizard();
-    switchTab('stack',document.querySelector('.tab'));
-  } else {
-    if(btn){btn.disabled=false;btn.textContent='Save Failed ('+res.code+') — Retry';}
+  updateWEEKLY();
+  buildWeekStrip();
+  buildToday();
+  buildStackStore();
+  closeWizard();
+  switchTab('stack',document.querySelector('.tab'));
+  if(res.synced===false){
+    // Data saved locally; backend sync failed — show a brief banner
+    var nb=document.createElement('div');
+    nb.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#aaa;font-size:11px;padding:6px 14px;border-radius:20px;z-index:9999;pointer-events:none;';
+    nb.textContent='Saved locally (backend sync pending)';
+    document.body.appendChild(nb);
+    setTimeout(function(){if(nb.parentNode)nb.parentNode.removeChild(nb);},3500);
   }
 }
 // ── Updated buildStackStore to show cycle length ────────────────────────────
