@@ -500,14 +500,12 @@ function buildWeeklyFromProtocol(proto){
 // ── Stack store state ────────────────────────────────────────────────────────
 // ── Load all stacks ─────────────────────────────────────────────────────────
 async function loadUserStacks(){
-  var _fromBackend=false;
   try{
     var r=await fetch(AGENT_URL+'/protocol/stacks',{headers:{'x-app-token':WEIGHTS_TOKEN}});
     if(r.ok){
       var data=await r.json();
       _userStacks=data.stacks||[];
       _activeStackIndex=data.active_index||0;
-      _fromBackend=true;
     } else {
       throw new Error('Endpoint unavailable');
     }
@@ -540,30 +538,6 @@ async function loadUserStacks(){
       if((p.id==='glow'||p.id==='glow-1')&&(parseFloat(p.dose_am)===0.2||(parseFloat(p.dose_am)===0.09&&p.unit_am!=='ml'))){p.dose_am='0.09';p.unit_am='ml';}
     });
   });
-  // One-time migration: restore correct April start dates corrupted by the now-fixed
-  // start_date deletion bug. Matches by id/name substring to handle both canonical and
-  // legacy WEEKLY_DEFAULT IDs (reta-sun, cjc-am, glow-1, etc). Key v2 bypasses any
-  // stale v1 flag set when the old exact-ID-only version ran without matching.
-  if(_fromBackend&&!localStorage.getItem('_sd_migrated_apr26v2')){
-    var _sdFixed=false;
-    var _correctDate=function(id,name){
-      var i=(id||'').toLowerCase();var n=(name||'').toLowerCase();
-      if(i.indexOf('reta')>=0||n.indexOf('retat')>=0)return'2026-04-04';
-      if(i.indexOf('cjc')>=0||n.indexOf('cjc')>=0)return'2026-04-04';
-      if(i.indexOf('glow')>=0||n.indexOf('glow')>=0)return'2026-04-16';
-      return null;
-    };
-    _userStacks.forEach(function(stack){
-      (stack.peptides||[]).forEach(function(p){
-        var _c=_correctDate(p.id,p.name);
-        if(_c&&(!p.start_date||p.start_date>='2026-05-01')){p.start_date=_c;_sdFixed=true;}
-      });
-      var _min=_deriveEarliestStartDate(stack.peptides||[]);
-      if(_min&&(!stack.cycle_start||_min<stack.cycle_start)){stack.cycle_start=_min;_sdFixed=true;}
-    });
-    localStorage.setItem('_sd_migrated_apr26v2','1');
-    if(_sdFixed)saveStacksToBackend();
-  }
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
