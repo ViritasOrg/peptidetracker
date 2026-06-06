@@ -743,7 +743,7 @@ function wizStep1(body,footer){
   html+='</select>';
   html+='<div style="font-size:11px;color:var(--muted2);">Cycle length helps track when to rotate peptides and manage tapering.</div>';
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Goals</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 // ── Updated wizard flow (insert cycle after goals removed) ──────────────────
 var WIZ_TITLES=['CYCLE','GOALS','PEPTIDES','CHECK','CONFIGURE','TRT','REVIEW'];
@@ -1206,7 +1206,7 @@ function wizStepGoals(body,footer){
   });
   html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:12px;">Select all that apply. Used to filter the peptide catalogue.</div>';
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next → Peptides</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 
 function wizToggleGoal(id){
@@ -1237,7 +1237,7 @@ function wizStepPeptides(body,footer){
     });
   });
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">'+(selIds.length?'Next → Check ('+selIds.length+')':'Skip →')+'</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 
 function wizTogglePep(id){
@@ -1281,11 +1281,10 @@ function wizStepCheck(body,footer){
   });
   html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:8px">Validation</div><div id="wiz-chk-section">'+renderCheckResults(pepObjs,'wizinline')+'</div>';
   body.innerHTML=html;
-  var nextLabel=hasErrors?'Continue (conflicts)':'Next → Configure';
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">'+nextLabel+'</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 function wizStepConfig(body,footer){
-  if(!_wiz.peptides.length){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2);">No peptides selected. Go back and add some.</div>';footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next</button>';return;}
+  if(!_wiz.peptides.length){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2);">No peptides selected. Go back and add some.</div>';footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';return;}
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;">Configure dose, timing and frequency for each peptide.</div>';
   _wiz.peptides.forEach(function(p,pi){
     var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});
@@ -1301,7 +1300,7 @@ function wizStepConfig(body,footer){
     html+='</div></div><div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div></div>';
   });
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 
 function wizToggleTime(pi,t){var p=_wiz.peptides[pi];if(!p)return;if(!p.times)p.times=[];var i=p.times.indexOf(t);if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
@@ -1319,7 +1318,7 @@ function wizStepTRT(body,footer){
     html+='<button class="btn-check" style="width:100%;margin-top:4px" onclick="wizAddInj()">+ Add Injection</button></div>';
   }
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next</button>';
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
 
 function wizToggleTRT(){_wiz.trt.enabled=!_wiz.trt.enabled;wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
