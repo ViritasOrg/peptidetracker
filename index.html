@@ -718,6 +718,7 @@ async function saveUserWeight(weight){
     });
   }catch(e){}
 }
+async function pushWeightToAgent(date,weightVal){try{await fetch(AGENT_URL+'/weights',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:date,weight:weightVal})});}catch(e){}}
 // ── Cycle length suggestions ───────────────────────────────────────────────
 var CYCLE_WEEKS=[3,6,9,12,15,18,21];
 // ── Updated wizard init with cycle_length ──────────────────────────────────
@@ -1406,7 +1407,16 @@ function saveBodyMeasurement(type){
   var v=parseFloat(inp.value);
   if(isNaN(v)||v<=0)return;
   localStorage.setItem('user_'+type,v);
-  if(type==='weight')saveUserWeight(v);
+  if(type==='weight'){
+    saveUserWeight(v);
+    var today=dateKey(NOW);
+    var idx=weights.findIndex(function(w){return w.date===today;});
+    if(idx!==-1)weights[idx].weight=v;else weights.push({date:today,weight:v});
+    weights.sort(function(a,b){return a.date.localeCompare(b.date);});
+    setData('weight_log',weights);
+    pushWeightToAgent(today,v);
+    if(_currentTab==='body')bcRender();
+  }
   inp.style.borderColor='var(--accent3)';
   setTimeout(function(){inp.style.borderColor='var(--border)';},1500);
 }
