@@ -209,6 +209,25 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .reset-btn{margin:0 20px;padding:12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all 0.12s;width:calc(100% - 40px);}
   .reset-btn:active{color:var(--danger);border-color:var(--danger);}
+  .pcard-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:500;display:flex;align-items:flex-end;justify-content:center;}
+  .pcard-sheet{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px 44px;max-height:90vh;overflow-y:auto;}
+  .pcard{border-radius:18px;overflow:hidden;position:relative;}
+  .pcard-hdr{padding:16px 16px 12px;display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:2;}
+  .pcard-name{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:1.5px;line-height:1.1;color:var(--text);max-width:68%;}
+  .pcard-img{height:130px;display:flex;align-items:center;justify-content:center;border-top:1px solid;border-bottom:1px solid;position:relative;z-index:2;}
+  .pcard-icon{width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;border:2px solid;}
+  .pcard-stats{padding:14px 16px;position:relative;z-index:2;}
+  .pcard-stat{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
+  .pcard-lbl{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted2);}
+  .pcard-val{font-size:12px;color:var(--text);text-align:right;}
+  .pcard-desc{padding:10px 16px 16px;font-size:12px;color:var(--muted2);line-height:1.65;border-top:1px solid rgba(255,255,255,0.06);font-style:italic;position:relative;z-index:2;}
+  .pcard-goals{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px;}
+  .pcard-goal{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 7px;border-radius:10px;border:1px solid;}
+  .info-btn{background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:3px 7px;line-height:1;opacity:0.55;flex-shrink:0;transition:opacity 0.15s;}
+  .info-btn:active{opacity:1;}
+  .conflict-peps{margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;}
+  .conflict-pep{display:flex;align-items:center;gap:10px;padding:5px 0;cursor:pointer;user-select:none;}
+  .conflict-chk{width:20px;height:20px;border-radius:5px;background:var(--accent3);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 </style>
 </head>
 <body>
@@ -421,14 +440,14 @@ const PEPTIDE_CAT=[
   {id:'hcg',name:'HCG',sku:'G5K',price:'$88/box',group:'TRT Support',goals:['trt'],dot:'#c084fc',cg:[],desc:'Testicular stimulation during TRT. Maintains fertility/size.',dflt:{times:['AM'],days:[1,4],doseAm:'500',dosePm:'',unitAm:'IU',unitPm:'IU'}},
 ];
 const STACK_RULES=[
-  {id:'ghrh-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('ghrh');}).length>1;},level:'err',title:'Multiple GHRH analogs',msg:'CJC-1295, Sermorelin and Tesamorelin all act on the same GHRH receptor — stacking them causes receptor saturation with no added benefit and higher cost. Pick one.'},
-  {id:'cjc-tesa',check:function(p){var ids=p.map(function(x){return x.id;});return (ids.includes('cjc-ipa')||ids.includes('cjc-nodac'))&&ids.includes('tesamorelin');},level:'err',title:'CJC-1295 + Tesamorelin',msg:'Tesamorelin is specifically indicated for visceral fat reduction — if that is your goal, use it alone. For general GH optimisation use CJC/IPA instead. Never full-dose both.'},
-  {id:'glp1-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('glp1');}).length>1;},level:'err',title:'Multiple GLP-1/metabolic agonists',msg:'Combining Semaglutide, Tirzepatide or Retatrutide provides no additive fat-loss benefit and significantly increases GI side effects. Pick one.'},
-  {id:'ghrh-ghrp-solo',check:function(p){var ids=p.map(function(x){return x.id;});var soloGHRH=ids.includes('cjc-nodac')||ids.includes('sermorelin');var hasGHRP=ids.includes('ipamorelin')||ids.includes('cjc-ipa');return soloGHRH&&!hasGHRP;},level:'warn',title:'GHRH without GHRP',msg:'CJC-1295 (no DAC) and Sermorelin work best paired with a GHRP like Ipamorelin for synergistic GH pulses. Consider adding Ipamorelin or switching to the CJC+IPA blend.'},
-  {id:'gh-hgh-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var hasPep=ids.some(function(id){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin'].includes(id);});return hasPep&&ids.includes('hgh');},level:'warn',title:'GH peptides + exogenous HGH',msg:'Running GH secretagogues alongside exogenous HGH can over-stimulate the axis. Monitor IGF-1. Consider discontinuing CJC/IPA when HGH starts.'},
-  {id:'healing-blend-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var blends=['glow','glow-1','klow','bpc-tb'];return blends.filter(function(b){return ids.includes(b);}).length>1;},level:'err',title:'Multiple healing blends — redundant',msg:'Glow, Klow and BPC+TB blends all share BPC-157 and/or TB-500 and/or GHK-Cu. Running more than one doubles these compounds with no added benefit. Pick one blend only.'},
-  {id:'healing-blend-component',check:function(p){var ids=p.map(function(x){return x.id;});var blends=['glow','glow-1','klow','bpc-tb'];var parts=['bpc157','tb500','ghkcu'];return blends.some(function(b){return ids.includes(b);})&&parts.some(function(c){return ids.includes(c);});},level:'warn',title:'Healing blend + standalone component — double dose',msg:'Your stack includes a healing blend (Glow/Klow/BPC+TB) that already contains BPC-157, TB-500 and/or GHK-Cu. Adding the individual peptide alongside doubles that compound with no benefit. Remove the standalone or use the blend alone.'},
-  {id:'cjc-ipa-double',check:function(p){var ids=p.map(function(x){return x.id;});return ids.includes('cjc-ipa')&&ids.includes('ipamorelin');},level:'warn',title:'CJC/IPA blend + standalone Ipamorelin',msg:'The CJC/IPA blend already includes Ipamorelin. Adding it separately doubles your Ipamorelin dose with no benefit. Use the blend alone, or build the stack from CJC-1295 (no DAC) + Ipamorelin separately.'},
+  {id:'ghrh-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('ghrh');}).length>1;},getConflicting:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('ghrh');}).map(function(x){return x.id;});},level:'err',title:'Multiple GHRH analogs',msg:'CJC-1295, Sermorelin and Tesamorelin all act on the same GHRH receptor — stacking them causes receptor saturation with no added benefit and higher cost. Pick one.'},
+  {id:'cjc-tesa',check:function(p){var ids=p.map(function(x){return x.id;});return (ids.includes('cjc-ipa')||ids.includes('cjc-nodac'))&&ids.includes('tesamorelin');},getConflicting:function(p){return p.filter(function(x){return['cjc-ipa','cjc-nodac','tesamorelin'].includes(x.id);}).map(function(x){return x.id;});},level:'err',title:'CJC-1295 + Tesamorelin',msg:'Tesamorelin is specifically indicated for visceral fat reduction — if that is your goal, use it alone. For general GH optimisation use CJC/IPA instead. Never full-dose both.'},
+  {id:'glp1-multi',check:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('glp1');}).length>1;},getConflicting:function(p){return p.filter(function(x){return x.cg&&x.cg.includes('glp1');}).map(function(x){return x.id;});},level:'err',title:'Multiple GLP-1/metabolic agonists',msg:'Combining Semaglutide, Tirzepatide or Retatrutide provides no additive fat-loss benefit and significantly increases GI side effects. Pick one.'},
+  {id:'ghrh-ghrp-solo',check:function(p){var ids=p.map(function(x){return x.id;});var soloGHRH=ids.includes('cjc-nodac')||ids.includes('sermorelin');var hasGHRP=ids.includes('ipamorelin')||ids.includes('cjc-ipa');return soloGHRH&&!hasGHRP;},getConflicting:function(p){return p.filter(function(x){return['cjc-nodac','sermorelin'].includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'GHRH without GHRP',msg:'CJC-1295 (no DAC) and Sermorelin work best paired with a GHRP like Ipamorelin for synergistic GH pulses. Consider adding Ipamorelin or switching to the CJC+IPA blend.'},
+  {id:'gh-hgh-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var hasPep=ids.some(function(id){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin'].includes(id);});return hasPep&&ids.includes('hgh');},getConflicting:function(p){return p.filter(function(x){return['cjc-ipa','cjc-nodac','ipamorelin','sermorelin','hgh'].includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'GH peptides + exogenous HGH',msg:'Running GH secretagogues alongside exogenous HGH can over-stimulate the axis. Monitor IGF-1. Consider discontinuing CJC/IPA when HGH starts.'},
+  {id:'healing-blend-overlap',check:function(p){var ids=p.map(function(x){return x.id;});var blends=['glow','glow-1','klow','bpc-tb'];return blends.filter(function(b){return ids.includes(b);}).length>1;},getConflicting:function(p){var blends=['glow','glow-1','klow','bpc-tb'];return p.filter(function(x){return blends.includes(x.id);}).map(function(x){return x.id;});},level:'err',title:'Multiple healing blends — redundant',msg:'Glow, Klow and BPC+TB blends all share BPC-157 and/or TB-500 and/or GHK-Cu. Running more than one doubles these compounds with no added benefit. Pick one blend only.'},
+  {id:'healing-blend-component',check:function(p){var ids=p.map(function(x){return x.id;});var blends=['glow','glow-1','klow','bpc-tb'];var parts=['bpc157','tb500','ghkcu'];return blends.some(function(b){return ids.includes(b);})&&parts.some(function(c){return ids.includes(c);});},getConflicting:function(p){var blends=['glow','glow-1','klow','bpc-tb'];var parts=['bpc157','tb500','ghkcu'];return p.filter(function(x){return blends.includes(x.id)||parts.includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'Healing blend + standalone component — double dose',msg:'Your stack includes a healing blend (Glow/Klow/BPC+TB) that already contains BPC-157, TB-500 and/or GHK-Cu. Adding the individual peptide alongside doubles that compound with no benefit. Remove the standalone or use the blend alone.'},
+  {id:'cjc-ipa-double',check:function(p){var ids=p.map(function(x){return x.id;});return ids.includes('cjc-ipa')&&ids.includes('ipamorelin');},getConflicting:function(p){return p.filter(function(x){return['cjc-ipa','ipamorelin'].includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'CJC/IPA blend + standalone Ipamorelin',msg:'The CJC/IPA blend already includes Ipamorelin. Adding it separately doubles your Ipamorelin dose with no benefit. Use the blend alone, or build the stack from CJC-1295 (no DAC) + Ipamorelin separately.'},
 ];
 const RECON_DB={
   // GH Axis ─────────────────────────────────────────────────────────────────
@@ -1010,7 +1029,7 @@ function wizStep4(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var issues=checkStack(pepObjs);
   var hasErrors=issues.some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack..."><div class="wiz-section" style="margin-top:16px">Check</div>'+renderCheckResults(pepObjs);
+  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack..."><div class="wiz-section" style="margin-top:16px">Check</div>'+renderCheckResults(pepObjs,'wizinline');
   html+='<div class="wiz-section">Summary</div>';
   if(_wiz.peptides.length){
     _wiz.peptides.forEach(function(p){
@@ -1060,10 +1079,42 @@ function checkStack(peptides){
   return results;
 }
 // ── Render Check Stack results ───────────────────────────────────────────────
-function renderCheckResults(peptides){
+function renderCheckResults(peptides,toggleCtx){
   var issues=checkStack(peptides);
   if(!issues.length)return '<div class="rule-box ok"><div class="rule-title ok">✓ Stack looks clean</div><div class="rule-msg">No contraindications or redundancies detected.</div></div>';
-  return issues.map(function(i){return '<div class="rule-box '+i.level+'"><div class="rule-title '+i.level+'">'+(i.level==='err'?'⛔':'⚠️')+' '+i.title+'</div><div class="rule-msg">'+i.msg+'</div></div>';}).join('');
+  return issues.map(function(i){
+    var ruleObj=STACK_RULES.find(function(r){return r.id===i.id;});
+    var conflictHtml='';
+    if(toggleCtx&&ruleObj&&ruleObj.getConflicting){
+      var cids=ruleObj.getConflicting(peptides);
+      if(cids.length){
+        conflictHtml='<div class="conflict-peps">';
+        cids.forEach(function(cid){
+          var cat=PEPTIDE_CAT.find(function(c){return c.id===cid;});
+          var name=cat?cat.name:cid;
+          var dot=cat?cat.dot:'#888';
+          conflictHtml+='<div class="conflict-pep" onclick="_rcToggle(\''+toggleCtx+'\',\''+cid+'\')">'
+            +'<div class="conflict-chk"><svg width="11" height="9" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
+            +'<div style="width:7px;height:7px;border-radius:50%;background:'+dot+';flex-shrink:0"></div>'
+            +'<span style="font-size:13px;color:var(--text)">'+name+'</span>'
+            +'</div>';
+        });
+        conflictHtml+='<div style="font-size:11px;color:var(--muted2);margin-top:4px;">Uncheck one to remove it, then re-check</div></div>';
+      }
+    }
+    return '<div class="rule-box '+i.level+'"><div class="rule-title '+i.level+'">'+(i.level==='err'?'⛔':'⚠️')+' '+i.title+'</div><div class="rule-msg">'+i.msg+'</div>'+conflictHtml+'</div>';
+  }).join('');
+}
+function _rcToggle(ctx,id){
+  if(!_wiz||!_wiz.peptides)return;
+  var idx=_wiz.peptides.findIndex(function(p){return p.id===id;});
+  if(idx!==-1)_wiz.peptides.splice(idx,1);
+  if(ctx==='wizpopup'&&window._wizCheckSheet){
+    var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
+    window._wizCheckSheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
+  } else {
+    wizRender();
+  }
 }
 // ── Save protocol to backend ─────────────────────────────────────────────────
 async function saveProtocolToBackend(proto){
@@ -1083,6 +1134,53 @@ function showCheckPanel(){
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:80vh;overflow-y:auto;';
   sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+}
+// ── Peptide info card (pokemon style) ────────────────────────────────────────
+function showPeptideCard(id){
+  var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});if(!cat)return;
+  var dot=cat.dot||'#888';
+  var GOAL_ICONS={muscle:'💪',recovery:'🩹',skin:'✨',fat:'🔥',cognitive:'🧠',antiaging:'⏳',trt:'⚡'};
+  var goalsHtml=(cat.goals||[]).map(function(g){return'<div class="pcard-goal" style="background:'+dot+'22;border-color:'+dot+'44;color:'+dot+'">'+(GOAL_ICONS[g]||'')+' '+(g.charAt(0).toUpperCase()+g.slice(1))+'</div>';}).join('');
+  var userPep=_userProtocol&&_userProtocol.peptides?_userProtocol.peptides.find(function(p){return p.id===id;}):null;
+  var myDoseHtml='';
+  if(userPep){
+    var parts=[];if(userPep.dose_am)parts.push('AM '+userPep.dose_am+(userPep.unit_am||''));if(userPep.dose_pm)parts.push('PM '+userPep.dose_pm+(userPep.unit_pm||''));
+    if(parts.length)myDoseHtml='<div class="pcard-stat"><div class="pcard-lbl">Your dose</div><div class="pcard-val" style="color:'+dot+'">'+parts.join(' · ')+'</div></div>';
+  }
+  var overlay=document.createElement('div');
+  overlay.className='pcard-overlay';
+  overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
+  var sheet=document.createElement('div');
+  sheet.className='pcard-sheet';
+  var sheen='<div style="position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,0.05) 0%,transparent 50%,rgba(255,255,255,0.02) 100%);pointer-events:none;z-index:1;border-radius:18px;"></div>';
+  sheet.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:2px;color:var(--muted2);text-transform:uppercase;">PEPTIDE INFO</div>'
+    +'<button onclick="this.closest(\'.pcard-overlay\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1;">×</button>'
+    +'</div>'
+    +'<div class="pcard" style="background:linear-gradient(145deg,'+dot+'18,#0d0d0d 65%);border:1px solid '+dot+'44;">'
+    +sheen
+    +'<div class="pcard-hdr">'
+    +'<div><div class="pcard-name">'+cat.name+'</div><div style="font-size:10px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:3px;">'+cat.group+'</div></div>'
+    +(cat.sku?'<div style="font-size:10px;font-weight:700;letter-spacing:1.5px;border:1px solid '+dot+'55;border-radius:10px;padding:2px 9px;color:'+dot+';">'+cat.sku+'</div>':'')
+    +'</div>'
+    +'<div class="pcard-img" style="background:linear-gradient(135deg,'+dot+'0a,'+dot+'22);border-color:'+dot+'33;">'
+    +'<div class="pcard-icon" style="background:'+dot+'22;border-color:'+dot+'66;">💉</div>'
+    +(cat.price?'<div style="position:absolute;bottom:10px;left:14px;font-size:12px;font-weight:600;color:var(--accent3);">'+cat.price+'</div>':'')
+    +'<div style="position:absolute;top:9px;right:12px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:2px 8px;border-radius:10px;background:'+dot+'33;color:'+dot+';border:1px solid '+dot+'55;">'+cat.group+'</div>'
+    +'</div>'
+    +'<div class="pcard-stats">'
+    +myDoseHtml
+    +(cat.dflt&&cat.dflt.times?'<div class="pcard-stat"><div class="pcard-lbl">Timing</div><div class="pcard-val">'+cat.dflt.times.join(' + ')+'</div></div>':'')
+    +(cat.dflt&&cat.dflt.doseAm?'<div class="pcard-stat"><div class="pcard-lbl">Typical AM</div><div class="pcard-val" style="color:'+dot+';">'+cat.dflt.doseAm+' '+cat.dflt.unitAm+'</div></div>':'')
+    +(cat.dflt&&cat.dflt.dosePm?'<div class="pcard-stat"><div class="pcard-lbl">Typical PM</div><div class="pcard-val" style="color:'+dot+';">'+cat.dflt.dosePm+' '+cat.dflt.unitPm+'</div></div>':'')
+    +(cat.cg&&cat.cg.length?'<div class="pcard-stat"><div class="pcard-lbl">Class</div><div class="pcard-val">'+cat.cg.map(function(c){return c.toUpperCase();}).join(', ')+'</div></div>':'')
+    +'<div class="pcard-goals">'+goalsHtml+'</div>'
+    +'</div>'
+    +'<div class="pcard-desc">'+cat.desc+'</div>'
+    +'</div>';
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -1148,13 +1246,14 @@ function wizTogglePep(id){
 }
 
 function wizShowCheck(){
-  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var overlay=document.createElement('div');
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:400;display:flex;align-items:flex-end;justify-content:center;';
-  overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
+  overlay.onclick=function(e){if(e.target===overlay){overlay.remove();window._wizCheckSheet=null;}};
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:70vh;overflow-y:auto;';
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">x</button></div>'+renderCheckResults(pepObjs);
+  window._wizCheckSheet=sheet;
+  var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -1209,7 +1308,7 @@ function wizStepReview(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var issues=checkStack(pepObjs);
   var hasErrors=issues.some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack..."><div class="wiz-section" style="margin-top:16px">Stack Check</div>'+renderCheckResults(pepObjs);
+  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack..."><div class="wiz-section" style="margin-top:16px">Stack Check</div>'+renderCheckResults(pepObjs,'wizinline');
   html+='<div class="wiz-section">Summary</div>';
   if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';});}
   else{html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
@@ -1259,8 +1358,8 @@ function saveWeightFromInput(){
   }
 }
 function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();initTabVis();}
-function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(function(dose){if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(function(t){if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){showDayInline(dd,ee);};})(d,el);const dotHtml=[...new Set(dots)].slice(0,3).map(function(col){return '<div class="week-dot" style="background:'+col+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
-function buildToday(){const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(!d.dow.includes(TODAY_DOW))return;if(d.startDate&&NOW<d.startDate)return;if(d.endDate&&NOW>d.endDate)return;doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron '+t.dose,detail:t.label+' — '+(t.route==='IM'?'IM deltoid':'27G×12mm SC, 18G filter'),time:null,dot:'#c084fc'});});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(function(dose){var isChk=checked.includes(dose.id);if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=isChk?'':dose.dot;nameEl.textContent=dose.name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}item.onclick=function(){toggle(dose.id);};list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
+function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(function(dose){if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(function(t){if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){var _tb=document.getElementById('tab-btn-today');if(_tb)switchTab('today',_tb);showDayInline(dd,ee);};})(d,el);const dotHtml=[...new Set(dots)].slice(0,3).map(function(col){return '<div class="week-dot" style="background:'+col+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
+function buildToday(){const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(!d.dow.includes(TODAY_DOW))return;if(d.startDate&&NOW<d.startDate)return;if(d.endDate&&NOW>d.endDate)return;doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron '+t.dose,detail:t.label+' — '+(t.route==='IM'?'IM deltoid':'27G×12mm SC, 18G filter'),time:null,dot:'#c084fc'});});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(function(dose){var isChk=checked.includes(dose.id);if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=isChk?'':dose.dot;nameEl.textContent=dose.name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}item.onclick=function(){toggle(dose.id);};var _bci=dose.id.substring(0,dose.id.lastIndexOf('_'));var _bcp=PEPTIDE_CAT.find(function(c){return c.id===_bci;});if(_bcp){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(_bci));item.appendChild(_bib);}list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
 function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);if(window._peptideLog){var _pe=window._peptideLog.find(function(e){return e.date===dk;});if(_pe)_pe.doses=chk.slice();else window._peptideLog.push({date:dk,doses:chk.slice()});}syncDayToAgent(dk,chk);if(_viewDate){const activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}
 async function syncDayToAgent(date,doses){try{const r=await fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({date,doses})});if(!r.ok)console.error('syncDayToAgent failed',r.status);}catch(e){console.error('syncDayToAgent error',e);}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN}});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
@@ -1347,6 +1446,7 @@ function showDayInline(date,tileEl){
     main.appendChild(nameEl);main.appendChild(detailEl);
     item.appendChild(box);item.appendChild(main);
     if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}
+    var _sdi=realId.substring(0,realId.lastIndexOf('_'));var _sdp=PEPTIDE_CAT.find(function(c){return c.id===_sdi;});if(_sdp){var _sdib=document.createElement('button');_sdib.className='info-btn';_sdib.textContent='ℹ';(function(_id){_sdib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(_sdi));item.appendChild(_sdib);}
     list.appendChild(item);
   });
   badge.textContent=label;
