@@ -365,6 +365,14 @@ const TESTO=[
   {date:new Date(2026,4,21),label:'Injection 4',dose:'125mg',route:'SC'},
   {date:new Date(2026,4,26),label:'Injection 5',dose:'125mg',route:'SC'},
 ];
+const TRT_CAT=[
+  {id:'nebido',     name:'Nebido',                sub:'Testosterone Undecanoate 1000mg/4ml',dot:'#e8a020',defaultDose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'},
+  {id:'testoviron', name:'Testoviron Depot',       sub:'Testosterone Enanthate 250mg/ml',   dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks'},
+  {id:'enanthate',  name:'Testosterone Enanthate', sub:'Generic / Jenapharm',               dot:'#e07040',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks'},
+  {id:'cypionate',  name:'Testosterone Cypionate', sub:'Depo-Testosterone',                 dot:'#e06030',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks'},
+  {id:'propionate', name:'Testosterone Propionate',sub:'Short-acting ester',                dot:'#c040c0',defaultDose:'50',  unit:'mg',freqVal:2, freqUnit:'days'},
+  {id:'sustanon',   name:'Sustanon 250',           sub:'Mixed ester blend',                 dot:'#4080e0',defaultDose:'250', unit:'mg',freqVal:3, freqUnit:'weeks'},
+];
 const MILESTONES=[
   {date:new Date(2026,3,2), name:'Nebido #1',desc:'1000 mg IM — first injection'},
   {date:new Date(2026,4,4), name:'Testoviron #1',desc:'250 mg IM — bridge begins (Lagos)'},
@@ -388,7 +396,7 @@ let _viewDate=null;
 let _syncPending=true;
 let _userProtocol=null;
 let _protocolLoaded=false;
-let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false};
+let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false};
 var _wizOverlay=null;
 let _userStacks=[];let _activeStackIndex=0;let _stacksLoaded=false;
 let _reconStackIdx=0;let _reconState={};
@@ -657,7 +665,7 @@ function buildStackStore(){
   for(var i=0;i<Math.min(_userStacks.length,SLOTS);i++){
     var st=_userStacks[i];
     var pCount=st.peptides?st.peptides.length:0;
-    var hasTrt=st.trt&&st.trt.compound;
+    var hasTrt=st.trt&&(st.trt.compound||(st.trt.compounds&&st.trt.compounds.length));
     var isActive=i===_activeStackIndex;
     html+='<div class="stack-card'+(isActive?' active':'')+'" onclick="viewStack('+i+')">';
     html+='<div class="stack-card-header">';
@@ -716,7 +724,7 @@ async function saveUserWeight(weight){
 var CYCLE_WEEKS=[3,6,9,12,15,18,21];
 // ── Updated wizard init with cycle_length ──────────────────────────────────
 function initWizard(){
-  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compound:'',injections:[]},editMode:false,stackIndex:-1,stackName:'Cycle 1',cycle_length:12};
+  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:'Cycle 1',cycle_length:12};
 }
 function editStackWithCycle(idx){
   if(idx<0||idx>=_userStacks.length)return;
@@ -725,7 +733,7 @@ function editStackWithCycle(idx){
     step:0,
     goals:st.peptides?st.peptides.map(function(p){var cat=PEPTIDE_CAT.find(function(c){return c.id===p.id;});return cat?cat.goals:[]}).flat().filter(function(v,i,a){return a.indexOf(v)===i;}):[],
     peptides:st.peptides?st.peptides.map(function(p){return JSON.parse(JSON.stringify(p))}):[],
-    trt:st.trt?JSON.parse(JSON.stringify(st.trt)):{enabled:false,compound:'',injections:[]},
+    trt:st.trt?JSON.parse(JSON.stringify(st.trt)):{enabled:false,compounds:[]},
     editMode:true,
     stackIndex:idx,
     stackName:st.name||'Stack '+(idx+1),
@@ -882,13 +890,14 @@ function renderStackEditor(){
         html+='</div>';
       });
     }
-    if(st.trt&&st.trt.enabled&&st.trt.compound){
+    _trtCompounds(st.trt).forEach(function(c){
+      var dot=c.dot||'var(--accent4)';
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
-      html+='<div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0;"></div>';
-      html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(st.trt.compound)+'</div>';
-      html+='<div style="font-size:12px;color:var(--muted2);">TRT</div>';
+      html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
+      html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name)+'</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT')+'</div>';
       html+='</div>';
-    }
+    });
     html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
     html+='<button onclick="buildStackStore()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
     html+='<button onclick="_editReadOnly=false;renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
@@ -919,12 +928,13 @@ function renderStackEditor(){
   if(!st.peptides||!st.peptides.length){
     html+='<div style="color:var(--muted2);font-size:13px;padding:16px 0;text-align:center;">No peptides — tap + Add to get started.</div>';
   }else{st.peptides.forEach(function(p,pi){html+=_renderEditPep(p,pi);});}
-  if(st.trt&&st.trt.enabled&&st.trt.compound){
+  _trtCompounds(st.trt).forEach(function(c){
+    var dot=c.dot||'var(--accent4)';
     html+='<div class="cfg-block" style="margin-top:8px;display:flex;align-items:center;gap:10px;">';
-    html+='<div style="width:9px;height:9px;border-radius:50%;background:var(--accent4);flex-shrink:0;"></div>';
-    html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(st.trt.compound)+'</div>';
-    html+='<div style="font-size:12px;color:var(--muted2);">'+(st.trt.injections?st.trt.injections.length+' inj':'TRT')+'</div></div>';
-  }
+    html+='<div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
+    html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name)+'</div>';
+    html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT')+'</div></div>';
+  });
   html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
   html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Cancel</button>';
   html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Stack</button>';
@@ -1044,9 +1054,9 @@ function wizStep4(body,footer){
   } else {
     html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';
   }
-  if(_wiz.trt&&_wiz.trt.enabled&&_wiz.trt.compound){
-    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_wiz.trt.compound+'</div><div style="font-size:12px;color:var(--muted2)">'+(_wiz.trt.injections?_wiz.trt.injections.length+' injections':'TRT')+'</div></div>';
-  }
+  _trtCompounds(_wiz.trt).forEach(function(c){
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT')+'</div></div>';
+  });
   body.innerHTML=html;
   var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
   footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Re-check</button><button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
@@ -1308,25 +1318,58 @@ function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot===
 function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.unit_am=val;else p.unit_pm=val;}
 function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
 
+// Returns a normalised array of compound objects from any trt shape (new or legacy)
+function _trtCompounds(trt){
+  if(!trt||!trt.enabled)return [];
+  if(trt.compounds&&trt.compounds.length)return trt.compounds;
+  if(trt.compound){return [{id:'',name:trt.compound,dot:'var(--accent4)',dose:'',unit:'mg',freqVal:0,freqUnit:'weeks'}];}
+  return [];
+}
 function wizStepTRT(body,footer){
   var trt=_wiz.trt;
+  if(!trt.compounds)trt.compounds=[];
+  var sel=trt.compounds;
+  var selIds=sel.map(function(c){return c.id;});
+  var hasNebido=selIds.includes('nebido');
+  var maxReached=hasNebido?(sel.length>=2):(sel.length>=1);
   var html='<div class="trt-toggle" onclick="wizToggleTRT()"><div class="trt-toggle-label">Add testosterone protocol</div><div class="toggle-sw'+(trt.enabled?' on':'')+'"></div></div>';
   if(trt.enabled){
-    html+='<div class="trt-form"><div class="cfg-lbl">Compound</div><input class="trt-in" type="text" value="'+String(trt.compound||'')+'" oninput="wizSetTRTCompound(this.value)" placeholder="e.g. Nebido, Testoviron, Enanthate"><div class="cfg-lbl" style="margin-top:8px">Injections</div>';
-    (trt.injections||[]).forEach(function(inj,i){html+='<div class="inj-row"><input type="date" value="'+String(inj.date||'')+'" onchange="wizSetInjDate('+i+',this.value)"><input type="text" value="'+String(inj.label||'')+'" oninput="wizSetInjLabel('+i+',this.value)" placeholder="Label"><input type="text" value="'+String(inj.dose||'')+'" oninput="wizSetInjDose('+i+',this.value)" placeholder="Dose e.g. 125mg" style="max-width:90px;"><button onclick="wizRemoveInj('+i+')">x</button></div>';});
-    html+='<button class="btn-check" style="width:100%;margin-top:4px" onclick="wizAddInj()">+ Add Injection</button></div>';
+    if(hasNebido&&sel.length===1){
+      html+='<div style="font-size:11px;color:var(--muted2);margin:8px 0 4px;">Nebido selected — you can add one short-acting compound for loading or bridging.</div>';
+    }
+    TRT_CAT.forEach(function(c){
+      var isSel=selIds.includes(c.id);
+      var disabled=!isSel&&maxReached;
+      html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('wizToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:8px;'+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
+    });
+    if(sel.length){
+      html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:8px">Dose & Frequency</div>';
+      sel.forEach(function(c){
+        var cat=TRT_CAT.find(function(t){return t.id===c.id;});
+        var dot=cat?cat.dot:'var(--accent4)';
+        html+='<div class="cfg-block" style="margin-bottom:10px;">';
+        html+='<div class="cfg-name"><div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0"></div>'+c.name+'</div>';
+        html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(c.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+['mg','ml','IU'].map(function(u){return'<option'+(u===(c.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+        html+='<div class="cfg-row"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(c.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(c.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(c.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';
+        html+='</div>';
+      });
+    }
   }
   body.innerHTML=html;
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
-
-function wizToggleTRT(){_wiz.trt.enabled=!_wiz.trt.enabled;wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetTRTCompound(v){_wiz.trt.compound=v;}
-function wizAddInj(){if(!_wiz.trt.injections)_wiz.trt.injections=[];_wiz.trt.injections.push({date:'',label:'Injection '+(_wiz.trt.injections.length+1),dose:''});wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizRemoveInj(i){_wiz.trt.injections.splice(i,1);wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetInjDate(i,v){_wiz.trt.injections[i].date=v;}
-function wizSetInjLabel(i,v){_wiz.trt.injections[i].label=v;}
-function wizSetInjDose(i,v){_wiz.trt.injections[i].dose=v;}
+function wizToggleTRT(){_wiz.trt.enabled=!_wiz.trt.enabled;if(!_wiz.trt.compounds)_wiz.trt.compounds=[];wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizToggleTRTCompound(id){
+  if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+  var idx=_wiz.trt.compounds.findIndex(function(c){return c.id===id;});
+  if(idx!==-1){_wiz.trt.compounds.splice(idx,1);}
+  else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_wiz.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose,unit:cat.unit,freqVal:cat.freqVal,freqUnit:cat.freqUnit});}
+  wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizSetTRTDose(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.dose=v;}
+function wizSetTRTUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function wizSetTRTFreq(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.freqVal=parseInt(v)||1;}
+function wizSetTRTFreqUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.freqUnit=v;}
 
 function wizStepReview(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
@@ -1335,7 +1378,7 @@ function wizStepReview(body,footer){
   html+='<div class="wiz-section" style="margin-top:16px">Summary</div>';
   if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';});}
   else{html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
-  if(_wiz.trt&&_wiz.trt.enabled&&_wiz.trt.compound){html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_wiz.trt.compound+'</div><div style="font-size:12px;color:var(--muted2)">'+(_wiz.trt.injections?_wiz.trt.injections.length+' injections':'TRT')+'</div></div>';}
+  _trtCompounds(_wiz.trt).forEach(function(c){html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT')+'</div></div>';});
   body.innerHTML=html;
   var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
