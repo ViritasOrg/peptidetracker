@@ -514,6 +514,8 @@ const RECON_DB={
   // hcg: 5000IU/1ml=5000IU/ml → 500IU=0.1ml=10 IU ✓
   'hcg':        {vials:[5000,10000],water:[1],unit:'IU',defaultVi:0,defaultWi:0,notes:'1 ml BAC water per 5000 IU vial. Use within 30 days of reconstitution.'},
 };
+// Returns dose string with secondary unit computed from RECON_DB (mg→IU, ml→mg+IU)
+function _doseLabel(pepId,doseVal,unit){var d=parseFloat(doseVal);if(!pepId||!doseVal||isNaN(d)||d<=0)return(doseVal||'')+(unit||'');if(unit==='IU'||unit==='mcg')return doseVal+(unit||'');var rec=RECON_DB[pepId];if(!rec||rec.unit==='IU')return doseVal+(unit||'');var vi=rec.defaultVi!==undefined?rec.defaultVi:0;var wi=rec.defaultWi!==undefined?rec.defaultWi:0;var conc=(rec.vials||[])[vi]/((rec.water||[])[wi]);if(!conc||isNaN(conc))return doseVal+(unit||'');var extra='';if(unit==='mg'){var iu=Math.round(d/conc*100);if(iu>0)extra=' ('+iu+' IU)';}else if(unit==='ml'){var mg=Math.round(d*conc);var iu=Math.round(d*100);var p=[];if(mg>0)p.push(mg+'mg');if(iu>0)p.push(iu+' IU');if(p.length)extra=' ('+p.join(' · ')+')';}return doseVal+(unit||'')+extra;}
 // ── User protocol state ──────────────────────────────────────────────────────
 // ── Build WEEKLY from protocol ───────────────────────────────────────────────
 function buildWeeklyFromProtocol(proto){
@@ -893,8 +895,8 @@ function renderStackEditor(){
           html+='<button class="info-btn" onclick="showPeptideCard(\''+p.id+'\')">ℹ</button>';
           html+='</div>';
           var doseStr='';
-          if(p.dose_am)doseStr+='AM: '+_esc(p.dose_am)+(p.unit_am||'mcg');
-          if(p.dose_pm)doseStr+=(doseStr?' · ':'')+'PM: '+_esc(p.dose_pm)+(p.unit_pm||'mcg');
+          if(p.dose_am)doseStr+='AM: '+_esc(_doseLabel(p.id,p.dose_am,p.unit_am||'mcg'));
+          if(p.dose_pm)doseStr+=(doseStr?' · ':'')+'PM: '+_esc(_doseLabel(p.id,p.dose_pm,p.unit_pm||'mcg'));
           if(doseStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+doseStr+'</div>';
           if(daysStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+_esc(daysStr)+'</div>';
           if(p.start_date)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">Start: '+_esc(p.start_date)+'</div>';
@@ -1169,7 +1171,7 @@ function showPeptideCard(id){
   var userPep=_userProtocol&&_userProtocol.peptides?_userProtocol.peptides.find(function(p){return p.id===id;}):null;
   var myDoseHtml='';
   if(userPep){
-    var parts=[];if(userPep.dose_am)parts.push('AM: '+userPep.dose_am+(userPep.unit_am?' '+userPep.unit_am:''));if(userPep.dose_pm)parts.push('PM: '+userPep.dose_pm+(userPep.unit_pm?' '+userPep.unit_pm:''));
+    var parts=[];if(userPep.dose_am)parts.push('AM: '+_doseLabel(userPep.id,userPep.dose_am,userPep.unit_am||'mcg'));if(userPep.dose_pm)parts.push('PM: '+_doseLabel(userPep.id,userPep.dose_pm,userPep.unit_pm||'mcg'));
     if(parts.length)myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:4px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div><div style="font-size:13px;color:var(--text);">'+parts.join(' · ')+'</div></div>';
   }
   var benefitsHtml=(cat.benefits||[]).map(function(b){return'<li>'+b+'</li>';}).join('');
