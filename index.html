@@ -887,7 +887,8 @@ function renderStackEditor(){
         st.peptides.forEach(function(p){
           var dot=p.dot||'#888';
           var dayLabels=['S','M','T','W','T','F','S'];
-          var daysStr=(p.days||[]).map(function(d){return dayLabels[d];}).join(' ');
+          var sortedDays=(p.days||[]).slice().sort(function(a,b){return(a+6)%7-(b+6)%7;});
+          var daysStr=sortedDays.map(function(d){return dayLabels[d];}).join(' ');
           html+='<div class="cfg-block" style="margin-bottom:8px;">';
           html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">';
           html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
