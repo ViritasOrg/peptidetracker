@@ -1570,11 +1570,12 @@ function saveWeightFromInput(){
 }
 var _obStep=0;var _obData={sex:null,height:'',weight:'',theme:3};
 function obInit(){
+  var _hasHistory=Object.keys(localStorage).some(function(k){return k.startsWith('proto-chk-');});
   var savedTheme=getData('pep-theme',null);
   if(savedTheme)_obData.theme=savedTheme;
-  else{var _hd=Object.keys(localStorage).some(function(k){return k.startsWith('proto-chk-');});_obData.theme=_hd?1:3;}
+  else{_obData.theme=_hasHistory?1:3;}
   var profile=getData('pep-profile',null);
-  if(profile&&profile.onboarded)return;
+  if((profile&&profile.onboarded)||_hasHistory)return;
   var overlay=document.getElementById('onboarding-overlay');
   if(!overlay)return;
   overlay.classList.remove('hidden');_obStep=0;obRender();
