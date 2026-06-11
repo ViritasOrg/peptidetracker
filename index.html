@@ -12,7 +12,7 @@
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
   :root{--bg:#0a0a0a;--surface:#131313;--surface2:#1c1c1c;--border:#2a2a2a;--accent:#e8ff3c;--accent2:#ff6b2b;--accent3:#3cffa0;--accent4:#c084fc;--text:#f0f0f0;--muted:#555;--muted2:#888;--danger:#ff3c3c;--warning:#ffb03c;}
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
-  html,body{background:#0a0a0a !important;color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;margin:0;padding:0;}
+  html,body{background:var(--bg) !important;color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;margin:0;padding:0;}
   body.locked{overflow:hidden;height:100vh;}
   #signin-screen{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;}
   #signin-screen.hidden{display:none;}
@@ -226,6 +226,26 @@
   .conflict-peps{margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;}
   .conflict-pep{display:flex;align-items:center;gap:10px;padding:5px 0;cursor:pointer;user-select:none;}
   .conflict-chk{width:20px;height:20px;border-radius:5px;background:var(--accent3);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  #onboarding-overlay{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;flex-direction:column;overflow:hidden;}
+  #onboarding-overlay.hidden{display:none;}
+  .ob-header{padding:20px 20px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+  .ob-dots{display:flex;gap:6px;align-items:center;}
+  .ob-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all 0.2s;}
+  .ob-dot.active{background:var(--accent);width:18px;border-radius:3px;}
+  .ob-dot.done{background:var(--accent);opacity:0.5;}
+  .ob-body{flex:1;overflow-y:auto;padding:24px 20px;-webkit-overflow-scrolling:touch;}
+  .ob-footer{padding:16px 20px 32px;display:flex;gap:10px;flex-shrink:0;}
+  .ob-next{flex:1;padding:14px;background:var(--accent);color:#000;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:0.3px;}
+  .ob-back{padding:14px 18px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:20px;cursor:pointer;line-height:1;}
+  .ob-skip{padding:14px 10px;background:transparent;color:var(--muted);border:none;font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;}
+  .ob-theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .ob-theme-card{border-radius:12px;padding:12px;cursor:pointer;position:relative;transition:border-color 0.15s;}
+  .ob-field{margin-bottom:18px;}
+  .ob-field label{display:block;font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;}
+  .ob-field input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px;color:var(--text);font-family:'DM Sans',sans-serif;outline:none;transition:border-color 0.2s;}
+  .ob-field input:focus{border-color:var(--accent);}
+  .ob-gender-btn{flex:1;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--muted);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s;}
+  .ob-gender-btn.ob-sel{border-color:var(--accent);color:var(--accent);background:var(--surface2);}
 </style>
 </head>
 <body>
@@ -330,6 +350,7 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Sync</span><span style="display:flex;align-items:center;gap:8px;font-size:13px;"><span class="agent-dot" id="s-sync-dot"></span><span id="s-sync-label">Checking…</span></span></div>
     </div>
     <div id="s-tabs-card" style="margin-top:14px"></div>
+    <div id="s-appearance-card" style="margin-top:14px"></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
       <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;">Data</div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Dose logs — local</span><span style="font-size:13px;" id="s-local-doses">—</span></div>
@@ -339,7 +360,8 @@
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
       <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;">App</div>
-      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Version</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;color:var(--accent);" id="s-version">—</span><button id="s-update-btn" onclick="checkForUpdate()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Check</button></span></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Version</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;color:var(--accent);" id="s-version">—</span><button id="s-update-btn" onclick="checkForUpdate()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Check</button></span></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Setup Wizard</span><button onclick="openOnboarding()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Re-run</button></div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
       <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;">Account</div>
@@ -348,6 +370,17 @@
     </div>
   </div>
   <div class="content hidden" id="tab-recon"><div id="recon-body"></div></div>
+</div>
+<div id="onboarding-overlay" class="hidden">
+  <div class="ob-header">
+    <div class="ob-dots" id="ob-dots"></div>
+    <button class="ob-skip" id="ob-skip-btn" onclick="obSkip()">Skip</button>
+  </div>
+  <div class="ob-body" id="ob-body"></div>
+  <div class="ob-footer">
+    <button class="ob-back" id="ob-back" style="display:none" onclick="obBack()">‹</button>
+    <button class="ob-next" id="ob-next" onclick="obNext()">Get Started</button>
+  </div>
 </div>
 <script>
 const VERSION='1.154';
@@ -412,6 +445,14 @@ let _tabVis={};let _currentTab='today';
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';const WEIGHTS_TOKEN='10vtu';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}if(_googleToken){unlockApp();}else{const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);}
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+const THEMES=[
+  {id:1,name:'VOLTAGE',label:'Dark Yellow',vars:{bg:'#0a0a0a',surface:'#131313',surface2:'#1c1c1c',border:'#2a2a2a',accent:'#e8ff3c',accent2:'#ff6b2b',accent3:'#3cffa0',accent4:'#c084fc',text:'#f0f0f0',muted:'#555',muted2:'#888',danger:'#ff3c3c',warning:'#ffb03c'},preview:['#e8ff3c','#ff6b2b','#3cffa0']},
+  {id:2,name:'ROSE',label:'Pink & Blush',vars:{bg:'#FDFBFC',surface:'#FFFFFF',surface2:'#F4E8EE',border:'#E9E1E5',accent:'#D7A9BC',accent2:'#C492A7',accent3:'#5B8C6E',accent4:'#9B5FB5',text:'#433D42',muted:'#726A70',muted2:'#9A9097',danger:'#C4627A',warning:'#C27C2A'},preview:['#D7A9BC','#C492A7','#E6C8D4']},
+  {id:3,name:'FOREST',label:'Sage & Earth',vars:{bg:'#F3F6F2',surface:'#FFFFFF',surface2:'#B6C3B0',border:'#D9E1D8',accent:'#4A6B57',accent2:'#3B5445',accent3:'#7F9D86',accent4:'#7B5DB5',text:'#27322A',muted:'#5A6A60',muted2:'#7A8A80',danger:'#A05252',warning:'#8B6B2A'},preview:['#4A6B57','#7F9D86','#B6C3B0']},
+  {id:4,name:'EARTH',label:'Warm Earth',vars:{bg:'#F6F1EC',surface:'#FFFFFF',surface2:'#C9B7A6',border:'#E3D7CE',accent:'#7A5C48',accent2:'#5F4637',accent3:'#9C7B63',accent4:'#8B5E9C',text:'#2E2622',muted:'#5E524B',muted2:'#7E726B',danger:'#A04040',warning:'#8B6620'},preview:['#7A5C48','#9C7B63','#C9B7A6']}
+];
+function applyTheme(id){var t=THEMES.find(function(x){return x.id===id;})||THEMES[0];var r=document.documentElement.style;Object.entries(t.vars).forEach(function(e){r.setProperty('--'+e[0],e[1]);});setData('pep-theme',id);}
+(function(){var _st=getData('pep-theme',null);if(_st){applyTheme(_st);}else{var _hasData=Object.keys(localStorage).some(function(k){return k.startsWith('proto-chk-');});applyTheme(_hasData?1:3);}})();
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
 async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();weights=remote.sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){weights=getData('weight_log',[]);}}
 async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();}catch(e){}}
@@ -420,7 +461,7 @@ async function deleteBodyCompFromAgent(date){try{await fetch(AGENT_URL+"/bodycom
 function getWeightForDate(dateStr){if(!weights.length)return null;const target=new Date(dateStr.replace(/-/g,'/'));let best=null,bestDiff=Infinity;for(const w of weights){const diff=Math.abs(target-new Date(w.date.replace(/-/g,'/')));if(diff<bestDiff){bestDiff=diff;best=w.weight;}}return bestDiff<=7*86400000?best:null;}
 function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='stack')buildStackStore();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');}}
 function logout(){_googleToken='';localStorage.removeItem('google_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}buildTabsSettingsCard();checkForUpdate();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}buildTabsSettingsCard();buildAppearanceCard();checkForUpdate();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}const token=WEIGHTS_TOKEN;fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':token}}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'Content-Type':'application/json','x-app-token':token},body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
 async function pushMilestonesToBackend(){const btn=document.getElementById('s-milestones-btn');if(btn){btn.textContent='Pushing…';btn.disabled=true;}const colorMap=[['nebido','#c084fc'],['testoviron','#c084fc'],['trt','#c084fc'],['glow','#3b9eff'],['blood','#ff6b2b'],['panel','#ff6b2b'],['hgh','#3cffa0']];function _mc(name){const n=name.toLowerCase();for(const[kw,col]of colorMap)if(n.includes(kw))return col;return'#e8ff3c';}const milestones=MILESTONES.map(m=>{const d=m.date;const date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');return{date,label:m.name,color:_mc(m.name),desc:m.desc||''};});try{const r=await fetch(AGENT_URL+'/stack-milestones/custom',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({milestones})});if(!r.ok)throw new Error('HTTP '+r.status);const res=await r.json();const el=document.getElementById('s-milestones-count');if(el)el.textContent=res.stored+' pushed ✓';if(btn){btn.textContent='Done';setTimeout(()=>{btn.textContent='Push';btn.disabled=false;},2500);}}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;}}}
 function dateKey(d){return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
@@ -1527,7 +1568,124 @@ function saveWeightFromInput(){
     setTimeout(function(){inp.style.borderColor='var(--border)';},1500);
   }
 }
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();initTabVis();(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_lt!=='settings'&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);}})();}
+var _obStep=0;var _obData={sex:null,height:'',weight:'',theme:3};
+function obInit(){
+  var savedTheme=getData('pep-theme',null);
+  if(savedTheme)_obData.theme=savedTheme;
+  else{var _hd=Object.keys(localStorage).some(function(k){return k.startsWith('proto-chk-');});_obData.theme=_hd?1:3;}
+  var profile=getData('pep-profile',null);
+  if(profile&&profile.onboarded)return;
+  var overlay=document.getElementById('onboarding-overlay');
+  if(!overlay)return;
+  overlay.classList.remove('hidden');_obStep=0;obRender();
+}
+function openOnboarding(){
+  var overlay=document.getElementById('onboarding-overlay');
+  if(!overlay)return;
+  overlay.classList.remove('hidden');_obStep=0;obRender();
+}
+function obRender(){
+  var body=document.getElementById('ob-body');
+  var nextBtn=document.getElementById('ob-next');
+  var backBtn=document.getElementById('ob-back');
+  var skipBtn=document.getElementById('ob-skip-btn');
+  var dotsEl=document.getElementById('ob-dots');
+  if(!body)return;
+  var total=3;
+  var dots='';for(var i=0;i<total;i++){dots+='<div class="ob-dot '+(i<_obStep?'done':i===_obStep?'active':'')+'"></div>';}
+  dotsEl.innerHTML=dots;
+  backBtn.style.display=_obStep===0?'none':'';
+  skipBtn.style.display=_obStep===total-1?'none':'';
+  nextBtn.textContent=_obStep===0?'Get Started':_obStep===total-1?"Let's go!":'Continue';
+  var html='';
+  if(_obStep===0)html=_obHtml0();
+  else if(_obStep===1)html=_obHtml1();
+  else html=_obHtml2();
+  body.innerHTML=html;
+}
+function _obHtml0(){
+  return '<div style="text-align:center;padding:40px 0 28px">'
+    +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:13px;letter-spacing:3px;color:var(--muted);margin-bottom:10px">WELCOME TO</div>'
+    +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:54px;letter-spacing:3px;color:var(--accent);line-height:1">HENRIK\'S<br>PROTOCOL</div>'
+    +'<div style="margin:18px auto 0;width:40px;height:2px;background:var(--accent);border-radius:1px;opacity:0.5"></div></div>'
+    +'<p style="font-size:15px;color:var(--text);line-height:1.7;margin-bottom:14px">Your personalised peptide protocol tracker.</p>'
+    +'<p style="font-size:13px;color:var(--muted);line-height:1.6">We\'ll pick a colour theme and collect a few stats for body composition tracking.</p>';
+}
+function _obHtml1(){
+  var html='<div style="margin-bottom:20px">'
+    +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:30px;letter-spacing:1px;color:var(--text)">Choose Your Theme</div>'
+    +'<div style="font-size:13px;color:var(--muted);margin-top:4px">You can change this anytime in Settings.</div></div>'
+    +'<div class="ob-theme-grid">';
+  THEMES.forEach(function(t){
+    var sel=_obData.theme===t.id;
+    html+='<div class="ob-theme-card" style="background:'+t.vars.bg+';border:2px solid '+(sel?t.vars.accent:'rgba(128,128,128,0.2)')+'" onclick="obSelectTheme('+t.id+')">'
+      +(sel?'<div style="position:absolute;top:8px;right:8px;width:20px;height:20px;border-radius:50%;background:'+t.vars.accent+';display:flex;align-items:center;justify-content:center;font-size:10px;color:'+t.vars.bg+';font-weight:700">✓</div>':'')
+      +'<div style="height:44px;background:'+t.vars.surface+';border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px">'
+      +t.preview.map(function(c){return'<div style="width:14px;height:14px;border-radius:50%;background:'+c+'"></div>';}).join('')
+      +'</div>'
+      +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:16px;letter-spacing:1px;color:'+t.vars.accent+'">'+t.name+'</div>'
+      +'<div style="font-size:11px;margin-top:2px;color:'+t.vars.muted+'">'+t.label+'</div>'
+      +'</div>';
+  });
+  return html+'</div>';
+}
+function _obHtml2(){
+  var g=_obData.sex;
+  return '<div style="margin-bottom:20px">'
+    +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:30px;letter-spacing:1px;color:var(--text)">Your Stats</div>'
+    +'<div style="font-size:13px;color:var(--muted);margin-top:4px">Used for body composition calculations.</div></div>'
+    +'<div class="ob-field"><label>Biological Sex</label>'
+    +'<div style="display:flex;gap:10px">'
+    +'<button class="ob-gender-btn'+(g==='male'?' ob-sel':'')+'" onclick="obSetSex(\'male\')">♂ Male</button>'
+    +'<button class="ob-gender-btn'+(g==='female'?' ob-sel':'')+'" onclick="obSetSex(\'female\')">♀ Female</button>'
+    +'</div></div>'
+    +'<div class="ob-field"><label>Height (cm)</label>'
+    +'<input type="number" placeholder="180" min="100" max="250" value="'+(_obData.height||'')+'" oninput="_obData.height=this.value"></div>'
+    +'<div class="ob-field"><label>Body Weight (kg)</label>'
+    +'<input type="number" placeholder="85" min="30" max="300" step="0.1" value="'+(_obData.weight||'')+'" oninput="_obData.weight=this.value"></div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-top:-6px;line-height:1.5">All fields optional — skip if you prefer.</div>';
+}
+function obSelectTheme(id){_obData.theme=id;applyTheme(id);obRender();}
+function obSetSex(g){
+  _obData.sex=g;
+  document.querySelectorAll('.ob-gender-btn').forEach(function(b){
+    b.classList.toggle('ob-sel',(g==='male'&&b.textContent.indexOf('Male')>-1)||(g==='female'&&b.textContent.indexOf('Female')>-1));
+  });
+}
+function obNext(){if(_obStep===2){obFinish();return;}_obStep++;obRender();}
+function obBack(){if(_obStep===0)return;_obStep--;obRender();}
+function obSkip(){obFinish();}
+function obFinish(){
+  var profile={sex:_obData.sex,height:_obData.height?parseFloat(_obData.height):null,weight:_obData.weight?parseFloat(_obData.weight):null,onboarded:true};
+  setData('pep-profile',profile);
+  if(_obData.sex)setBioSex(_obData.sex);
+  if(profile.height){localStorage.setItem('user_height',String(profile.height));var hi=document.getElementById('bc-height-in');if(hi)hi.value=profile.height;}
+  if(profile.weight){localStorage.setItem('user_weight',String(profile.weight));var wi=document.getElementById('bc-weight-in');if(wi)wi.value=profile.weight;}
+  var kv={};if(_obData.sex)kv['user_sex']=_obData.sex;if(profile.height)kv['user_height']=profile.height;if(profile.weight)kv['user_weight']=profile.weight;
+  if(Object.keys(kv).length)pushPepSettingsToAgent(kv);
+  document.getElementById('onboarding-overlay').classList.add('hidden');
+  buildAppearanceCard();
+}
+function buildAppearanceCard(){
+  var card=document.getElementById('s-appearance-card');if(!card)return;
+  var current=getData('pep-theme',1);
+  var tiles=THEMES.map(function(t){
+    var sel=current===t.id;
+    return'<div onclick="applyTheme('+t.id+');buildAppearanceCard();" style="border-radius:10px;padding:10px;cursor:pointer;background:'+t.vars.bg+';border:2px solid '+(sel?t.vars.accent:'rgba(128,128,128,0.15)')+';position:relative;">'
+      +(sel?'<div style="position:absolute;top:6px;right:6px;width:16px;height:16px;border-radius:50%;background:'+t.vars.accent+';display:flex;align-items:center;justify-content:center;font-size:9px;color:'+t.vars.bg+';font-weight:700">✓</div>':'')
+      +'<div style="height:36px;background:'+t.vars.surface+';border-radius:6px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px">'
+      +t.preview.map(function(c){return'<div style="width:11px;height:11px;border-radius:50%;background:'+c+'"></div>';}).join('')
+      +'</div>'
+      +'<div style="font-family:\'Bebas Neue\',sans-serif;font-size:14px;letter-spacing:1px;color:'+t.vars.accent+'">'+t.name+'</div>'
+      +'<div style="font-size:10px;color:'+t.vars.muted+'">'+t.label+'</div>'
+      +'</div>';
+  }).join('');
+  card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    +'<div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;">Appearance</div>'
+    +'<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">'+tiles+'</div>'
+    +'</div>';
+}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();initTabVis();obInit();(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_lt!=='settings'&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);}})();}
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(function(dose){if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(function(t){if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){var _tb=document.getElementById('tab-btn-today');if(_tb)switchTab('today',_tb);showDayInline(dd,ee);};})(d,el);const dotHtml=[...new Set(dots)].slice(0,3).map(function(col){return '<div class="week-dot" style="background:'+col+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
 function buildToday(){const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";const _ci=document.getElementById('today-cycle-info');if(_ci){const _st=_userStacks[_activeStackIndex];const _cs=_st&&_st.cycle_start;const _cl=_st&&(_st.cycle_length||12);if(_cs&&_cl){const _sd=parseLocalDate(_cs);const _ed=new Date(_sd.getTime()+_cl*7*86400000);const _dd=Math.max(0,Math.floor((NOW-_sd)/86400000));const _wk=Math.min(_cl,Math.floor(_dd/7)+1);_ci.textContent='Started '+fmtDate(_sd)+' · Week '+_wk+' of '+_cl+' · Ends '+fmtDate(_ed);}else{_ci.textContent='';}}if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(!d.dow.includes(TODAY_DOW))return;if(d.startDate&&NOW<d.startDate)return;if(d.endDate&&NOW>d.endDate)return;doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron '+t.dose,detail:t.label+' — '+(t.route==='IM'?'IM deltoid':'27G×12mm SC, 18G filter'),time:null,dot:'#c084fc'});});_getDynamicTRTDoses(NOW,true).forEach(function(d){if(!doses.some(function(x){return x.id===d.id;}))doses.push(d);});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(function(dose){var isChk=checked.includes(dose.id);if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=dose.dot;nameEl.textContent=dose.name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}item.onclick=function(){toggle(dose.id);};var _bci=dose.id.substring(0,dose.id.lastIndexOf('_')).replace(/-am$|-pm$/,'');var _bcp=PEPTIDE_CAT.find(function(c){return c.id===_bci;});if(_bcp){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(_bci));item.appendChild(_bib);}list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
 function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);if(window._peptideLog){var _pe=window._peptideLog.find(function(e){return e.date===dk;});if(_pe)_pe.doses=chk.slice();else window._peptideLog.push({date:dk,doses:chk.slice()});}syncDayToAgent(dk,chk);if(_viewDate){const activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}
