@@ -429,6 +429,47 @@ G.wizSave().then(async ()=>{
   check('migration: glow 0.09mg unit fixed → ml', G._userStacks[0].peptides[0].unit_am==='ml',  `got "${G._userStacks[0].peptides[0].unit_am}"`);
   check('migration: glow 0.09mg dose preserved',  G._userStacks[0].peptides[0].dose_am==='0.09',`got "${G._userStacks[0].peptides[0].dose_am}"`);
 
+  // ── TRT compound end_date auto-migration ─────────────────────────────────────
+  console.log('\n── TRT compound end_date auto-migration ─────────────────────');
+  {
+    // Stack with testoviron TRT compound and no end_date → should be auto-populated from TESTO
+    const trtMigStack = {
+      name: 'TRT Migration Test',
+      cycle_start: '2026-05-01',
+      trt: { enabled: true, compounds: [
+        { id: 'testoviron', name: 'Testoviron Depot', dose: '125', unit: 'mg', freqVal: 1, freqUnit: 'weeks' }
+      ]},
+      peptides: []
+    };
+    G.fetch = async () => ({ ok: true, json: async () => ({ stacks: [JSON.parse(JSON.stringify(trtMigStack))], active_index: 0 }) });
+    await G.loadUserStacks();
+    const migC = G._userStacks[0].trt.compounds[0];
+    check('TRT migration: testoviron end_date auto-set',            !!migC.end_date,                `end_date not set`);
+    check('TRT migration: end_date matches last TESTO date',        migC.end_date === '2026-05-26', `got ${migC.end_date}`);
+    // Existing end_date must not be overwritten
+    const trtMigExistingEnd = {
+      ...trtMigStack,
+      trt: { enabled: true, compounds: [
+        { id: 'testoviron', name: 'Testoviron Depot', dose: '125', unit: 'mg', freqVal: 1, freqUnit: 'weeks', end_date: '2026-06-01' }
+      ]}
+    };
+    G.fetch = async () => ({ ok: true, json: async () => ({ stacks: [JSON.parse(JSON.stringify(trtMigExistingEnd))], active_index: 0 }) });
+    await G.loadUserStacks();
+    const migC2 = G._userStacks[0].trt.compounds[0];
+    check('TRT migration: existing end_date not overwritten',       migC2.end_date === '2026-06-01', `got ${migC2.end_date}`);
+    // Other TRT compounds (Nebido) are unaffected
+    const trtNebidoStack = {
+      ...trtMigStack,
+      trt: { enabled: true, compounds: [
+        { id: 'nebido', name: 'Nebido', dose: '1000', unit: 'mg', freqVal: 12, freqUnit: 'weeks' }
+      ]}
+    };
+    G.fetch = async () => ({ ok: true, json: async () => ({ stacks: [JSON.parse(JSON.stringify(trtNebidoStack))], active_index: 0 }) });
+    await G.loadUserStacks();
+    const migC3 = G._userStacks[0].trt.compounds[0];
+    check('TRT migration: nebido end_date not set by migration',    !migC3.end_date,               `got ${migC3.end_date}`);
+  }
+
   // ── getChecked: old-style → canonical id mapping ──────────────────────────────
   console.log('\n── getChecked: id alias mapping ────────────────────────────');
   // Use a fixed date via _viewDate so we control the key (G.NOW is a const, not on sandbox)
@@ -621,6 +662,27 @@ G.wizSave().then(async ()=>{
     G._userStacks = [trtNoCycle];
     const rNoCycle = G._getDynamicTRTDoses(d63, false);
     check('TRT: no cycle_length → dose still generated',  rNoCycle.length === 1, `got ${rNoCycle.length} doses`);
+
+    // per-compound end_date: doses suppressed after the end_date
+    const trtWithEnd = {
+      ...trtStack,
+      cycle_length: undefined,
+      trt: { enabled: true, compounds: [
+        { ...trtStack.trt.compounds[0], end_date: '2026-05-26' }  // bridge ended May 26
+      ]}
+    };
+    G._userStacks = [trtWithEnd];
+    // day 7 (May 8) is before end_date May 26 → dose expected
+    const rBeforeEnd = G._getDynamicTRTDoses(new Date(2026,4,8), false);
+    check('TRT end_date: dose before end_date',            rBeforeEnd.length === 1, `got ${rBeforeEnd.length} doses`);
+    // May 22 (day 21, 21%7=0) is a valid injection day AND used as end_date → dose expected (inclusive)
+    const trtWithEnd22 = { ...trtWithEnd, trt: { enabled: true, compounds: [{ ...trtWithEnd.trt.compounds[0], end_date: '2026-05-22' }] } };
+    G._userStacks = [trtWithEnd22];
+    const rOnEnd = G._getDynamicTRTDoses(new Date(2026,4,22), false);
+    check('TRT end_date: dose on end_date (inclusive)',    rOnEnd.length === 1,     `got ${rOnEnd.length} doses`);
+    // June 13 (day 43 from May 1) → past end_date → suppressed
+    const rPastEnd = G._getDynamicTRTDoses(new Date(2026,5,13), false);
+    check('TRT end_date: dose past end_date suppressed',   rPastEnd.length === 0,  `got ${rPastEnd.length} doses`);
 
     // TRT disabled → no doses
     const trtDisabled = { ...trtStack, trt: { enabled: false, compounds: trtStack.trt.compounds } };
