@@ -666,6 +666,13 @@ async function loadUserStacks(){
       // Glow dose was incorrectly defaulted to 0.2 ml before PR #13 fixed it to 0.09 ml (9 IU)
       if((p.id==='glow'||p.id==='glow-1')&&(parseFloat(p.dose_am)===0.2||(parseFloat(p.dose_am)===0.09&&p.unit_am!=='ml'))){p.dose_am='0.09';p.unit_am='ml';}
     });
+    // Auto-set end_date for testoviron TRT compound from the last TESTO bridge date
+    // so dynamic doses stop after the bridge schedule ends
+    if(stack.trt&&stack.trt.enabled&&Array.isArray(stack.trt.compounds)&&TESTO.length){
+      var _lastTesto=TESTO.reduce(function(m,t){return t.date>m?t.date:m;},TESTO[0].date);
+      var _lastTestoStr=_lastTesto.getFullYear()+'-'+String(_lastTesto.getMonth()+1).padStart(2,'0')+'-'+String(_lastTesto.getDate()).padStart(2,'0');
+      stack.trt.compounds.forEach(function(c){if(c.id==='testoviron'&&!c.end_date)c.end_date=_lastTestoStr;});
+    }
   });
   // In-memory correction: any peptide start_date >= May 2026 was auto-detected from
   // the 19-day log window and is wrong. Fix in memory every load (self-disabling once
@@ -1487,6 +1494,7 @@ function _getDynamicTRTDoses(d,withIds){
   if(days<0)return result;
   if(st.cycle_length&&days>=st.cycle_length*7)return result;
   (st.trt.compounds||[]).forEach(function(c){
+    if(c.end_date&&d>parseLocalDate(c.end_date))return;
     var cat=TRT_CAT.find(function(t){return t.id===c.id;});
     var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);
     if(freqDays<=0||days%freqDays!==0)return;
