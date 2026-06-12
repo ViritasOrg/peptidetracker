@@ -47,9 +47,12 @@ const mockEl = () => {
   Object.defineProperty(el,'hidden',     {get:()=>false,set:noop});
   return el;
 };
+const _lsStore = {};
+const _lsBase = {_s:_lsStore,getItem(k){return Object.prototype.hasOwnProperty.call(_lsStore,k)?_lsStore[k]:null;},setItem(k,v){_lsStore[k]=v;},removeItem(k){delete _lsStore[k];}};
+const _lsProxy = new Proxy(_lsBase,{ownKeys(){return[...'_s,getItem,setItem,removeItem'.split(','),...Object.keys(_lsStore)];},getOwnPropertyDescriptor(t,k){if(k in t)return Object.getOwnPropertyDescriptor(t,k)||{value:t[k],enumerable:false,configurable:true,writable:false};if(Object.prototype.hasOwnProperty.call(_lsStore,k))return{value:_lsStore[k],enumerable:true,configurable:true,writable:true};}});
 const sandbox = vm.createContext({
   window:    {addEventListener:noop,removeEventListener:noop,devicePixelRatio:1,location:{reload:noop}},
-  localStorage: {_s:{},getItem(k){return this._s[k]||null;},setItem(k,v){this._s[k]=v;},removeItem(k){delete this._s[k];}},
+  localStorage: _lsProxy,
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
   google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
@@ -229,7 +232,7 @@ G.wizNext();check('wizNext: 1→2',    G._wiz.step===2);
 G.wizNext();G.wizNext();G.wizNext();
 check('wizNext: step=5 after 5 calls',   G._wiz.step===5);
 G.wizNext();
-check('wizNext: does not exceed 6 (cap)',G._wiz.step===6);
+check('wizNext: does not exceed 6',  G._wiz.step===6);
 G._wiz.step=2;G.wizBack();check('wizBack: 2→1',    G._wiz.step===1);
 G.wizSetStackName('My New Stack');
 check('wizSetStackName updates _wiz', G._wiz.stackName==='My New Stack');
@@ -461,6 +464,116 @@ G.wizSave().then(async ()=>{
   check('getChecked: testo id unchanged',      chkTesto[0]==='testo_0_'+chkDk, `got ${JSON.stringify(chkTesto)}`);
   delete sandbox.localStorage._s['proto-chk-'+chkDk];
   G._viewDate=null;
+
+  // ── _normDoseId: date suffix normalization ────────────────────────────────────
+  console.log('\n── _normDoseId: date suffix normalization ──────────────────');
+  check('_normDoseId defined',              typeof G._normDoseId === 'function');
+  check('_normDoseId: already padded',      G._normDoseId('retatrutide_2026-06-12') === 'retatrutide_2026-06-12');
+  check('_normDoseId: un-padded month',     G._normDoseId('retatrutide_2026-6-12')  === 'retatrutide_2026-06-12');
+  check('_normDoseId: un-padded day',       G._normDoseId('retatrutide_2026-06-2')  === 'retatrutide_2026-06-02');
+  check('_normDoseId: un-padded both',      G._normDoseId('retatrutide_2026-6-2')   === 'retatrutide_2026-06-02');
+  check('_normDoseId: multi-part prefix',   G._normDoseId('nebido_0_2026-6-12')     === 'nebido_0_2026-06-12');
+  check('_normDoseId: testo multi-part',    G._normDoseId('testo_1_2026-6-5')       === 'testo_1_2026-06-05');
+  check('_normDoseId: cjc hyphen id',       G._normDoseId('cjc-ipa-am_2026-6-12')  === 'cjc-ipa-am_2026-06-12');
+  check('_normDoseId: already padded noop', G._normDoseId('glow_2026-12-31')        === 'glow_2026-12-31');
+
+  // ── _migrateCheckedKeys: old proto-chk key migration ──────────────────────────
+  console.log('\n── _migrateCheckedKeys: proto-chk key migration ────────────');
+  check('_migrateCheckedKeys defined', typeof G._migrateCheckedKeys === 'function');
+  // Scenario 1: un-padded key only — should rename key and normalize IDs
+  {
+    const oldKey = 'proto-chk-2026-6-3';
+    const newKey = 'proto-chk-2026-06-03';
+    sandbox.localStorage._s[oldKey] = JSON.stringify(['retatrutide_2026-6-3','glow_2026-6-3','testo_0_2026-6-3']);
+    delete sandbox.localStorage._s[newKey];
+    G._migrateCheckedKeys();
+    check('migrate: old key removed',               sandbox.localStorage._s[oldKey] === undefined,
+      `still has: ${sandbox.localStorage._s[oldKey]}`);
+    check('migrate: new key created',               sandbox.localStorage._s[newKey] !== undefined);
+    const migrated = JSON.parse(sandbox.localStorage._s[newKey] || '[]');
+    check('migrate: reta ID normalized',            migrated.includes('retatrutide_2026-06-03'),
+      `got ${JSON.stringify(migrated)}`);
+    check('migrate: glow ID normalized',            migrated.includes('glow_2026-06-03'),
+      `got ${JSON.stringify(migrated)}`);
+    check('migrate: testo ID normalized',           migrated.includes('testo_0_2026-06-03'),
+      `got ${JSON.stringify(migrated)}`);
+    check('migrate: 3 entries preserved',           migrated.length === 3, `got ${migrated.length}`);
+    delete sandbox.localStorage._s[newKey];
+  }
+  // Scenario 2: both old and new key exist — should merge (new key takes precedence)
+  {
+    const oldKey2 = 'proto-chk-2026-6-4';
+    const newKey2 = 'proto-chk-2026-06-04';
+    sandbox.localStorage._s[oldKey2] = JSON.stringify(['retatrutide_2026-6-4','glow_2026-6-4']);
+    sandbox.localStorage._s[newKey2] = JSON.stringify(['cjc-ipa-am_2026-06-04']);
+    G._migrateCheckedKeys();
+    check('merge: old key removed',                 sandbox.localStorage._s[oldKey2] === undefined);
+    const merged = JSON.parse(sandbox.localStorage._s[newKey2] || '[]');
+    check('merge: 3 IDs after merge',               merged.length === 3, `got ${JSON.stringify(merged)}`);
+    check('merge: existing new-key ID preserved',   merged.includes('cjc-ipa-am_2026-06-04'));
+    check('merge: old IDs normalized+merged (reta)',merged.includes('retatrutide_2026-06-04'),
+      `got ${JSON.stringify(merged)}`);
+    check('merge: old IDs normalized+merged (glow)',merged.includes('glow_2026-06-04'),
+      `got ${JSON.stringify(merged)}`);
+    delete sandbox.localStorage._s[newKey2];
+  }
+  // Scenario 3: already-padded key is untouched
+  {
+    const paddedKey = 'proto-chk-2026-06-05';
+    sandbox.localStorage._s[paddedKey] = JSON.stringify(['glow_2026-06-05']);
+    G._migrateCheckedKeys();
+    check('migrate: padded key untouched',          sandbox.localStorage._s[paddedKey] !== undefined);
+    check('migrate: padded key content unchanged',  JSON.parse(sandbox.localStorage._s[paddedKey]).length === 1);
+    delete sandbox.localStorage._s[paddedKey];
+  }
+
+  // ── getChecked: old-format key+IDs → normalized output (regression guard) ────
+  console.log('\n── getChecked: old-format key regression guard ─────────────');
+  {
+    G._viewDate = new Date(2026, 5, 12); // June 12, 2026
+    const newKey3 = 'proto-chk-2026-06-12';
+    const oldKey3 = 'proto-chk-2026-6-12';
+    delete sandbox.localStorage._s[newKey3];
+    sandbox.localStorage._s[oldKey3] = JSON.stringify(['retatrutide_2026-6-12','glow_2026-6-12','testo_0_2026-6-12']);
+    const chkOld = G.getChecked();
+    check('old key: reta ID normalized',            chkOld.includes('retatrutide_2026-06-12'),
+      `got ${JSON.stringify(chkOld)}`);
+    check('old key: glow ID normalized',            chkOld.includes('glow_2026-06-12'),
+      `got ${JSON.stringify(chkOld)}`);
+    check('old key: testo ID normalized',           chkOld.includes('testo_0_2026-06-12'),
+      `got ${JSON.stringify(chkOld)}`);
+    check('old key: all IDs have padded date suffix', chkOld.every(id => /_\d{4}-\d{2}-\d{2}$/.test(id)),
+      `unpadded: ${chkOld.filter(id => !/_\d{4}-\d{2}-\d{2}$/.test(id)).join(', ')}`);
+    // Simulate buildToday() creating padded dose ID — must match getChecked() output
+    const builtId = 'retatrutide_' + G.dateKey(new Date(2026, 5, 12));
+    check('old key: matches buildToday() dose ID',  chkOld.includes(builtId),
+      `builtId=${builtId}, checked=${JSON.stringify(chkOld)}`);
+    delete sandbox.localStorage._s[oldKey3];
+    G._viewDate = null;
+  }
+
+  // ── getPastDoses: normalizes un-padded server dates ───────────────────────────
+  console.log('\n── getPastDoses: server date normalization ──────────────────');
+  {
+    const origLog = G.window._peptideLog;
+    G.window._peptideLog = [
+      {date: '2026-6-7',   doses: ['retatrutide_2026-6-7',  'glow_2026-6-7']},
+      {date: '2026-06-08', doses: ['cjc-ipa-am_2026-06-08']},
+    ];
+    const d1 = new Date(2026, 5, 7);
+    const r1 = G.getPastDoses(d1);
+    check('getPastDoses: finds entry with un-padded date',  r1 !== null, 'returned null');
+    check('getPastDoses: reta ID normalized',               r1 && r1.includes('retatrutide_2026-06-07'),
+      `got ${JSON.stringify(r1)}`);
+    check('getPastDoses: glow ID normalized',               r1 && r1.includes('glow_2026-06-07'),
+      `got ${JSON.stringify(r1)}`);
+    const d2 = new Date(2026, 5, 8);
+    const r2 = G.getPastDoses(d2);
+    check('getPastDoses: finds entry with padded date',     r2 !== null);
+    check('getPastDoses: padded ID unchanged',              r2 && r2[0] === 'cjc-ipa-am_2026-06-08');
+    check('getPastDoses: returns null for missing date',    G.getPastDoses(new Date(2026,5,9)) === null);
+    G.window._peptideLog = origLog;
+  }
 
   // ── loadUserStacks: WEEKLY updated (post-load re-render coverage) ─────────────
   console.log('\n── loadUserStacks: WEEKLY updated after load ───────────────');
