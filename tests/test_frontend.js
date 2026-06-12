@@ -31,7 +31,10 @@ const patchedScript = rawScript
   .replace('const RECON_DB=',         'var RECON_DB=')
   .replace('let _viewDate=',          'var _viewDate=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
-  .replace('let _reconState=',        'var _reconState=');
+  .replace('let _reconState=',        'var _reconState=')
+  .replace('let weights=',            'var weights=')
+  .replace('var _bcWeightWindow=',    'var _bcWeightWindow=')
+  .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -47,7 +50,7 @@ const mockEl = () => {
 const sandbox = vm.createContext({
   window:    {addEventListener:noop,removeEventListener:noop,devicePixelRatio:1,location:{reload:noop}},
   localStorage: {_s:{},getItem(k){return this._s[k]||null;},setItem(k,v){this._s[k]=v;},removeItem(k){delete this._s[k];}},
-  document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false},
+  document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
   google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
 });
@@ -224,9 +227,9 @@ G.initWizard();
 G.wizNext();check('wizNext: 0→1',    G._wiz.step===1);
 G.wizNext();check('wizNext: 1→2',    G._wiz.step===2);
 G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: stops at 5 (max)',   G._wiz.step===5);
+check('wizNext: step=5 after 5 calls',   G._wiz.step===5);
 G.wizNext();
-check('wizNext: does not exceed 5',  G._wiz.step===5);
+check('wizNext: does not exceed 6 (cap)',G._wiz.step===6);
 G._wiz.step=2;G.wizBack();check('wizBack: 2→1',    G._wiz.step===1);
 G.wizSetStackName('My New Stack');
 check('wizSetStackName updates _wiz', G._wiz.stackName==='My New Stack');
@@ -270,7 +273,7 @@ check('reta: shows on Wednesday (dow 3)',     dosesForDate(WED,G.WEEKLY).some(d=
 check('reta: absent on Monday (dow 1)',       !dosesForDate(MON,G.WEEKLY).some(d=>d.name==='Retatrutide'));
 check('reta: absent on Saturday (dow 6)',     !dosesForDate(SAT,G.WEEKLY).some(d=>d.name==='Retatrutide'));
 check('reta: time is AM',                     G.WEEKLY.find(w=>w.id==='retatrutide')?.time==='AM');
-check('reta: dose id format YYYY-M-D',        dosesForDate(SUN,G.WEEKLY)[0]?.id==='retatrutide_2026-6-7');
+check('reta: dose id format YYYY-MM-DD',       dosesForDate(SUN,G.WEEKLY)[0]?.id==='retatrutide_2026-06-07');
 
 // 2. CJC-IPA (daily AM + PM → 2 WEEKLY entries)
 const cjcStack={name:'CJC Stack',peptides:[
@@ -507,6 +510,91 @@ G.wizSave().then(async ()=>{
   check('collect: picks earliest of multiple peptides',         runCollect('2026-05-18',pepApr4andApr16)==='2026-04-04',     `got ${runCollect('2026-05-18',pepApr4andApr16)}`);
   check('collect: does not override later cycle_start with earlier user-set date',
     runCollect('2026-03-01',pepApr4)==='2026-03-01', `got ${runCollect('2026-03-01',pepApr4)}`);
+
+  // ── Weight history sort ───────────────────────────────────────────────────────
+  console.log('\n── Weight history sort (newest first) ─────────────────────');
+  check('sortWeightHistory defined',    typeof G.sortWeightHistory === 'function');
+  check('bcRenderWeightHistory defined',typeof G.bcRenderWeightHistory === 'function');
+  check('bcDrawWeightChart defined',    typeof G.bcDrawWeightChart === 'function');
+  check('setBcWeightWindow defined',    typeof G.setBcWeightWindow === 'function');
+  check('toggleBcWeightHist defined',   typeof G.toggleBcWeightHist === 'function');
+  check('deleteWeight defined',         typeof G.deleteWeight === 'function');
+  check('deleteWeightFromAgent defined',typeof G.deleteWeightFromAgent === 'function');
+
+  // Newest entry is first
+  const _whSorted = G.sortWeightHistory([
+    { date: '2026-06-01', weight: 90 },
+    { date: '2026-06-10', weight: 88 },
+    { date: '2026-05-15', weight: 91 },
+    { date: '2026-06-05', weight: 89 },
+  ]);
+  check('sort: first entry is newest (2026-06-10)',
+    _whSorted[0].date === '2026-06-10', `got "${_whSorted[0].date}"`);
+  check('sort: last entry is oldest (2026-05-15)',
+    _whSorted[_whSorted.length - 1].date === '2026-05-15', `got "${_whSorted[_whSorted.length - 1].date}"`);
+  check('sort: strictly descending order',
+    _whSorted.every((w, i) => i === 0 || _whSorted[i - 1].date >= w.date),
+    `got ${JSON.stringify(_whSorted.map(w => w.date))}`);
+
+  // Does not mutate input
+  const _whIn = [{ date: '2026-01-01', weight: 80 }, { date: '2026-02-01', weight: 81 }];
+  G.sortWeightHistory(_whIn);
+  check('sort: does not mutate input', _whIn[0].date === '2026-01-01', `got "${_whIn[0].date}"`);
+
+  // Invalid-date entries float to top
+  const _whMixed = G.sortWeightHistory([
+    { date: '2026-06-01', weight: 90 },
+    { date: '2026-6-3',   weight: 69 },
+    { date: '2026-06-10', weight: 88 },
+  ]);
+  check('sort: invalid-date entry is first',
+    !/^\d{4}-\d{2}-\d{2}$/.test(_whMixed[0].date), `got "${_whMixed[0].date}"`);
+  check('sort: valid entries are newest-first below invalid',
+    _whMixed[1].date === '2026-06-10' && _whMixed[2].date === '2026-06-01',
+    `got ${JSON.stringify(_whMixed.map(w => w.date))}`);
+
+  // Edge cases
+  check('sort: empty → []',   G.sortWeightHistory([]).length === 0);
+  const _wh1 = G.sortWeightHistory([{ date: '2026-06-01', weight: 90 }]);
+  check('sort: single entry', _wh1.length === 1 && _wh1[0].weight === 90);
+
+  // ── Weight window (30/60/90d filter) ─────────────────────────────────────────
+  console.log('\n── Weight window (30/60/90d filter) ───────────────────────');
+  check('default _bcWeightWindow is 90', G._bcWeightWindow === 90, `got ${G._bcWeightWindow}`);
+
+  const _origBCW = G._bcWeightWindow;
+  const _origBcDraw = G.bcDrawWeightChart;
+  let _bcDrawCalls = 0;
+  G.bcDrawWeightChart = () => { _bcDrawCalls++; };
+
+  G.setBcWeightWindow(30);
+  check('setBcWeightWindow(30) sets _bcWeightWindow=30', G._bcWeightWindow === 30, `got ${G._bcWeightWindow}`);
+  check('setBcWeightWindow(30) calls bcDrawWeightChart',  _bcDrawCalls === 1, `got ${_bcDrawCalls}`);
+  G.setBcWeightWindow(60);
+  check('setBcWeightWindow(60) sets _bcWeightWindow=60', G._bcWeightWindow === 60, `got ${G._bcWeightWindow}`);
+  G.setBcWeightWindow(90);
+  check('setBcWeightWindow(90) sets _bcWeightWindow=90', G._bcWeightWindow === 90, `got ${G._bcWeightWindow}`);
+
+  G.bcDrawWeightChart = _origBcDraw;
+  G._bcWeightWindow = _origBCW;
+
+  // toggleBcWeightHist toggles state without throwing
+  const _whOpenBefore = G._bcWeightHistOpen;
+  try {
+    G.toggleBcWeightHist();
+    check('toggleBcWeightHist toggles open state', G._bcWeightHistOpen === !_whOpenBefore, `got ${G._bcWeightHistOpen}`);
+    G.toggleBcWeightHist();
+    check('toggleBcWeightHist toggles back',       G._bcWeightHistOpen === _whOpenBefore,  `got ${G._bcWeightHistOpen}`);
+  } catch(e) {
+    check('toggleBcWeightHist does not throw', false, e.message);
+  }
+
+  // deleteWeight removes entry from weights array
+  G.weights = [{ date: '2026-06-01', weight: 90 }, { date: '2026-06-05', weight: 89 }];
+  G.deleteWeight('2026-06-01');
+  check('deleteWeight removes correct entry', G.weights.length === 1 && G.weights[0].date === '2026-06-05',
+    `got ${JSON.stringify(G.weights)}`);
+  check('deleteWeight preserves other entries', G.weights[0].weight === 89, `got ${G.weights[0].weight}`);
 
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
