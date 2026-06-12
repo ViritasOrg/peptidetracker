@@ -575,6 +575,63 @@ G.wizSave().then(async ()=>{
     G.window._peptideLog = origLog;
   }
 
+  // ── _getDynamicTRTDoses: cycle_length end-date guard ─────────────────────────
+  console.log('\n── _getDynamicTRTDoses: cycle_length end-date guard ────────');
+  {
+    const savedStacks  = G._userStacks;
+    const savedIdx     = G._activeStackIndex;
+    // Stack with 8-week cycle starting May 1 → cycle ends June 26
+    const trtStack = {
+      name: 'TRT Test',
+      cycle_start: '2026-05-01',
+      cycle_length: 8,
+      trt: { enabled: true, compounds: [{ id: 'testoviron', name: 'Testoviron Depot', dose: '125', unit: 'mg', freqVal: 1, freqUnit: 'weeks' }] },
+      peptides: []
+    };
+    G._userStacks = [trtStack];
+    G._activeStackIndex = 0;
+
+    // Day 0: cycle start → should inject (0 % 7 === 0)
+    const d0 = new Date(2026, 4, 1);
+    const r0 = G._getDynamicTRTDoses(d0, false);
+    check('TRT: day 0 (cycle start) produces dose',        r0.length === 1, `got ${r0.length} doses`);
+
+    // Day 7: one week in → should inject
+    const d7 = new Date(2026, 4, 8);
+    const r7 = G._getDynamicTRTDoses(d7, false);
+    check('TRT: day 7 (week 1) produces dose',             r7.length === 1, `got ${r7.length} doses`);
+
+    // Day 55: 7 weeks 6 days in → still within 8-week cycle (55 < 56), 55%7===6 → no injection day
+    const d55 = new Date(2026, 4, 1 + 55);
+    const r55 = G._getDynamicTRTDoses(d55, false);
+    check('TRT: day 55 (not injection day) → no dose',    r55.length === 0, `got ${r55.length} doses`);
+
+    // Day 56: 8 weeks exactly → cycle_length*7 = 56, days >= 56 → no dose (washout)
+    const d56 = new Date(2026, 4, 1 + 56);
+    const r56 = G._getDynamicTRTDoses(d56, false);
+    check('TRT: day 56 (== cycle_length*7) → no dose (washout)',  r56.length === 0, `got ${r56.length} doses`);
+
+    // Day 63: one week past cycle end → still no dose
+    const d63 = new Date(2026, 4, 1 + 63);
+    const r63 = G._getDynamicTRTDoses(d63, false);
+    check('TRT: day 63 (past cycle end) → no dose',       r63.length === 0, `got ${r63.length} doses`);
+
+    // No cycle_length set → doses continue indefinitely (backward compat)
+    const trtNoCycle = { ...trtStack, cycle_length: undefined };
+    G._userStacks = [trtNoCycle];
+    const rNoCycle = G._getDynamicTRTDoses(d63, false);
+    check('TRT: no cycle_length → dose still generated',  rNoCycle.length === 1, `got ${rNoCycle.length} doses`);
+
+    // TRT disabled → no doses
+    const trtDisabled = { ...trtStack, trt: { enabled: false, compounds: trtStack.trt.compounds } };
+    G._userStacks = [trtDisabled];
+    const rOff = G._getDynamicTRTDoses(d7, false);
+    check('TRT: trt.enabled=false → no doses',            rOff.length === 0, `got ${rOff.length} doses`);
+
+    G._userStacks       = savedStacks;
+    G._activeStackIndex = savedIdx;
+  }
+
   // ── loadUserStacks: WEEKLY updated (post-load re-render coverage) ─────────────
   console.log('\n── loadUserStacks: WEEKLY updated after load ───────────────');
   const canonicalLoadStack={name:'My Stack',peptides:[

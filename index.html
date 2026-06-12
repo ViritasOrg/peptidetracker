@@ -1485,6 +1485,7 @@ function _getDynamicTRTDoses(d,withIds){
   var start=parseLocalDate(st.cycle_start);
   var days=Math.floor((d-start)/86400000);
   if(days<0)return result;
+  if(st.cycle_length&&days>=st.cycle_length*7)return result;
   (st.trt.compounds||[]).forEach(function(c){
     var cat=TRT_CAT.find(function(t){return t.id===c.id;});
     var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);
