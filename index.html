@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.168</title>
+<title>Henrik's Protocol v1.3</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
 
@@ -1249,65 +1249,189 @@ function renderCycles(cycle) {
   // Biofeedback
   const bfBody = document.getElementById('cycle-biofeedback-list');
   bfBody.innerHTML = '';
-  const bfItems = [
-    { id: 'hydration', name: 'Hydration', detail: 'At least 1 gallon / day', icon: '💧' },
-    { id: 'sleep', name: 'Sleep Quality', detail: 'Hours & how rested?', icon: '😴' },
-    { id: 'recovery', name: 'Recovery', detail: 'Soreness, joint feel', icon: '🦵' },
-    { id: 'mood', name: 'Mood & Libido', detail: 'Rate 1-10 for each', icon: '😊' },
-    { id: 'inflammation', name: 'Inflammation', detail: 'Bloat, puffiness, water', icon: '💧' },
-    { id: 'appetite', name: 'Appetite', detail: 'Easy to hit macros?', icon: '🍽️' },
-  ];
 
-  const bfToday = bfGetToday();
-  let done = 0;
-
-  bfItems.forEach(item => {
-    const isChk = bfToday.includes(item.id);
-    if (isChk) done++;
-    const li = document.createElement('div');
-    li.className = 'check-item' + (isChk ? ' checked-item' : '');
-    li.innerHTML = `
-      <div class="check-box ${isChk?'checked':''}">
-        <svg width="12" height="10" viewBox="0 0 12 10" fill="none">
-          <path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="check-main">
-        <div class="check-name">${item.icon} ${item.name}</div>
-        <div class="check-detail">${item.detail}</div>
-      </div>
-    `;
-    li.onclick = () => cycleToggleBF(item.id);
-    bfBody.appendChild(li);
-  });
-
-  document.getElementById('bf-badge').textContent = done + ' / ' + bfItems.length;
-  document.getElementById('bf-badge').className = 'card-badge ' + (done === bfItems.length ? 'badge-done' : 'badge-today');
-}
-
-function cycleToggleBF(id) {
-  const bfToday = bfGetToday();
-  const idx = bfToday.indexOf(id);
-  if (idx === -1) bfToday.push(id); else bfToday.splice(idx, 1);
-  bfSetToday(bfToday);
-
-  // Queue sync to backend (offline-first)
+  // Load today's biofeedback
   const cycle = cycleLoad();
-  if (cycle && cycle.startDate) {
-    const bfData = {
-      date: dateKey(NOW),
-      hydration: bfToday.includes('hydration'),
-      sleep: bfToday.includes('sleep'),
-      recovery: bfToday.includes('recovery'),
-      mood_libido: bfToday.includes('mood'),
-      inflammation: bfToday.includes('inflammation'),
-      appetite: bfToday.includes('appetite'),
-    };
-    syncQueue('log-biofeedback', { cycleId: cycle.id, data: bfData });
+  if (!cycle || !cycle.id) {
+    bfBody.innerHTML = '<div style="padding:16px;color:var(--muted2);text-align:center">Create a cycle first</div>';
+    return;
   }
 
-  const currentCycle = cycleLoad();
-  renderCycles(currentCycle);
+  const today = dateKey(NOW);
+  const bfForm = document.createElement('form');
+  bfForm.id = 'bf-form';
+  bfForm.className = 'biofeedback-form';
+  bfForm.style.cssText = 'padding:16px;display:grid;gap:16px;';
+
+  const fields = [
+    { id: 'hydration_liters', label: '💧 Hydration (liters)', type: 'number', min: 0, step: 0.5, placeholder: '3.5' },
+    { id: 'sleep_hours', label: '😴 Sleep (hours)', type: 'number', min: 0, max: 24, step: 0.5, placeholder: '8' },
+    { id: 'sleep_quality', label: '😴 Sleep Quality (1-10)', type: 'number', min: 1, max: 10, placeholder: '8' },
+    { id: 'recovery_rating', label: '🦵 Recovery (1-10)', type: 'number', min: 1, max: 10, placeholder: '7', detail: 'Soreness, joint feel' },
+    { id: 'mood_rating', label: '😊 Mood (1-10)', type: 'number', min: 1, max: 10, placeholder: '7' },
+    { id: 'libido_rating', label: '❤️ Libido (1-10)', type: 'number', min: 1, max: 10, placeholder: '8' },
+    { id: 'bloat_rating', label: '💨 Bloat (1-10)', type: 'number', min: 0, max: 10, placeholder: '2', detail: '0=none, 10=severe' },
+    { id: 'inflammation_rating', label: '🔥 Inflammation (1-10)', type: 'number', min: 0, max: 10, placeholder: '3', detail: 'Puffiness, water retention' },
+    { id: 'appetite_rating', label: '🍽️ Appetite (1-10)', type: 'number', min: 0, max: 10, placeholder: '8', detail: '0=none, 10=ravenous' },
+    { id: 'appetite_difficulty', label: '🎯 Macro Difficulty', type: 'select', options: [
+      { value: '', label: '— Select —' },
+      { value: 'easy', label: 'Easy to hit macros' },
+      { value: 'moderate', label: 'Moderate difficulty' },
+      { value: 'difficult', label: 'Difficult to hit macros' }
+    ] },
+    { id: 'general_notes', label: '📝 Notes', type: 'textarea', placeholder: 'Any other observations?' }
+  ];
+
+  fields.forEach(f => {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:grid;gap:4px;';
+
+    const label = document.createElement('label');
+    label.style.cssText = 'font-size:12px;font-weight:600;color:var(--text);text-transform:uppercase;letter-spacing:0.5px;';
+    label.textContent = f.label;
+    wrapper.appendChild(label);
+
+    if (f.detail) {
+      const detail = document.createElement('div');
+      detail.style.cssText = 'font-size:11px;color:var(--muted2);margin-bottom:2px;';
+      detail.textContent = f.detail;
+      wrapper.appendChild(detail);
+    }
+
+    let input;
+    if (f.type === 'select') {
+      input = document.createElement('select');
+      input.style.cssText = 'padding:8px;border-radius:6px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:13px;';
+      f.options.forEach(opt => {
+        const optEl = document.createElement('option');
+        optEl.value = opt.value;
+        optEl.textContent = opt.label;
+        input.appendChild(optEl);
+      });
+    } else if (f.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.style.cssText = 'padding:8px;border-radius:6px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:13px;resize:vertical;min-height:60px;';
+      input.placeholder = f.placeholder;
+    } else {
+      input = document.createElement('input');
+      input.type = f.type;
+      input.min = f.min;
+      input.max = f.max;
+      input.step = f.step;
+      input.placeholder = f.placeholder;
+      input.style.cssText = 'padding:8px;border-radius:6px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:13px;';
+    }
+
+    input.id = f.id;
+    input.name = f.id;
+    wrapper.appendChild(input);
+    bfForm.appendChild(wrapper);
+  });
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Save Today\'s Data';
+  saveBtn.style.cssText = 'flex:1;padding:10px;background:var(--accent);color:#000;border:none;border-radius:6px;font-weight:600;cursor:pointer;';
+  saveBtn.onclick = (e) => {
+    e.preventDefault();
+    cycleSubmitBiofeedback();
+  };
+  btnRow.appendChild(saveBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear';
+  clearBtn.style.cssText = 'padding:10px 16px;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:6px;cursor:pointer;';
+  clearBtn.onclick = (e) => {
+    e.preventDefault();
+    bfForm.reset();
+  };
+  btnRow.appendChild(clearBtn);
+
+  bfForm.appendChild(btnRow);
+  bfBody.appendChild(bfForm);
+
+  // Load existing data for today
+  cycleLoadBiofeedbackForToday();
+
+  // Update badge based on filled fields
+  cycleUpdateBFBadge();
+}
+
+function cycleSubmitBiofeedback() {
+  const form = document.getElementById('bf-form');
+  if (!form) return;
+
+  const cycle = cycleLoad();
+  if (!cycle || !cycle.id) {
+    alert('No active cycle');
+    return;
+  }
+
+  const bfData = {
+    date: dateKey(NOW),
+    hydration_liters: form.hydration_liters.value ? parseFloat(form.hydration_liters.value) : null,
+    sleep_hours: form.sleep_hours.value ? parseFloat(form.sleep_hours.value) : null,
+    sleep_quality: form.sleep_quality.value ? parseInt(form.sleep_quality.value) : null,
+    recovery_rating: form.recovery_rating.value ? parseInt(form.recovery_rating.value) : null,
+    mood_rating: form.mood_rating.value ? parseInt(form.mood_rating.value) : null,
+    libido_rating: form.libido_rating.value ? parseInt(form.libido_rating.value) : null,
+    bloat_rating: form.bloat_rating.value ? parseInt(form.bloat_rating.value) : null,
+    inflammation_rating: form.inflammation_rating.value ? parseInt(form.inflammation_rating.value) : null,
+    appetite_rating: form.appetite_rating.value ? parseInt(form.appetite_rating.value) : null,
+    appetite_difficulty: form.appetite_difficulty.value || null,
+    general_notes: form.general_notes.value || null,
+  };
+
+  // Queue sync (offline-first)
+  syncQueue('log-biofeedback', { cycleId: cycle.id, data: bfData });
+
+  alert('Biofeedback saved ✓');
+  renderCycles(cycleLoad());
+}
+
+function cycleLoadBiofeedbackForToday() {
+  const cycle = cycleLoad();
+  const form = document.getElementById('bf-form');
+  if (!form || !cycle || !cycle.id) return;
+
+  const today = dateKey(NOW);
+  const history = cycle.history || [];
+  const todayEntry = history.find(h => h.date === today && h.type === 'biofeedback');
+
+  if (todayEntry) {
+    if (todayEntry.hydration_liters !== null) form.hydration_liters.value = todayEntry.hydration_liters;
+    if (todayEntry.sleep_hours !== null) form.sleep_hours.value = todayEntry.sleep_hours;
+    if (todayEntry.sleep_quality !== null) form.sleep_quality.value = todayEntry.sleep_quality;
+    if (todayEntry.recovery_rating !== null) form.recovery_rating.value = todayEntry.recovery_rating;
+    if (todayEntry.mood_rating !== null) form.mood_rating.value = todayEntry.mood_rating;
+    if (todayEntry.libido_rating !== null) form.libido_rating.value = todayEntry.libido_rating;
+    if (todayEntry.bloat_rating !== null) form.bloat_rating.value = todayEntry.bloat_rating;
+    if (todayEntry.inflammation_rating !== null) form.inflammation_rating.value = todayEntry.inflammation_rating;
+    if (todayEntry.appetite_rating !== null) form.appetite_rating.value = todayEntry.appetite_rating;
+    if (todayEntry.appetite_difficulty) form.appetite_difficulty.value = todayEntry.appetite_difficulty;
+    if (todayEntry.general_notes) form.general_notes.value = todayEntry.general_notes;
+  }
+}
+
+function cycleUpdateBFBadge() {
+  const form = document.getElementById('bf-form');
+  const badge = document.getElementById('bf-badge');
+  if (!form || !badge) return;
+
+  const fields = ['hydration_liters', 'sleep_hours', 'sleep_quality', 'recovery_rating', 'mood_rating',
+                  'libido_rating', 'bloat_rating', 'inflammation_rating', 'appetite_rating', 'appetite_difficulty'];
+  const filled = fields.filter(f => form[f] && form[f].value).length;
+  badge.textContent = filled + ' / ' + fields.length;
+  badge.className = 'card-badge ' + (filled === fields.length ? 'badge-done' : 'badge-today');
+}
+
+// Monitor form changes to update badge
+if (document.getElementById('bf-form')) {
+  document.getElementById('bf-form').addEventListener('change', cycleUpdateBFBadge);
 }
 
 function cycleNewCycle() {
