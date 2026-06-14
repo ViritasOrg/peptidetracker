@@ -1076,6 +1076,94 @@ const rcCjc=G.reconCalc('400','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg')
 check('cjc-ipa default: 400mcg blend → 0.06ml',rcCjc&&rcCjc.ml===0.06, `got ${rcCjc?.ml}`);
 check('cjc-ipa default: 400mcg blend → 6 IU',  rcCjc&&rcCjc.iu===6,    `got ${rcCjc?.iu}`);
 
+// ── trtWeeklyMg: weekly dose calculation ──────────────────────────────────────
+console.log('\n── trtWeeklyMg: weekly mg from compound config ─────────────');
+check('trtWeeklyMg defined',          typeof G.trtWeeklyMg === 'function');
+// weeks unit: dose / freqVal
+check('125mg/wk (1/wk) → 125',       G.trtWeeklyMg({dose:'125',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 125);
+check('250mg / every 2wk → 125',      G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:2,freqUnit:'weeks'}) === 125);
+check('1000mg/12wk (Nebido) → ~83',  Math.abs(G.trtWeeklyMg({dose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'}) - 83.33) < 0.1);
+check('250mg/wk → 250',              G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 250);
+// days unit: dose * (7 / freqVal) where freqVal = days between injections
+check('50mg/day (every 1d) → 350',   G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:1,freqUnit:'days'}) === 350);
+check('50mg/EOD (every 2d) → 175',   G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:2,freqUnit:'days'}) === 175);
+check('50mg/wk via 7d → 50',         G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:7,freqUnit:'days'}) === 50);
+// non-mg units → 0
+check('IU unit → 0',                 G.trtWeeklyMg({dose:'125',unit:'IU', freqVal:1,freqUnit:'weeks'}) === 0);
+check('mcg unit → 0',                G.trtWeeklyMg({dose:'500',unit:'mcg',freqVal:1,freqUnit:'weeks'}) === 0);
+// zero / empty dose → 0
+check('zero dose → 0',               G.trtWeeklyMg({dose:'0',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 0);
+check('empty dose → 0',              G.trtWeeklyMg({dose:'', unit:'mg',freqVal:1,freqUnit:'weeks'}) === 0);
+// default freqUnit is weeks
+check('no freqUnit → weeks default', G.trtWeeklyMg({dose:'100',unit:'mg',freqVal:1}) === 100);
+
+// ── trtFreqNudge: 4-tier injection frequency nudge ────────────────────────────
+console.log('\n── trtFreqNudge: 4-tier threshold logic ────────────────────');
+check('trtFreqNudge defined',         typeof G.trtFreqNudge === 'function');
+// <200 → null
+check('0mg → null',                   G.trtFreqNudge(0) === null);
+check('199mg → null',                 G.trtFreqNudge(199) === null);
+// 200–350 → soft, 2×/week
+const _n200 = G.trtFreqNudge(200);
+check('200mg → soft level',           _n200 !== null && _n200.level === 'soft');
+check('200mg → mentions 2×/week',     _n200 && _n200.text.includes('2×/week'));
+const _n350 = G.trtFreqNudge(350);
+check('350mg → soft (boundary)',      _n350 !== null && _n350.level === 'soft');
+check('350mg → mentions 2×/week',     _n350 && _n350.text.includes('2×/week'));
+// 350–500 → soft, daily or EOD
+const _n351 = G.trtFreqNudge(351);
+check('351mg → soft level',           _n351 !== null && _n351.level === 'soft');
+check('351mg → mentions EOD',         _n351 && _n351.text.includes('every-other-day'));
+const _n500 = G.trtFreqNudge(500);
+check('500mg → soft (upper boundary)',_n500 !== null && _n500.level === 'soft');
+check('500mg → mentions EOD',         _n500 && _n500.text.includes('every-other-day'));
+// >500 → hard
+const _n501 = G.trtFreqNudge(501);
+check('501mg → hard level',           _n501 !== null && _n501.level === 'hard');
+check('1000mg → hard level',          G.trtFreqNudge(1000).level === 'hard');
+check('hard nudge mentions daily',    _n501 && _n501.text.toLowerCase().includes('daily'));
+// integration: trtWeeklyMg → trtFreqNudge
+check('125mg/wk → null (below threshold)',
+  G.trtFreqNudge(G.trtWeeklyMg({dose:'125',unit:'mg',freqVal:1,freqUnit:'weeks'})) === null);
+check('250mg/wk compound → soft nudge',
+  G.trtFreqNudge(G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:1,freqUnit:'weeks'})) !== null);
+check('600mg/wk compound → hard nudge',
+  G.trtFreqNudge(G.trtWeeklyMg({dose:'600',unit:'mg',freqVal:1,freqUnit:'weeks'})).level === 'hard');
+check('Nebido 1000mg/12wk → below 200 threshold, null nudge',
+  G.trtFreqNudge(G.trtWeeklyMg({dose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'})) === null);
+
+// ── Consent screen (pep-consent-v1) ──────────────────────────────────────────
+console.log('\n── Consent screen (pep-consent-v1) ────────────────────────');
+check('showConsent defined',          typeof G.showConsent === 'function');
+check('acceptConsent defined',        typeof G.acceptConsent === 'function');
+check('unlockApp defined',            typeof G.unlockApp === 'function');
+// acceptConsent stores the consent key
+delete sandbox.localStorage._s['pep-consent-v1'];
+try { G.acceptConsent(); check('acceptConsent does not throw', true); }
+catch(e) { check('acceptConsent does not throw', false, e.message); }
+check('acceptConsent stores pep-consent-v1 = "1"', sandbox.localStorage._s['pep-consent-v1'] === '1');
+// unlockApp with consent stored → calls init (no consent gate)
+try { G.unlockApp(); check('unlockApp (consent present) does not throw', true); }
+catch(e) { check('unlockApp (consent present) does not throw', false, e.message); }
+// unlockApp without consent → calls showConsent
+delete sandbox.localStorage._s['pep-consent-v1'];
+try { G.unlockApp(); check('unlockApp (no consent) does not throw', true); }
+catch(e) { check('unlockApp (no consent) does not throw', false, e.message); }
+// consent key is still absent (showConsent shown, init not called)
+check('consent not set after unlockApp without accepting', sandbox.localStorage._s['pep-consent-v1'] == null);
+
+// ── Enhancement label rename ──────────────────────────────────────────────────
+console.log('\n── Enhancement label rename ────────────────────────────────');
+check('WIZ_TITLES defined',           Array.isArray(G.WIZ_TITLES));
+check('WIZ_TITLES[5] = ENHANCEMENT',  G.WIZ_TITLES[5] === 'ENHANCEMENT', `got "${G.WIZ_TITLES[5]}"`);
+check('GOAL_DEFS defined',            Array.isArray(G.GOAL_DEFS));
+const _enhGoal = (G.GOAL_DEFS || []).find(g => g.id === 'trt');
+check('GOAL_DEFS has trt entry',      !!_enhGoal, 'no trt entry in GOAL_DEFS');
+check('trt goal label = Enhancement', _enhGoal && _enhGoal.label === 'Enhancement', `got "${_enhGoal?.label}"`);
+check('trt goal icon = ⚡',           _enhGoal && _enhGoal.icon  === '⚡',           `got "${_enhGoal?.icon}"`);
+check('no GOAL_DEF has old label TRT',!(G.GOAL_DEFS || []).some(g => g.label === 'TRT'));
+check('no GOAL_DEF has label "TRT Support"', !(G.GOAL_DEFS || []).some(g => g.label === 'TRT Support'));
+
 // ── Price list validation ─────────────────────────────────────────────────────
 console.log('\n── Price list: RECON_DB vials match pricelist.csv ─────────');
 const plPath = path.join(__dirname, 'pricelist.csv');
