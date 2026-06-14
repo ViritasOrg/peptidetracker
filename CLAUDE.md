@@ -44,3 +44,4 @@ Reference documents stored in `docs/enhanced-bodybuilding/` — read these when 
 - `03-what-are-anabolic-steroids.md` — Medical safety overview (organ system effects, bloodwork monitoring, harm reduction protocols)
 - `04-history-of-steroids-attia-derek.md` — History and pharmacology of steroids (Derek MPMD + Peter Attia; compound-by-compound breakdown, anabolic:androgenic ratios, SARMs, safer use model)
 - `05-personal-protocol-log.md` — Henrik's personal protocol and weekly log (Retatrutide, CJC-1295/Ipa, Glow Blend, Testosterone; weight/BF% tracking from April 2026)
+- `06-scientific-research-foundation.md` — PubMed/PMC literature review across 10 topic areas (cycle duration, dose-response, compound pharmacology, bloodwork, aromatization, HPTA/PCT, psychology, SARMs, body composition, PK/injection frequency); includes explicit divergences where science contradicts coach advice
