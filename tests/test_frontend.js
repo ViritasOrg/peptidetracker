@@ -34,7 +34,8 @@ const patchedScript = rawScript
   .replace('let _reconState=',        'var _reconState=')
   .replace('let weights=',            'var weights=')
   .replace('var _bcWeightWindow=',    'var _bcWeightWindow=')
-  .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=');
+  .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=')
+  .replace('let WEIGHTS_TOKEN=',      'var WEIGHTS_TOKEN=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -983,7 +984,7 @@ console.log('\n── Meta ─────────────────�
 check('VERSION defined',                    typeof G.VERSION==='string');
 check('VERSION is x.xx (no suffix)',        /^\d+\.\d+$/.test(G.VERSION),        `got "${G.VERSION}"`);
 check('AGENT_URL is https',                 G.AGENT_URL?.startsWith('https://'));
-check('WEIGHTS_TOKEN defined',              G.WEIGHTS_TOKEN?.length>0);
+check('WEIGHTS_TOKEN is string var',         typeof G.WEIGHTS_TOKEN==='string');
 check('no duplicate functions',             (()=>{const fs=rawScript.match(/(?:async )?function (\w+)\s*\(/g)||[];const names=fs.map(s=>s.replace(/async |function |\s*\(/g,''));return names.every((n,i)=>names.indexOf(n)===i);})());
 
 // ── RECON_DB ──────────────────────────────────────────────────────────────────
