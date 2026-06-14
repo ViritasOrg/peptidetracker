@@ -34,3 +34,13 @@ If you add a settings feature, UX polish, or structural improvement to one app, 
 
 ## Pushing large files
 Same approach as workout repo — use the MCP HTTP endpoint with session ingress token if `push_files` struggles with size. See workout/CLAUDE.md for the pattern.
+
+## Enhanced Bodybuilding Docs
+
+Reference documents stored in `docs/enhanced-bodybuilding/` — read these when discussing protocols, compounds, cycles, or enhancement for Henrik:
+
+- `01-coach-video-transcript.md` — Bodybuilder's Dimensional Framework (coach case study: client Trey, 24-week push, 4-phase implementation, enhancement tiers, dosing progressions)
+- `02-mike-israetel-peter-attia-anabolics.md` — AAS effects, risks, and insights (Mike Israetel + Peter Attia; TRT vs supraphysiological dosing, estrogen management, safer use model, psychological effects)
+- `03-what-are-anabolic-steroids.md` — Medical safety overview (organ system effects, bloodwork monitoring, harm reduction protocols)
+- `04-history-of-steroids-attia-derek.md` — History and pharmacology of steroids (Derek MPMD + Peter Attia; compound-by-compound breakdown, anabolic:androgenic ratios, SARMs, safer use model)
+- `05-personal-protocol-log.md` — Henrik's personal protocol and weekly log (Retatrutide, CJC-1295/Ipa, Glow Blend, Testosterone; weight/BF% tracking from April 2026)
