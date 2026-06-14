@@ -320,7 +320,7 @@
       <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent4)"></div><div class="card-title">TODAY'S BIOFEEDBACK</div></div><span class="card-badge badge-today" id="bf-badge">0 / 10</span></div>
       <div class="checklist" id="cycle-biofeedback-list"></div>
     </div>
-    <button class="reset-btn" onclick="cycleStartNew()">Start New Cycle</button>
+    <button class="reset-btn" onclick="cycleWizardOpen()">Start New Cycle</button>
   </div>
   <div class="content hidden" id="tab-schedule">
     <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">WEEKLY PATTERN</div></div></div><div class="card-body" id="schedule-body"></div></div>
@@ -426,6 +426,11 @@
     </div>
   </div>
   <div class="content hidden" id="tab-recon"><div id="recon-body"></div></div>
+</div>
+<div id="cycle-wizard" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9000;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;">
+  <div style="max-width:480px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;">
+    <div id="cycle-wiz-inner"></div>
+  </div>
 </div>
 <div id="onboarding-overlay" class="hidden">
   <div class="ob-header">
@@ -545,7 +550,7 @@ function openCyclesTab(){_cycle=cycleCacheLoad();renderCyclesTab();syncCyclesFro
 async function syncCyclesFromAgent(){try{var r=await fetch(AGENT_URL+'/cycles',{headers:authHeaders()});if(!r.ok)return;var list=await r.json();if(!Array.isArray(list)||!list.length)return;list.sort(function(a,b){return String(b.createdAt||'').localeCompare(String(a.createdAt||''));});cycleCacheSave(list[0]);renderCyclesTab();}catch(e){}}
 function cycleWeeks(c){if(!c||!c.startDate)return 0;return Math.max(0,Math.floor((NOW-parseLocalDate(c.startDate))/604800000));}
 function renderCyclesTab(){var c=_cycle;cycleRenderStatus(c);cycleRenderCompounds(c);cycleRenderBloodwork(c);cycleRenderBiofeedback(c);}
-function cycleRenderStatus(c){var badge=document.getElementById('cycle-status-badge');if(!badge)return;var ph=document.getElementById('cycle-phase'),st=document.getElementById('cycle-start'),wk=document.getElementById('cycle-weeks');if(!c||!c.startDate){badge.textContent='NO CYCLE';badge.className='card-badge badge-today';ph.textContent='—';st.textContent='—';wk.textContent='—';return;}badge.textContent=String(c.phase||'').toUpperCase();badge.className='card-badge badge-today';ph.textContent=String(c.phase||'').toUpperCase();st.textContent=fmtDate(parseLocalDate(c.startDate));wk.textContent=cycleWeeks(c)+' weeks';}
+function cycleRenderStatus(c){var badge=document.getElementById('cycle-status-badge');if(!badge)return;var ph=document.getElementById('cycle-phase'),st=document.getElementById('cycle-start'),wk=document.getElementById('cycle-weeks'),dur=document.getElementById('cycle-duration');if(!c||!c.startDate){badge.textContent='NO CYCLE';badge.className='card-badge badge-today';ph.textContent='—';st.textContent='—';wk.textContent='—';if(dur)dur.textContent='—';return;}badge.textContent=String(c.phase||'').toUpperCase();badge.className='card-badge badge-today';ph.textContent=String(c.phase||'').toUpperCase();st.textContent=fmtDate(parseLocalDate(c.startDate));wk.textContent=cycleWeeks(c)+' weeks';if(dur)dur.textContent=(c.cycleLengthWeeks||20)+' weeks';}
 function cycleRenderCompounds(c){var b=document.getElementById('cycle-compounds-body');if(!b)return;if(!c||!c.compounds||!c.compounds.length){b.innerHTML='<div class="empty">No active cycle</div>';return;}var h='';c.compounds.forEach(function(x){h+='<div class="info-row"><span class="info-label">'+_cycEsc(x.name)+'</span><span class="info-val" style="color:'+(x.active?'var(--accent)':'var(--muted2)')+'">'+x.dose+' '+_cycEsc(x.unit)+'</span></div>';});b.innerHTML=h;}
 function _cycleBwDesc(t){return t==='baseline'?'Pre-cycle bloodwork — establish baseline':t==='response'?'Assess test response & aromatization':t==='midcycle'?'Full panel — adjust if needed':t==='eoc'?'Final check before offramp':'';}
 function cycleRenderBloodwork(c){var b=document.getElementById('cycle-bloodwork-body');if(!b)return;if(!c||!c.bloodwork||!c.bloodwork.length){b.innerHTML='<div class="empty">No cycle started</div>';return;}var start=parseLocalDate(c.startDate),n=c.bloodwork.length,h='';c.bloodwork.forEach(function(bw,i){var d=new Date(start);d.setDate(d.getDate()+bw.week*7);var past=d<NOW,today=d.toDateString()===NOW.toDateString(),last=i===n-1;var dotCls=bw.done?'past':today?'today-dot':past?'past':'future';var nameCol=bw.done?'var(--muted2)':today?'var(--accent)':'var(--text)';h+='<div class="milestone"><div class="milestone-line"><div class="milestone-dot '+dotCls+'"></div>'+(!last?'<div class="milestone-connector"></div>':'')+'</div><div class="milestone-body"><div class="milestone-date">Week '+bw.week+' — '+fmtDate(d)+(today?' · TODAY':'')+(bw.done?' · DONE ✓':'')+'</div><div class="milestone-name" style="color:'+nameCol+'">'+_cycEsc(bw.label)+'</div><div class="milestone-desc">'+_cycleBwDesc(bw.type)+'</div>'+(bw.done?'':'<button onclick="cycleBwToggle('+bw.week+')" style="margin-top:8px;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit">Log result</button><div id="cycle-bw-form-'+bw.week+'" class="hidden" style="margin-top:8px"></div>')+'</div></div>';});b.innerHTML=h;}
@@ -556,7 +561,211 @@ function cycleLoadBiofeedbackForToday(c){c=c||_cycle;if(!c||!c.history)return;va
 function cycleUpdateBFBadge(){var badge=document.getElementById('bf-badge');if(!badge)return;var filled=0;CYCLE_BF_RATED.forEach(function(id){var el=document.getElementById('cycle-bf-'+id);if(el&&String(el.value).trim()!=='')filled++;});badge.textContent=filled+' / '+CYCLE_BF_RATED.length;badge.className='card-badge '+(filled===CYCLE_BF_RATED.length?'badge-done':'badge-today');}
 function cycleClearBiofeedback(){CYCLE_BF_FIELDS.forEach(function(f){var el=document.getElementById('cycle-bf-'+f.id);if(el)el.value='';});cycleUpdateBFBadge();}
 async function cycleSubmitBiofeedback(){var c=_cycle;if(!c||!c.id){alert('No active cycle');return;}var today=dateKey(NOW);function fl(id){var el=document.getElementById('cycle-bf-'+id);if(!el||String(el.value).trim()==='')return null;return parseFloat(el.value);}function it(id){var el=document.getElementById('cycle-bf-'+id);if(!el||String(el.value).trim()==='')return null;return parseInt(el.value,10);}function tx(id){var el=document.getElementById('cycle-bf-'+id);return el&&el.value.trim()?el.value.trim():null;}var entry={date:today,hydration_liters:fl('hydration_liters'),sleep_hours:fl('sleep_hours'),sleep_quality:it('sleep_quality'),recovery_rating:it('recovery_rating'),mood_rating:it('mood_rating'),libido_rating:it('libido_rating'),bloat_rating:it('bloat_rating'),inflammation_rating:it('inflammation_rating'),appetite_rating:it('appetite_rating'),appetite_difficulty:tx('appetite_difficulty'),general_notes:tx('general_notes')};c.history=(c.history||[]).filter(function(h){return !(h.date===today&&h.type==='biofeedback');});c.history.push(Object.assign({type:'biofeedback'},entry));cycleCacheSave(c);var btn=document.getElementById('cycle-bf-save');if(btn){btn.textContent='Saving…';btn.disabled=true;}try{var r=await fetch(AGENT_URL+'/cycles/'+c.id+'/biofeedback',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(entry)});if(!r.ok)throw new Error('HTTP '+r.status);if(btn){btn.textContent='Saved ✓';}}catch(e){if(btn)btn.textContent='Saved locally';}if(btn)setTimeout(function(){btn.textContent="Save Today's Data";btn.disabled=false;},1800);}
-async function cycleStartNew(){if(_cycle&&_cycle.id&&!confirm('Start a new cycle? Your current cycle stays saved on the backend.'))return;try{var r=await fetch(AGENT_URL+'/cycles',{method:'POST',headers:authHeaders({'Content-Type':'application/json'})});if(!r.ok)throw new Error('HTTP '+r.status);var res=await r.json();var c=res.cycle||res;cycleCacheSave(c);renderCyclesTab();}catch(e){alert('Could not start cycle: '+e.message);}}
+/* ── CYCLE WIZARD — 3-step creation flow ── */
+var CYCLE_TEMPLATES=[
+  {id:'first',phase:'foundational',weeks:20,badge:'CYCLE 1',badgeColor:'var(--accent)',
+   name:'Test Only — Foundational',
+   desc:'The non-negotiable starting point. Testosterone alone — assess your aromatization phenotype, lock in injection protocol and bloodwork cadence.',
+   why:'You cannot build a safe stack without knowing how your body responds to test. E2 phenotype from bloodwork determines every subsequent compound ratio decision.',
+   tip:'Start at 300 mg/week. Week 5 bloodwork determines if you titrate to 500-600 mg. Do NOT add a secondary until response is predictable.',
+   compounds:[{name:'Testosterone Enanthate',dose:300,unit:'mg/week',active:true,startWeek:0}]},
+  {id:'synergy_primo',phase:'synergy',weeks:20,badge:'CYCLE 2',badgeColor:'var(--accent3)',
+   name:'Test + Primobolan — Synergy',
+   desc:'Classic second cycle for normal and high aromatizers. Primobolan (DHT-derived) adds lean anabolism with zero estrogen conversion — improved partitioning without AI drugs.',
+   why:'Primo is the cleanest secondary: pure protein accretion, minimal androgenic sides, tissue-selective. 1:1 test:primo ratio is the evidence-based starting point.',
+   tip:'Adjust ratio from cycle 1 bloodwork. High aromatizer: shift toward 250 test / 750 primo. Normal aromatizer: 500 / 500.',
+   compounds:[{name:'Testosterone Enanthate',dose:500,unit:'mg/week',active:true,startWeek:0},{name:'Primobolan (Metenolone Enanthate)',dose:500,unit:'mg/week',active:true,startWeek:0}]},
+  {id:'synergy_mast',phase:'synergy',weeks:20,badge:'CYCLE 2 (Low Aromatizer)',badgeColor:'var(--accent3)',
+   name:'Test + Masteron — Synergy',
+   desc:'For confirmed low aromatizers. Masteron blocks E2 conversion acting as a pseudo-AI — dry, vascular, harder look without suppressing cardioprotective estrogen to zero.',
+   why:'If cycle 1 showed low E2 on standard test dose, a real AI would crash it further. Masteron at 1:1 gives the drying effect via receptor competition, not enzyme suppression.',
+   tip:'2:1 Test:Mast if still controlling E2. 1:1 (500/500) for most low aromatizers. Masteron requires body fat under ~12% to show cosmetic benefit.',
+   compounds:[{name:'Testosterone Enanthate',dose:500,unit:'mg/week',active:true,startWeek:0},{name:'Masteron Enanthate',dose:500,unit:'mg/week',active:true,startWeek:0}]},
+  {id:'progression',phase:'progression',weeks:24,badge:'CYCLE 3+',badgeColor:'var(--accent2)',
+   name:'Test + Primo + NPP — Progression',
+   desc:'Three-compound progression. NPP (short-ester Nandrolone) at minimum effective dose adds collagen synthesis, joint health and enhanced recovery — the silent driver.',
+   why:'NPP at 200-300 mg/week is not about size — it is about recovery quality. Short ester (3-5 day clearance) means you pull it fast if sides appear. Only add after assessing test and primo individually.',
+   tip:'Watch libido closely when adding NPP. Tanks early = reduce NPP first. Deca-dick is real at higher doses — stay at MED. HGH optional at 3-4 IU/day from week 1.',
+   compounds:[{name:'Testosterone Enanthate',dose:600,unit:'mg/week',active:true,startWeek:0},{name:'Primobolan (Metenolone Enanthate)',dose:500,unit:'mg/week',active:true,startWeek:0},{name:'NPP (Nandrolone Phenylpropionate)',dose:250,unit:'mg/week',active:true,startWeek:0}]},
+  {id:'custom',phase:'foundational',weeks:20,badge:'CUSTOM',badgeColor:'var(--muted2)',
+   name:'Custom Cycle',
+   desc:'Full control. Build your own compound stack from scratch with any phase, compounds and doses.',
+   why:'',tip:'',
+   compounds:[{name:'Testosterone',dose:500,unit:'mg/week',active:true,startWeek:0}]}
+];
+var _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:'',compounds:[]};
+function cycleWizardOpen(){
+  if(_cycle&&_cycle.id&&!confirm('Start a new cycle? Your current cycle stays saved on the backend.'))return;
+  var today=dateKey(NOW);
+  _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:today,compounds:[]};
+  document.getElementById('cycle-wizard').style.display='block';
+  document.body.style.overflow='hidden';
+  cycleWizRender();
+}
+function cycleWizardClose(){
+  document.getElementById('cycle-wizard').style.display='none';
+  document.body.style.overflow='';
+}
+function cycleWizRender(){
+  var inner=document.getElementById('cycle-wiz-inner');
+  if(!inner)return;
+  var h='<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">';
+  h+='<div style="font-family:Bebas Neue,sans-serif;font-size:18px;letter-spacing:2px;color:var(--accent)">NEW CYCLE</div>';
+  h+='<div style="display:flex;align-items:center;gap:6px">';
+  for(var i=1;i<=3;i++){var active=_cwiz.step===i,done=_cwiz.step>i;h+='<div style="width:26px;height:26px;border-radius:50%;background:'+(active?'var(--accent)':done?'var(--accent3)':'var(--surface2)')+';color:'+(active||done?'#000':'var(--muted2)')+';font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center">'+(done?'✓':i)+'</div>';}
+  h+='</div>';
+  h+='<button onclick="cycleWizardClose()" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;padding:0;line-height:1">&#x2715;</button>';
+  h+='</div>';
+  if(_cwiz.step===1)h+=_cwizStep1();
+  else if(_cwiz.step===2)h+=_cwizStep2();
+  else h+=_cwizStep3();
+  inner.innerHTML=h;
+}
+function _cwizStep1(){
+  var h='<div style="padding:20px">';
+  h+='<div style="font-size:11px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Step 1 of 3 — Choose Template</div>';
+  CYCLE_TEMPLATES.forEach(function(t){
+    var sel=_cwiz.tpl===t.id;
+    h+='<div onclick="cycleWizSelectTpl(\''+t.id+'\')" style="cursor:pointer;background:var(--surface2);border:2px solid '+(sel?t.badgeColor:'var(--border)')+';border-radius:12px;padding:14px;margin-bottom:10px">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">';
+    h+='<div style="font-size:14px;font-weight:700;color:var(--text);flex:1;padding-right:8px">'+t.name+'</div>';
+    h+='<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;background:'+t.badgeColor+'22;color:'+t.badgeColor+';border:1px solid '+t.badgeColor+'44;white-space:nowrap;flex-shrink:0">'+t.badge+'</span>';
+    h+='</div>';
+    h+='<div style="font-size:12px;color:var(--muted2);line-height:1.6;margin-bottom:8px">'+t.desc+'</div>';
+    if(t.why)h+='<div style="font-size:11px;color:var(--accent3);padding:7px 10px;background:rgba(60,255,160,0.07);border-radius:6px;border-left:2px solid var(--accent3);line-height:1.5">'+t.why+'</div>';
+    h+='</div>';
+  });
+  h+='<div style="display:flex;gap:8px;margin-top:16px">';
+  h+='<button onclick="cycleWizardClose()" style="flex:1;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Cancel</button>';
+  h+='<button onclick="cycleWizNext()" style="flex:2;background:var(--accent);color:#000;border:none;border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Next: Configure &#x2192;</button>';
+  h+='</div>';
+  h+='</div>';
+  return h;
+}
+function cycleWizSelectTpl(id){
+  var t=CYCLE_TEMPLATES.find(function(x){return x.id===id;});
+  if(t){_cwiz.tpl=id;_cwiz.phase=t.phase;_cwiz.weeks=t.weeks;_cwiz.compounds=t.compounds.map(function(c){return Object.assign({},c);});}
+  cycleWizRender();
+}
+function cycleWizNext(){
+  if(_cwiz.step===1&&!_cwiz.tpl){alert('Pick a template first');return;}
+  _cwiz.step++;cycleWizRender();
+}
+function cycleWizBack(){_cwiz.step=Math.max(1,_cwiz.step-1);cycleWizRender();}
+function _cwizInStyle(){return 'padding:9px 12px;border-radius:8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:14px;width:100%;box-sizing:border-box;font-family:inherit';}
+function _cwizStep2(){
+  var t=CYCLE_TEMPLATES.find(function(x){return x.id===_cwiz.tpl;})||CYCLE_TEMPLATES[0];
+  var ins=_cwizInStyle();
+  var h='<div style="padding:20px">';
+  h+='<div style="font-size:11px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Step 2 of 3 &#x2014; Configure</div>';
+  h+='<div style="background:var(--surface2);border-radius:8px;padding:10px 14px;margin-bottom:20px;border-left:3px solid '+t.badgeColor+'">';
+  h+='<div style="font-size:12px;font-weight:700;color:var(--text)">'+t.name+'</div>';
+  if(t.tip)h+='<div style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.5">'+t.tip+'</div>';
+  h+='</div>';
+  h+='<div style="display:grid;gap:6px;margin-bottom:16px">';
+  h+='<label style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:0.5px">Start Date</label>';
+  h+='<input id="cwiz-start" type="date" value="'+_cwiz.startDate+'" oninput="_cwiz.startDate=this.value" style="'+ins+'">';
+  h+='</div>';
+  h+='<div style="display:grid;gap:6px;margin-bottom:20px">';
+  h+='<label style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:0.5px">Cycle Length (weeks)</label>';
+  h+='<input id="cwiz-weeks" type="number" min="8" max="52" value="'+_cwiz.weeks+'" oninput="_cwiz.weeks=parseInt(this.value)||20" style="'+ins+'">';
+  h+='<div style="font-size:11px;color:var(--muted2)">Bloodwork checkpoints auto-generated based on length</div>';
+  h+='</div>';
+  h+='<div style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Compounds</div>';
+  _cwiz.compounds.forEach(function(c,i){
+    h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">';
+    h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">';
+    h+='<input id="cwiz-cn-'+i+'" type="text" value="'+_cycEsc(c.name)+'" placeholder="Compound name" oninput="_cwiz.compounds['+i+'].name=this.value" style="flex:3;min-width:140px;'+ins+'">';
+    h+='<input id="cwiz-cd-'+i+'" type="number" min="0" step="25" value="'+c.dose+'" oninput="_cwiz.compounds['+i+'].dose=parseFloat(this.value)||0" style="flex:1;min-width:70px;'+ins+'">';
+    h+='<select id="cwiz-cu-'+i+'" onchange="_cwiz.compounds['+i+'].unit=this.value" style="flex:1;min-width:90px;padding:9px 4px;border-radius:8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:13px;font-family:inherit">';
+    var units=['mg/week','mg/day','mg/EOD'];
+    units.forEach(function(u){h+='<option value="'+u+'"'+(c.unit===u?' selected':'')+'>'+u+'</option>';});
+    h+='</select>';
+    if(_cwiz.compounds.length>1)h+='<button onclick="_cwizDelCmpd('+i+')" style="background:transparent;border:1px solid rgba(255,60,60,0.4);color:var(--danger);border-radius:6px;padding:8px;cursor:pointer;font-size:13px;line-height:1;flex-shrink:0">&#x2715;</button>';
+    h+='</div>';
+    h+='</div>';
+  });
+  h+='<button onclick="_cwizAddCmpd()" style="width:100%;background:var(--surface2);color:var(--muted2);border:1px dashed var(--border);border-radius:8px;padding:10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:20px">+ Add Compound</button>';
+  h+='<div style="display:flex;gap:8px">';
+  h+='<button onclick="cycleWizBack()" style="flex:1;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">&#x2190; Back</button>';
+  h+='<button onclick="_cwizReview()" style="flex:2;background:var(--accent);color:#000;border:none;border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Review Cycle &#x2192;</button>';
+  h+='</div>';
+  h+='</div>';
+  return h;
+}
+function _cwizAddCmpd(){_cwiz.compounds.push({name:'',dose:250,unit:'mg/week',active:true,startWeek:0});cycleWizRender();}
+function _cwizDelCmpd(i){_cwiz.compounds.splice(i,1);cycleWizRender();}
+function _cwizCapture(){
+  var s=document.getElementById('cwiz-start');if(s&&s.value)_cwiz.startDate=s.value;
+  var w=document.getElementById('cwiz-weeks');if(w&&w.value)_cwiz.weeks=parseInt(w.value)||20;
+  _cwiz.compounds.forEach(function(c,i){
+    var ne=document.getElementById('cwiz-cn-'+i);if(ne)c.name=ne.value;
+    var de=document.getElementById('cwiz-cd-'+i);if(de)c.dose=parseFloat(de.value)||0;
+    var ue=document.getElementById('cwiz-cu-'+i);if(ue)c.unit=ue.value;
+  });
+}
+function _cwizReview(){_cwizCapture();_cwiz.step=3;cycleWizRender();}
+function _cwizGenBw(wks){
+  var bw=[{week:0,label:'Baseline',type:'baseline',date:null,done:false,results:{}},{week:5,label:'Response Check',type:'response',date:null,done:false,results:{}}];
+  if(wks>=12)bw.push({week:12,label:'Midcycle Panel',type:'midcycle',date:null,done:false,results:{}});
+  if(wks>=16){var eow=Math.max(wks-2,14);bw.push({week:eow,label:'End of Cycle',type:'eoc',date:null,done:false,results:{}});}
+  return bw;
+}
+function _cwizStep3(){
+  var t=CYCLE_TEMPLATES.find(function(x){return x.id===_cwiz.tpl;})||{name:'Custom',badgeColor:'var(--muted2)',badge:'CUSTOM'};
+  var bw=_cwizGenBw(_cwiz.weeks);
+  var startD=(_cwiz.startDate?parseLocalDate(_cwiz.startDate):null)||NOW;
+  var h='<div style="padding:20px">';
+  h+='<div style="font-size:11px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Step 3 of 3 &#x2014; Review &amp; Confirm</div>';
+  h+='<div style="background:var(--surface2);border-radius:12px;overflow:hidden;margin-bottom:12px">';
+  h+='<div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">';
+  h+='<div style="font-family:Bebas Neue,sans-serif;font-size:17px;letter-spacing:1.5px">'+t.name+'</div>';
+  h+='<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;background:'+t.badgeColor+'22;color:'+t.badgeColor+';border:1px solid '+t.badgeColor+'44">'+t.badge+'</span>';
+  h+='</div>';
+  var endD=new Date(startD.getTime());endD.setDate(endD.getDate()+_cwiz.weeks*7);
+  h+='<div style="padding:14px 16px;display:grid;gap:8px">';
+  h+='<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--muted2)">Start</span><span style="font-size:13px;font-weight:600">'+fmtDate(startD)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--muted2)">End</span><span style="font-size:13px;font-weight:600">'+fmtDate(endD)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--muted2)">Duration</span><span style="font-size:13px;font-weight:600">'+_cwiz.weeks+' weeks</span></div>';
+  h+='<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--muted2)">Phase</span><span style="font-size:13px;font-weight:600;text-transform:capitalize">'+(_cwiz.phase||'foundational')+'</span></div>';
+  h+='</div></div>';
+  h+='<div style="background:var(--surface2);border-radius:12px;overflow:hidden;margin-bottom:12px">';
+  h+='<div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase">Compounds</div>';
+  h+='<div style="padding:12px 16px;display:grid;gap:8px">';
+  _cwiz.compounds.filter(function(c){return c.name;}).forEach(function(c){h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:600;color:var(--text)">'+_cycEsc(c.name)+'</span><span style="font-size:13px;color:var(--accent);font-weight:700">'+c.dose+' '+_cycEsc(c.unit)+'</span></div>';});
+  h+='</div></div>';
+  h+='<div style="background:var(--surface2);border-radius:12px;overflow:hidden;margin-bottom:20px">';
+  h+='<div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase">Bloodwork Schedule (auto)</div>';
+  h+='<div style="padding:12px 16px;display:grid;gap:8px">';
+  bw.forEach(function(b){
+    var d=new Date(startD.getTime());d.setDate(d.getDate()+b.week*7);
+    h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:var(--muted2)">Wk '+b.week+' &#x2014; '+b.label+'</span><span style="font-size:12px;color:var(--text)">'+fmtDate(d)+'</span></div>';
+  });
+  h+='</div></div>';
+  h+='<div style="display:flex;gap:8px">';
+  h+='<button onclick="cycleWizBack()" style="flex:1;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">&#x2190; Back</button>';
+  h+='<button id="cwiz-confirm" onclick="cycleWizConfirm()" style="flex:2;background:var(--accent);color:#000;border:none;border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Start Cycle</button>';
+  h+='</div>';
+  h+='</div>';
+  return h;
+}
+async function cycleWizConfirm(){
+  var btn=document.getElementById('cwiz-confirm');
+  if(btn){btn.textContent='Creating…';btn.disabled=true;}
+  var payload={startDate:_cwiz.startDate,phase:_cwiz.phase||'foundational',cycleLengthWeeks:_cwiz.weeks,compounds:_cwiz.compounds.filter(function(c){return c.name;})};
+  try{
+    var r=await fetch(AGENT_URL+'/cycles',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    var res=await r.json();
+    var c=res.cycle||res;
+    cycleCacheSave(c);
+    cycleWizardClose();
+    renderCyclesTab();
+  }catch(e){
+    if(btn){btn.textContent='Start Cycle';btn.disabled=false;}
+    alert('Could not create cycle: '+e.message);
+  }
+}
 function logout(){_googleToken='';WEIGHTS_TOKEN='';localStorage.removeItem('google_token');localStorage.removeItem('app_pin');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}buildTabsSettingsCard();buildAppearanceCard();checkForUpdate();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}const token=WEIGHTS_TOKEN;fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':token}}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'Content-Type':'application/json','x-app-token':token},body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
