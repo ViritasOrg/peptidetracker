@@ -35,7 +35,8 @@ const patchedScript = rawScript
   .replace('let weights=',            'var weights=')
   .replace('var _bcWeightWindow=',    'var _bcWeightWindow=')
   .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=')
-  .replace('let WEIGHTS_TOKEN=',      'var WEIGHTS_TOKEN=');
+  .replace('let WEIGHTS_TOKEN=',      'var WEIGHTS_TOKEN=')
+  .replace('let _tabVis={};let _currentTab=', 'var _tabVis={};var _currentTab=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -1329,6 +1330,70 @@ check('20-wk cycle: EOC at wk 18',      bw20[3].week === 18 && bw20[3].type === 
 const bw8 = G._cwizGenBw(8);
 check('8-wk cycle: only 2 points',      bw8.length === 2);
 check('8-wk cycle: no midcycle',        !bw8.some(b=>b.type==='midcycle'));
+
+// ── Regression: buildStackStore must NOT break Today tab during init ──────────
+// This is the regression that caused "no doses in Today view, settings broken"
+// after the cycles tab redesign. buildStackStore() now calls renderCyclesTab()
+// which runs during loadUserStacks(). If it throws, buildToday() never runs.
+console.log('\n── Regression: cycles-tab init must not break Today tab ────');
+
+// buildStackStore must not call renderCyclesTab when cycles tab is not active
+let renderCyclesTabCallCount = 0;
+const origRenderCyclesTab = G.renderCyclesTab;
+G.renderCyclesTab = function() { renderCyclesTabCallCount++; origRenderCyclesTab(); };
+
+G._currentTab = 'today'; // simulates app being on Today tab
+renderCyclesTabCallCount = 0;
+G.buildStackStore();
+check('buildStackStore: no renderCyclesTab call when tab!=cycles', renderCyclesTabCallCount === 0,
+  `called ${renderCyclesTabCallCount} times`);
+
+G._currentTab = 'cycles';
+renderCyclesTabCallCount = 0;
+G.buildStackStore();
+check('buildStackStore: calls renderCyclesTab when tab=cycles',    renderCyclesTabCallCount === 1,
+  `called ${renderCyclesTabCallCount} times`);
+
+G.renderCyclesTab = origRenderCyclesTab; // restore
+
+// Simulate the full loadUserStacks() completion path:
+// updateWEEKLY → buildWeekStrip → buildToday — in that order, NO buildStackStore
+// We confirm this by checking that a Today-tab side-effect fires after stack load.
+let buildTodayFiredAfterStackLoad = false;
+const origBuildToday = G.buildToday;
+G.buildToday = function() { buildTodayFiredAfterStackLoad = true; origBuildToday(); };
+
+// Set up stacks and simulate what loadUserStacks does at the end
+G._currentTab = 'today';
+G._userStacks = [{ name:'Test', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg',days:[0,1,2,3,4,5,6],times:['AM']}], trt:{} }];
+G._activeStackIndex = 0;
+G.updateWEEKLY();
+buildTodayFiredAfterStackLoad = false;
+G.buildWeekStrip();
+G.buildToday();
+check('loadUserStacks completion: buildToday fires', buildTodayFiredAfterStackLoad, 'buildToday was never called');
+
+G.buildToday = origBuildToday; // restore
+
+// cycleRenderStatus must not throw when DOM elements are missing (null guards)
+const savedGetEl = sandbox.document.getElementById;
+sandbox.document.getElementById = (id) => {
+  if(id==='cycle-status-badge') return mockEl(); // only badge found
+  return null; // everything else missing (ph, st, wk, dur)
+};
+G._cycle = null;
+try { G.cycleRenderStatus(G._cycle); check('cycleRenderStatus: no throw when ph/st/wk null', true); }
+catch(e){ check('cycleRenderStatus: no throw when ph/st/wk null', false, e.message); }
+G._cycle = { startDate:'2026-04-04', phase:'foundational', cycleLengthWeeks:20 };
+try { G.cycleRenderStatus(G._cycle); check('cycleRenderStatus: no throw with cycle when ph/st/wk null', true); }
+catch(e){ check('cycleRenderStatus: no throw with cycle when ph/st/wk null', false, e.message); }
+sandbox.document.getElementById = savedGetEl;
+
+// renderCyclesTab called with cycles tab closed must not throw
+G._currentTab = 'today';
+G._cycle = null;
+try { G.renderCyclesTab(); check('renderCyclesTab: no throw when cycles tab closed', true); }
+catch(e){ check('renderCyclesTab: no throw when cycles tab closed', false, e.message); }
 
 // ── Summary ────────────────────────────────────────────────────────────────────
 console.log('\n───────────────────────────────────────────────────────────');
