@@ -1227,3 +1227,109 @@ if(fs.existsSync(plPath)){
       bad.length?`vials [${bad.join(',')}] not in pricelist (available: ${[...available].join(',')})`:'');
   }
 }
+
+// ── Cycles tab redesign ───────────────────────────────────────────────────────
+console.log('\n── Cycles tab redesign ─────────────────────────────────────');
+
+// New functions exist
+check('openCyclesTab defined',          typeof G.openCyclesTab === 'function');
+check('renderCyclesTab defined',        typeof G.renderCyclesTab === 'function');
+check('cycRenderStackBar defined',      typeof G.cycRenderStackBar === 'function');
+check('cycRenderPeptideSection defined',typeof G.cycRenderPeptideSection === 'function');
+check('cycRenderEnhancementSection defined',typeof G.cycRenderEnhancementSection === 'function');
+check('cycRenderE2Section defined',     typeof G.cycRenderE2Section === 'function');
+check('cycRenderGhSection defined',     typeof G.cycRenderGhSection === 'function');
+check('cycActivateStack defined',       typeof G.cycActivateStack === 'function');
+check('cycEditActiveStack defined',     typeof G.cycEditActiveStack === 'function');
+check('buildStackStore defined',        typeof G.buildStackStore === 'function');
+
+// Sub-tab functions removed
+check('switchCycSubTab removed',        typeof G.switchCycSubTab === 'undefined');
+check('_cycSubTab removed',             typeof G._cycSubTab === 'undefined');
+
+// cycleWeeks still works
+G._cycle = { startDate: '2026-04-04' };
+const weeksOn = G.cycleWeeks(G._cycle);
+check('cycleWeeks returns number >= 0', typeof weeksOn === 'number' && weeksOn >= 0);
+check('cycleWeeks for Apr 4 on Jun 15 = 10', weeksOn === 10, `got ${weeksOn}`);
+check('cycleWeeks null cycle = 0',      G.cycleWeeks(null) === 0);
+check('cycleWeeks no startDate = 0',    G.cycleWeeks({}) === 0);
+
+// cycActivateStack updates _activeStackIndex — isolate saveStacksToBackend mock
+const _savedOrigSave = G.saveStacksToBackend;
+G.saveStacksToBackend = async () => ({ok:true,synced:true});
+G._userStacks = [
+  { name:'Stack A', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg'}], trt:{} },
+  { name:'Stack B', peptides:[{id:'bpc157',name:'BPC-157',dose_am:'250',unit_am:'mcg'}], trt:{} },
+];
+G._activeStackIndex = 0;
+G.WEEKLY = [];
+// cycActivateStack(1) should update index
+try { G.cycActivateStack(1); check('cycActivateStack(1) does not throw', true); }
+catch(e){ check('cycActivateStack(1) does not throw', false, e.message); }
+check('cycActivateStack updated _activeStackIndex to 1', G._activeStackIndex === 1);
+// calling with same index is no-op
+G.cycActivateStack(1);
+check('cycActivateStack(same) no-op', G._activeStackIndex === 1);
+// Restore original mock so the wizSave test .then() still works
+G.saveStacksToBackend = _savedOrigSave;
+
+// cycRenderPeptideSection renders into #stack-body (mock)
+let stackBodyHTML = '';
+const origGetEl = sandbox.document.getElementById;
+sandbox.document.getElementById = (id) => {
+  if(id === 'stack-body') {
+    const el2 = {style:{},classList:{add:()=>{},remove:()=>{},contains:()=>false}};
+    Object.defineProperty(el2,'innerHTML',{get:()=>stackBodyHTML,set:(v)=>{stackBodyHTML=v;}});
+    return el2;
+  }
+  return mockEl();
+};
+G._activeStackIndex = 0;
+G._userStacks = [
+  { name:'Test Stack', peptides:[
+    {id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg',dose_pm:'',unit_pm:'mcg',start_date:'2026-04-04'},
+    {id:'bpc157',name:'BPC-157',dose_am:'250',unit_am:'mcg',dose_pm:'',unit_pm:'mcg'}
+  ], trt:{} }
+];
+G.cycRenderPeptideSection();
+check('cycRenderPeptideSection populates stack-body', stackBodyHTML.length > 0);
+check('cycRenderPeptideSection includes peptide name', stackBodyHTML.includes('CJC-1295/Ipa'));
+check('cycRenderPeptideSection includes dose', stackBodyHTML.includes('100'));
+sandbox.document.getElementById = origGetEl;
+
+// renderCyclesTab does not throw with valid data
+G._cycle = { startDate:'2026-04-04', phase:'foundational', cycleLengthWeeks:20, compounds:[{name:'Testosterone Enanthate',dose:300,unit:'mg/week',active:true}], bloodwork:[] };
+G._userStacks = [{ name:'Stack A', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg'}], trt:{} }];
+G._activeStackIndex = 0;
+try { G.renderCyclesTab(); check('renderCyclesTab does not throw', true); }
+catch(e){ check('renderCyclesTab does not throw', false, e.message); }
+
+// renderCyclesTab with null cycle does not throw
+G._cycle = null;
+try { G.renderCyclesTab(); check('renderCyclesTab null cycle no throw', true); }
+catch(e){ check('renderCyclesTab null cycle no throw', false, e.message); }
+
+// cycleWizardOpen / close exist and work
+check('cycleWizardOpen defined',        typeof G.cycleWizardOpen === 'function');
+check('cycleWizardClose defined',       typeof G.cycleWizardClose === 'function');
+check('CYCLE_TEMPLATES defined',        Array.isArray(G.CYCLE_TEMPLATES));
+check('5 cycle templates',              G.CYCLE_TEMPLATES.length === 5, `got ${G.CYCLE_TEMPLATES.length}`);
+check('first template is foundational', G.CYCLE_TEMPLATES[0].phase === 'foundational');
+check('last template is custom',        G.CYCLE_TEMPLATES[G.CYCLE_TEMPLATES.length-1].id === 'custom');
+
+// Bloodwork schedule generator
+const bw20 = G._cwizGenBw(20);
+check('_cwizGenBw defined',             typeof G._cwizGenBw === 'function');
+check('20-wk cycle: 4 bloodwork pts',   bw20.length === 4, `got ${bw20.length}`);
+check('20-wk cycle: baseline at wk 0',  bw20[0].week === 0 && bw20[0].type === 'baseline');
+check('20-wk cycle: response at wk 5',  bw20[1].week === 5 && bw20[1].type === 'response');
+check('20-wk cycle: midcycle at wk 12', bw20[2].week === 12 && bw20[2].type === 'midcycle');
+check('20-wk cycle: EOC at wk 18',      bw20[3].week === 18 && bw20[3].type === 'eoc');
+const bw8 = G._cwizGenBw(8);
+check('8-wk cycle: only 2 points',      bw8.length === 2);
+check('8-wk cycle: no midcycle',        !bw8.some(b=>b.type==='midcycle'));
+
+// ── Summary ────────────────────────────────────────────────────────────────────
+console.log('\n───────────────────────────────────────────────────────────');
+console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
