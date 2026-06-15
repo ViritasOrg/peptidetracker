@@ -1186,6 +1186,13 @@ async function loadUserStacks(){
     _userStacks[0].name='My Stack';
     _activeStackIndex=0;
   }
+  // Restore peptides if active stack exists but is empty (backend data was cleared/corrupted)
+  var _as=_userStacks[_activeStackIndex];
+  if(_as&&!(_as.peptides&&_as.peptides.length)){
+    var _def=_synthesizeProtocol(WEEKLY_DEFAULT);
+    _as.peptides=_def.peptides;
+    saveStacksToBackend();
+  }
   _userStacks.forEach(function(stack){
     if(stack.cycle_start){var _csp=stack.cycle_start.split('-');stack.cycle_start=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}
     (stack.peptides||[]).forEach(function(pp){if(pp.start_date){var _psp=pp.start_date.split('-');pp.start_date=_psp[0]+'-'+(_psp[1]||'1').padStart(2,'0')+'-'+(_psp[2]||'1').padStart(2,'0');}});
