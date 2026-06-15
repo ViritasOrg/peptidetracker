@@ -12,6 +12,9 @@
 - No Google Drive involved — deployment is entirely via GitHub
 - Monitor live version: `https://henrikschaub.github.io/peptidetracker/version.json`
 
+## User environment
+- **Henrik uses Chrome on mobile, never Safari** — when troubleshooting caching/reload issues, give Chrome instructions (3-dot menu → More tools → Hard Reload, or chrome://settings/clearBrowserData)
+
 ## App structure
 - Single-file app: `index.html` (JS, CSS, HTML all inline, ~125KB)
 - `version.json` — current version, read by the update-checker in the app
