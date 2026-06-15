@@ -641,6 +641,7 @@ function cycEditActiveStack(){editStack(_activeStackIndex);}
 function cycRenderPeptideSection(){
   var body=document.getElementById('stack-body');if(!body)return;
   var st=_activeStackIndex>=0&&_activeStackIndex<(_userStacks||[]).length?_userStacks[_activeStackIndex]:null;
+  if(!_stacksLoaded){body.innerHTML='<div class="empty">Loading…</div>';return;}
   if(!st||!st.peptides||!st.peptides.length){body.innerHTML='<div class="empty">No peptides in this stack</div>';return;}
   var html='';
   st.peptides.forEach(function(p){
@@ -1234,11 +1235,13 @@ async function loadUserStacks(){
   _stacksLoaded=true;
   buildWeekStrip();
   buildToday();
+  if(typeof renderCyclesTab==='function'&&_currentTab==='cycles')renderCyclesTab();
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){
   if(_userStacks.length&&_activeStackIndex<_userStacks.length){
-    WEEKLY=buildWeeklyFromProtocol(_userStacks[_activeStackIndex]);
+    var _built=buildWeeklyFromProtocol(_userStacks[_activeStackIndex]);
+    WEEKLY=_built.length?_built:WEEKLY_DEFAULT.slice();
   } else {
     WEEKLY=WEEKLY_DEFAULT.slice();
   }
