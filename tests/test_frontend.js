@@ -57,7 +57,7 @@ const sandbox = vm.createContext({
   localStorage: _lsProxy,
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
-  google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
+  google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,AbortController,
 });
 vm.runInContext(patchedScript, sandbox);
 const G = sandbox;
@@ -830,11 +830,152 @@ G.wizSave().then(async ()=>{
     `got ${JSON.stringify(G.weights)}`);
   check('deleteWeight preserves other entries', G.weights[0].weight === 89, `got ${G.weights[0].weight}`);
 
+  // ── Settings: loadSettings() builds cards before network calls (async) ────────
+  console.log('\n── Settings: loadSettings() build order ────────────────────');
+  {
+    const _origTabs = G.buildTabsSettingsCard, _origApp = G.buildAppearanceCard, _origChk = G.checkForUpdate;
+    let _tabsBuilt = false, _appBuilt = false, _chkDone = false;
+    G.buildTabsSettingsCard = () => { _tabsBuilt = true; };
+    G.buildAppearanceCard   = () => { _appBuilt  = true; };
+    G.checkForUpdate        = () => { _chkDone   = true; };
+    let _fetchCallCount = 0;
+    G.fetch = async () => { _fetchCallCount++; throw new Error('simulated network error'); };
+    const _ls_els = {};
+    ['s-version','s-email','s-local-doses','s-local-bc','s-milestones-count',
+     's-agent-dot','s-sync-dot','s-agent-label','s-sync-label','s-remote-doses',
+     's-sync-push-btn'].forEach(id => {
+      const e = {_html:'',_text:'',_class:'',style:{display:''},classList:{add:noop,remove:noop,contains:()=>false,toggle:noop}};
+      Object.defineProperty(e,'innerHTML',  {get(){return e._html;},  set(v){e._html=v;}});
+      Object.defineProperty(e,'textContent',{get(){return e._text;},  set(v){e._text=v;}});
+      Object.defineProperty(e,'className',  {get(){return e._class;}, set(v){e._class=v;}});
+      _ls_els[id] = e;
+    });
+    const _origGet = G.document.getElementById;
+    G.document.getElementById = id => _ls_els[id] || mockEl();
+    // Invoke loadSettings and inspect state synchronously at the first microtask boundary
+    let _builtBeforeFetch = false;
+    const _origFetch = G.fetch;
+    G.fetch = async () => {
+      _builtBeforeFetch = _tabsBuilt && _appBuilt;  // capture at first await point
+      _fetchCallCount++;
+      throw new Error('simulated network error');
+    };
+    try {
+      await G.loadSettings();
+      check('loadSettings: completes without throw on network error', true);
+    } catch(e) {
+      check('loadSettings: completes without throw on network error', false, e.message);
+    }
+    check('loadSettings: buildTabsSettingsCard called',    _tabsBuilt);
+    check('loadSettings: buildAppearanceCard called',      _appBuilt);
+    check('loadSettings: checkForUpdate called',           _chkDone);
+    check('loadSettings: cards built before fetch calls',  _builtBeforeFetch, `tabsBuilt=${_tabsBuilt} appBuilt=${_appBuilt} fetchCalls=${_fetchCallCount}`);
+    check('loadSettings: s-version text set',              _ls_els['s-version']._text.startsWith('v'), `got "${_ls_els['s-version']._text}"`);
+    G.buildTabsSettingsCard = _origTabs; G.buildAppearanceCard = _origApp; G.checkForUpdate = _origChk;
+    G.document.getElementById = _origGet; G.fetch = _origFetch;
+  }
+
+  // loadSettings: null aDot/sDot (missing DOM elements) must not throw
+  {
+    const _origGet = G.document.getElementById;
+    const _safeEls = {};
+    ['s-version','s-email','s-local-doses','s-local-bc','s-milestones-count',
+     's-agent-label','s-sync-label','s-remote-doses','s-sync-push-btn'].forEach(id => {
+      const e = {_text:'',_class:'',style:{display:''},classList:{add:noop,remove:noop,contains:()=>false}};
+      Object.defineProperty(e,'textContent',{get(){return e._text;},set(v){e._text=v;}});
+      Object.defineProperty(e,'className',  {get(){return e._class;},set(v){e._class=v;}});
+      _safeEls[id] = e;
+    });
+    // Return null for s-agent-dot and s-sync-dot to simulate missing elements
+    G.document.getElementById = id => (id==='s-agent-dot'||id==='s-sync-dot') ? null : (_safeEls[id]||mockEl());
+    G.fetch = async () => { throw new Error('network error'); };
+    try {
+      await G.loadSettings();
+      check('loadSettings: null aDot/sDot does not throw', true);
+    } catch(e) {
+      check('loadSettings: null aDot/sDot does not throw', false, e.message);
+    }
+    G.document.getElementById = _origGet;
+  }
+
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
+
+// ── Settings: buildTabsSettingsCard / buildAppearanceCard / toggleSSec ────────
+console.log('\n── Settings: card builders & accordion ─────────────────────');
+{
+  function capEl(id) {
+    const e = {id,_html:'',_text:'',_class:'',style:{display:''},
+      classList:{add:noop,remove:noop,contains:()=>false,toggle:noop},previousElementSibling:null};
+    Object.defineProperty(e,'innerHTML',  {get(){return e._html;},set(v){e._html=v;}});
+    Object.defineProperty(e,'textContent',{get(){return e._text;},set(v){e._text=v;}});
+    Object.defineProperty(e,'className',  {get(){return e._class;},set(v){e._class=v;}});
+    return e;
+  }
+
+  // buildTabsSettingsCard: renders tab section with header and rows
+  const tabsCard = capEl('s-tabs-card');
+  G._tabVis = Object.assign({}, G.TAB_DEFAULTS);
+  const _origGet = G.document.getElementById;
+  G.document.getElementById = id => id === 's-tabs-card' ? tabsCard : mockEl();
+  try {
+    G.buildTabsSettingsCard();
+    check('buildTabsSettingsCard: does not throw',            true);
+    check('buildTabsSettingsCard: sets innerHTML',             tabsCard._html.length > 0,          `length=${tabsCard._html.length}`);
+    check('buildTabsSettingsCard: Tabs header present',        tabsCard._html.includes('>Tabs<'),   `html snippet: ${tabsCard._html.slice(0,120)}`);
+    check('buildTabsSettingsCard: toggleTabVis onclick',       tabsCard._html.includes('toggleTabVis'), `missing onclick`);
+    check('buildTabsSettingsCard: Today row present',          tabsCard._html.includes('Today'),    `html snippet: ${tabsCard._html.slice(0,300)}`);
+    check('buildTabsSettingsCard: settings-always-visible note',tabsCard._html.includes('Settings is always visible'));
+  } catch(e) { check('buildTabsSettingsCard: does not throw', false, e.message); }
+  G.document.getElementById = _origGet;
+
+  // buildTabsSettingsCard: returns early when card element is null
+  G.document.getElementById = id => id === 's-tabs-card' ? null : mockEl();
+  try { G.buildTabsSettingsCard(); check('buildTabsSettingsCard: early return on null card', true); }
+  catch(e) { check('buildTabsSettingsCard: early return on null card', false, e.message); }
+  G.document.getElementById = _origGet;
+
+  // buildAppearanceCard: renders appearance section with theme tiles
+  const appCard = capEl('s-appearance-card');
+  G.document.getElementById = id => id === 's-appearance-card' ? appCard : mockEl();
+  try {
+    G.buildAppearanceCard();
+    check('buildAppearanceCard: does not throw',        true);
+    check('buildAppearanceCard: sets innerHTML',         appCard._html.length > 0,              `length=${appCard._html.length}`);
+    check('buildAppearanceCard: Appearance hdr present', appCard._html.includes('>Appearance<'), `html snippet: ${appCard._html.slice(0,120)}`);
+    check('buildAppearanceCard: applyTheme in tiles',    appCard._html.includes('applyTheme'),  `html snippet: ${appCard._html.slice(0,300)}`);
+  } catch(e) { check('buildAppearanceCard: does not throw', false, e.message); }
+  G.document.getElementById = _origGet;
+
+  // buildAppearanceCard: returns early when card is null
+  G.document.getElementById = id => id === 's-appearance-card' ? null : mockEl();
+  try { G.buildAppearanceCard(); check('buildAppearanceCard: early return on null card', true); }
+  catch(e) { check('buildAppearanceCard: early return on null card', false, e.message); }
+  G.document.getElementById = _origGet;
+
+  // toggleSSec: flips _sOpen and updates section body
+  {
+    const body = capEl('s-sec-backend');
+    let _bodyColToggle = null;
+    body.classList = {add:noop, remove:noop, contains:()=>false, toggle:(cls,val)=>{ _bodyColToggle={cls,val}; }};
+    const hdr = capEl('s-sec-hdr');
+    let _hdrOpenToggle = null;
+    hdr.classList = {add:noop, remove:noop, contains:()=>false, toggle:(cls,val)=>{ _hdrOpenToggle={cls,val}; }};
+    body.previousElementSibling = hdr;
+    G.document.getElementById = id => id === 's-sec-backend' ? body : mockEl();
+    const before = !!G._sOpen['backend'];
+    G.toggleSSec('backend');
+    check('toggleSSec: flips _sOpen',               !!G._sOpen['backend'] !== before);
+    check('toggleSSec: toggles body collapsed class', _bodyColToggle && _bodyColToggle.cls === 'collapsed');
+    check('toggleSSec: toggles hdr open class',       _hdrOpenToggle && _hdrOpenToggle.cls === 'open');
+    G.toggleSSec('backend');
+    check('toggleSSec: double-toggle restores _sOpen', !!G._sOpen['backend'] === before);
+    G.document.getElementById = _origGet;
+  }
+}
 
 // ── Blend vial PEPTIDE_CAT defaults ──────────────────────────────────────────
 console.log('\n── Blend vial PEPTIDE_CAT defaults ────────────────────────');
