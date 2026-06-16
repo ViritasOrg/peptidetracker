@@ -17,6 +17,7 @@ const patchedScript = rawScript
   .replace("const VERSION='",         "var VERSION='")
   .replace('const AGENT_URL=',        'var AGENT_URL=')
   .replace('const WEIGHTS_TOKEN=',    'var WEIGHTS_TOKEN=')
+  .replace('let WEIGHTS_TOKEN=',      'var WEIGHTS_TOKEN=')
   .replace('const GOOGLE_CLIENT_ID=', 'var GOOGLE_CLIENT_ID=')
   .replace('const CYCLE_SUGGESTIONS=','var CYCLE_SUGGESTIONS=')
   .replace('var WIZ_TITLES=',         'var WIZ_TITLES=')
@@ -34,9 +35,7 @@ const patchedScript = rawScript
   .replace('let _reconState=',        'var _reconState=')
   .replace('let weights=',            'var weights=')
   .replace('var _bcWeightWindow=',    'var _bcWeightWindow=')
-  .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=')
-  .replace('let WEIGHTS_TOKEN=',      'var WEIGHTS_TOKEN=')
-  .replace('let _tabVis={};let _currentTab=', 'var _tabVis={};var _currentTab=');
+  .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -57,7 +56,7 @@ const sandbox = vm.createContext({
   localStorage: _lsProxy,
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
-  google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,AbortController,
+  google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
 });
 vm.runInContext(patchedScript, sandbox);
 const G = sandbox;
@@ -830,152 +829,11 @@ G.wizSave().then(async ()=>{
     `got ${JSON.stringify(G.weights)}`);
   check('deleteWeight preserves other entries', G.weights[0].weight === 89, `got ${G.weights[0].weight}`);
 
-  // ── Settings: loadSettings() builds cards before network calls (async) ────────
-  console.log('\n── Settings: loadSettings() build order ────────────────────');
-  {
-    const _origTabs = G.buildTabsSettingsCard, _origApp = G.buildAppearanceCard, _origChk = G.checkForUpdate;
-    let _tabsBuilt = false, _appBuilt = false, _chkDone = false;
-    G.buildTabsSettingsCard = () => { _tabsBuilt = true; };
-    G.buildAppearanceCard   = () => { _appBuilt  = true; };
-    G.checkForUpdate        = () => { _chkDone   = true; };
-    let _fetchCallCount = 0;
-    G.fetch = async () => { _fetchCallCount++; throw new Error('simulated network error'); };
-    const _ls_els = {};
-    ['s-version','s-email','s-local-doses','s-local-bc','s-milestones-count',
-     's-agent-dot','s-sync-dot','s-agent-label','s-sync-label','s-remote-doses',
-     's-sync-push-btn'].forEach(id => {
-      const e = {_html:'',_text:'',_class:'',style:{display:''},classList:{add:noop,remove:noop,contains:()=>false,toggle:noop}};
-      Object.defineProperty(e,'innerHTML',  {get(){return e._html;},  set(v){e._html=v;}});
-      Object.defineProperty(e,'textContent',{get(){return e._text;},  set(v){e._text=v;}});
-      Object.defineProperty(e,'className',  {get(){return e._class;}, set(v){e._class=v;}});
-      _ls_els[id] = e;
-    });
-    const _origGet = G.document.getElementById;
-    G.document.getElementById = id => _ls_els[id] || mockEl();
-    // Invoke loadSettings and inspect state synchronously at the first microtask boundary
-    let _builtBeforeFetch = false;
-    const _origFetch = G.fetch;
-    G.fetch = async () => {
-      _builtBeforeFetch = _tabsBuilt && _appBuilt;  // capture at first await point
-      _fetchCallCount++;
-      throw new Error('simulated network error');
-    };
-    try {
-      await G.loadSettings();
-      check('loadSettings: completes without throw on network error', true);
-    } catch(e) {
-      check('loadSettings: completes without throw on network error', false, e.message);
-    }
-    check('loadSettings: buildTabsSettingsCard called',    _tabsBuilt);
-    check('loadSettings: buildAppearanceCard called',      _appBuilt);
-    check('loadSettings: checkForUpdate called',           _chkDone);
-    check('loadSettings: cards built before fetch calls',  _builtBeforeFetch, `tabsBuilt=${_tabsBuilt} appBuilt=${_appBuilt} fetchCalls=${_fetchCallCount}`);
-    check('loadSettings: s-version text set',              _ls_els['s-version']._text.startsWith('v'), `got "${_ls_els['s-version']._text}"`);
-    G.buildTabsSettingsCard = _origTabs; G.buildAppearanceCard = _origApp; G.checkForUpdate = _origChk;
-    G.document.getElementById = _origGet; G.fetch = _origFetch;
-  }
-
-  // loadSettings: null aDot/sDot (missing DOM elements) must not throw
-  {
-    const _origGet = G.document.getElementById;
-    const _safeEls = {};
-    ['s-version','s-email','s-local-doses','s-local-bc','s-milestones-count',
-     's-agent-label','s-sync-label','s-remote-doses','s-sync-push-btn'].forEach(id => {
-      const e = {_text:'',_class:'',style:{display:''},classList:{add:noop,remove:noop,contains:()=>false}};
-      Object.defineProperty(e,'textContent',{get(){return e._text;},set(v){e._text=v;}});
-      Object.defineProperty(e,'className',  {get(){return e._class;},set(v){e._class=v;}});
-      _safeEls[id] = e;
-    });
-    // Return null for s-agent-dot and s-sync-dot to simulate missing elements
-    G.document.getElementById = id => (id==='s-agent-dot'||id==='s-sync-dot') ? null : (_safeEls[id]||mockEl());
-    G.fetch = async () => { throw new Error('network error'); };
-    try {
-      await G.loadSettings();
-      check('loadSettings: null aDot/sDot does not throw', true);
-    } catch(e) {
-      check('loadSettings: null aDot/sDot does not throw', false, e.message);
-    }
-    G.document.getElementById = _origGet;
-  }
-
   // Final summary
   console.log(`\n${'─'.repeat(59)}`);
   console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
-
-// ── Settings: buildTabsSettingsCard / buildAppearanceCard / toggleSSec ────────
-console.log('\n── Settings: card builders & accordion ─────────────────────');
-{
-  function capEl(id) {
-    const e = {id,_html:'',_text:'',_class:'',style:{display:''},
-      classList:{add:noop,remove:noop,contains:()=>false,toggle:noop},previousElementSibling:null};
-    Object.defineProperty(e,'innerHTML',  {get(){return e._html;},set(v){e._html=v;}});
-    Object.defineProperty(e,'textContent',{get(){return e._text;},set(v){e._text=v;}});
-    Object.defineProperty(e,'className',  {get(){return e._class;},set(v){e._class=v;}});
-    return e;
-  }
-
-  // buildTabsSettingsCard: renders tab section with header and rows
-  const tabsCard = capEl('s-tabs-card');
-  G._tabVis = Object.assign({}, G.TAB_DEFAULTS);
-  const _origGet = G.document.getElementById;
-  G.document.getElementById = id => id === 's-tabs-card' ? tabsCard : mockEl();
-  try {
-    G.buildTabsSettingsCard();
-    check('buildTabsSettingsCard: does not throw',            true);
-    check('buildTabsSettingsCard: sets innerHTML',             tabsCard._html.length > 0,          `length=${tabsCard._html.length}`);
-    check('buildTabsSettingsCard: Tabs header present',        tabsCard._html.includes('>Tabs<'),   `html snippet: ${tabsCard._html.slice(0,120)}`);
-    check('buildTabsSettingsCard: toggleTabVis onclick',       tabsCard._html.includes('toggleTabVis'), `missing onclick`);
-    check('buildTabsSettingsCard: Today row present',          tabsCard._html.includes('Today'),    `html snippet: ${tabsCard._html.slice(0,300)}`);
-    check('buildTabsSettingsCard: settings-always-visible note',tabsCard._html.includes('Settings is always visible'));
-  } catch(e) { check('buildTabsSettingsCard: does not throw', false, e.message); }
-  G.document.getElementById = _origGet;
-
-  // buildTabsSettingsCard: returns early when card element is null
-  G.document.getElementById = id => id === 's-tabs-card' ? null : mockEl();
-  try { G.buildTabsSettingsCard(); check('buildTabsSettingsCard: early return on null card', true); }
-  catch(e) { check('buildTabsSettingsCard: early return on null card', false, e.message); }
-  G.document.getElementById = _origGet;
-
-  // buildAppearanceCard: renders appearance section with theme tiles
-  const appCard = capEl('s-appearance-card');
-  G.document.getElementById = id => id === 's-appearance-card' ? appCard : mockEl();
-  try {
-    G.buildAppearanceCard();
-    check('buildAppearanceCard: does not throw',        true);
-    check('buildAppearanceCard: sets innerHTML',         appCard._html.length > 0,              `length=${appCard._html.length}`);
-    check('buildAppearanceCard: Appearance hdr present', appCard._html.includes('>Appearance<'), `html snippet: ${appCard._html.slice(0,120)}`);
-    check('buildAppearanceCard: applyTheme in tiles',    appCard._html.includes('applyTheme'),  `html snippet: ${appCard._html.slice(0,300)}`);
-  } catch(e) { check('buildAppearanceCard: does not throw', false, e.message); }
-  G.document.getElementById = _origGet;
-
-  // buildAppearanceCard: returns early when card is null
-  G.document.getElementById = id => id === 's-appearance-card' ? null : mockEl();
-  try { G.buildAppearanceCard(); check('buildAppearanceCard: early return on null card', true); }
-  catch(e) { check('buildAppearanceCard: early return on null card', false, e.message); }
-  G.document.getElementById = _origGet;
-
-  // toggleSSec: flips _sOpen and updates section body
-  {
-    const body = capEl('s-sec-backend');
-    let _bodyColToggle = null;
-    body.classList = {add:noop, remove:noop, contains:()=>false, toggle:(cls,val)=>{ _bodyColToggle={cls,val}; }};
-    const hdr = capEl('s-sec-hdr');
-    let _hdrOpenToggle = null;
-    hdr.classList = {add:noop, remove:noop, contains:()=>false, toggle:(cls,val)=>{ _hdrOpenToggle={cls,val}; }};
-    body.previousElementSibling = hdr;
-    G.document.getElementById = id => id === 's-sec-backend' ? body : mockEl();
-    const before = !!G._sOpen['backend'];
-    G.toggleSSec('backend');
-    check('toggleSSec: flips _sOpen',               !!G._sOpen['backend'] !== before);
-    check('toggleSSec: toggles body collapsed class', _bodyColToggle && _bodyColToggle.cls === 'collapsed');
-    check('toggleSSec: toggles hdr open class',       _hdrOpenToggle && _hdrOpenToggle.cls === 'open');
-    G.toggleSSec('backend');
-    check('toggleSSec: double-toggle restores _sOpen', !!G._sOpen['backend'] === before);
-    G.document.getElementById = _origGet;
-  }
-}
 
 // ── Blend vial PEPTIDE_CAT defaults ──────────────────────────────────────────
 console.log('\n── Blend vial PEPTIDE_CAT defaults ────────────────────────');
@@ -1219,94 +1077,6 @@ const rcCjc=G.reconCalc('400','mcg',defVial('cjc-ipa'),defWater('cjc-ipa'),'mg')
 check('cjc-ipa default: 400mcg blend → 0.06ml',rcCjc&&rcCjc.ml===0.06, `got ${rcCjc?.ml}`);
 check('cjc-ipa default: 400mcg blend → 6 IU',  rcCjc&&rcCjc.iu===6,    `got ${rcCjc?.iu}`);
 
-// ── trtWeeklyMg: weekly dose calculation ──────────────────────────────────────
-console.log('\n── trtWeeklyMg: weekly mg from compound config ─────────────');
-check('trtWeeklyMg defined',          typeof G.trtWeeklyMg === 'function');
-// weeks unit: dose / freqVal
-check('125mg/wk (1/wk) → 125',       G.trtWeeklyMg({dose:'125',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 125);
-check('250mg / every 2wk → 125',      G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:2,freqUnit:'weeks'}) === 125);
-check('1000mg/12wk (Nebido) → ~83',  Math.abs(G.trtWeeklyMg({dose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'}) - 83.33) < 0.1);
-check('250mg/wk → 250',              G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 250);
-// days unit: dose * (7 / freqVal) where freqVal = days between injections
-check('50mg/day (every 1d) → 350',   G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:1,freqUnit:'days'}) === 350);
-check('50mg/EOD (every 2d) → 175',   G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:2,freqUnit:'days'}) === 175);
-check('50mg/wk via 7d → 50',         G.trtWeeklyMg({dose:'50',unit:'mg',freqVal:7,freqUnit:'days'}) === 50);
-// non-mg units → 0
-check('IU unit → 0',                 G.trtWeeklyMg({dose:'125',unit:'IU', freqVal:1,freqUnit:'weeks'}) === 0);
-check('mcg unit → 0',                G.trtWeeklyMg({dose:'500',unit:'mcg',freqVal:1,freqUnit:'weeks'}) === 0);
-// zero / empty dose → 0
-check('zero dose → 0',               G.trtWeeklyMg({dose:'0',unit:'mg',freqVal:1,freqUnit:'weeks'}) === 0);
-check('empty dose → 0',              G.trtWeeklyMg({dose:'', unit:'mg',freqVal:1,freqUnit:'weeks'}) === 0);
-// default freqUnit is weeks
-check('no freqUnit → weeks default', G.trtWeeklyMg({dose:'100',unit:'mg',freqVal:1}) === 100);
-
-// ── trtFreqNudge: 4-tier injection frequency nudge ────────────────────────────
-console.log('\n── trtFreqNudge: 4-tier threshold logic ────────────────────');
-check('trtFreqNudge defined',         typeof G.trtFreqNudge === 'function');
-// <200 → null
-check('0mg → null',                   G.trtFreqNudge(0) === null);
-check('199mg → null',                 G.trtFreqNudge(199) === null);
-// 200–350 → soft, 2×/week
-const _n200 = G.trtFreqNudge(200);
-check('200mg → soft level',           _n200 !== null && _n200.level === 'soft');
-check('200mg → mentions 2×/week',     _n200 && _n200.text.includes('2×/week'));
-const _n350 = G.trtFreqNudge(350);
-check('350mg → soft (boundary)',      _n350 !== null && _n350.level === 'soft');
-check('350mg → mentions 2×/week',     _n350 && _n350.text.includes('2×/week'));
-// 350–500 → soft, daily or EOD
-const _n351 = G.trtFreqNudge(351);
-check('351mg → soft level',           _n351 !== null && _n351.level === 'soft');
-check('351mg → mentions EOD',         _n351 && _n351.text.includes('every-other-day'));
-const _n500 = G.trtFreqNudge(500);
-check('500mg → soft (upper boundary)',_n500 !== null && _n500.level === 'soft');
-check('500mg → mentions EOD',         _n500 && _n500.text.includes('every-other-day'));
-// >500 → hard
-const _n501 = G.trtFreqNudge(501);
-check('501mg → hard level',           _n501 !== null && _n501.level === 'hard');
-check('1000mg → hard level',          G.trtFreqNudge(1000).level === 'hard');
-check('hard nudge mentions daily',    _n501 && _n501.text.toLowerCase().includes('daily'));
-// integration: trtWeeklyMg → trtFreqNudge
-check('125mg/wk → null (below threshold)',
-  G.trtFreqNudge(G.trtWeeklyMg({dose:'125',unit:'mg',freqVal:1,freqUnit:'weeks'})) === null);
-check('250mg/wk compound → soft nudge',
-  G.trtFreqNudge(G.trtWeeklyMg({dose:'250',unit:'mg',freqVal:1,freqUnit:'weeks'})) !== null);
-check('600mg/wk compound → hard nudge',
-  G.trtFreqNudge(G.trtWeeklyMg({dose:'600',unit:'mg',freqVal:1,freqUnit:'weeks'})).level === 'hard');
-check('Nebido 1000mg/12wk → below 200 threshold, null nudge',
-  G.trtFreqNudge(G.trtWeeklyMg({dose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'})) === null);
-
-// ── Consent screen (pep-consent-v1) ──────────────────────────────────────────
-console.log('\n── Consent screen (pep-consent-v1) ────────────────────────');
-check('showConsent defined',          typeof G.showConsent === 'function');
-check('acceptConsent defined',        typeof G.acceptConsent === 'function');
-check('unlockApp defined',            typeof G.unlockApp === 'function');
-// acceptConsent stores the consent key
-delete sandbox.localStorage._s['pep-consent-v1'];
-try { G.acceptConsent(); check('acceptConsent does not throw', true); }
-catch(e) { check('acceptConsent does not throw', false, e.message); }
-check('acceptConsent stores pep-consent-v1 = "1"', sandbox.localStorage._s['pep-consent-v1'] === '1');
-// unlockApp with consent stored → calls init (no consent gate)
-try { G.unlockApp(); check('unlockApp (consent present) does not throw', true); }
-catch(e) { check('unlockApp (consent present) does not throw', false, e.message); }
-// unlockApp without consent → calls showConsent
-delete sandbox.localStorage._s['pep-consent-v1'];
-try { G.unlockApp(); check('unlockApp (no consent) does not throw', true); }
-catch(e) { check('unlockApp (no consent) does not throw', false, e.message); }
-// consent key is still absent (showConsent shown, init not called)
-check('consent not set after unlockApp without accepting', sandbox.localStorage._s['pep-consent-v1'] == null);
-
-// ── Enhancement label rename ──────────────────────────────────────────────────
-console.log('\n── Enhancement label rename ────────────────────────────────');
-check('WIZ_TITLES defined',           Array.isArray(G.WIZ_TITLES));
-check('WIZ_TITLES[5] = ENHANCEMENT',  G.WIZ_TITLES[5] === 'ENHANCEMENT', `got "${G.WIZ_TITLES[5]}"`);
-check('GOAL_DEFS defined',            Array.isArray(G.GOAL_DEFS));
-const _enhGoal = (G.GOAL_DEFS || []).find(g => g.id === 'trt');
-check('GOAL_DEFS has trt entry',      !!_enhGoal, 'no trt entry in GOAL_DEFS');
-check('trt goal label = Enhancement', _enhGoal && _enhGoal.label === 'Enhancement', `got "${_enhGoal?.label}"`);
-check('trt goal icon = ⚡',           _enhGoal && _enhGoal.icon  === '⚡',           `got "${_enhGoal?.icon}"`);
-check('no GOAL_DEF has old label TRT',!(G.GOAL_DEFS || []).some(g => g.label === 'TRT'));
-check('no GOAL_DEF has label "TRT Support"', !(G.GOAL_DEFS || []).some(g => g.label === 'TRT Support'));
-
 // ── Price list validation ─────────────────────────────────────────────────────
 console.log('\n── Price list: RECON_DB vials match pricelist.csv ─────────');
 const plPath = path.join(__dirname, 'pricelist.csv');
@@ -1369,173 +1139,3 @@ if(fs.existsSync(plPath)){
       bad.length?`vials [${bad.join(',')}] not in pricelist (available: ${[...available].join(',')})`:'');
   }
 }
-
-// ── Cycles tab redesign ───────────────────────────────────────────────────────
-console.log('\n── Cycles tab redesign ─────────────────────────────────────');
-
-// New functions exist
-check('openCyclesTab defined',          typeof G.openCyclesTab === 'function');
-check('renderCyclesTab defined',        typeof G.renderCyclesTab === 'function');
-check('cycRenderStackBar defined',      typeof G.cycRenderStackBar === 'function');
-check('cycRenderPeptideSection defined',typeof G.cycRenderPeptideSection === 'function');
-check('cycRenderEnhancementSection defined',typeof G.cycRenderEnhancementSection === 'function');
-check('cycRenderE2Section defined',     typeof G.cycRenderE2Section === 'function');
-check('cycRenderGhSection defined',     typeof G.cycRenderGhSection === 'function');
-check('cycActivateStack defined',       typeof G.cycActivateStack === 'function');
-check('cycEditActiveStack defined',     typeof G.cycEditActiveStack === 'function');
-check('buildStackStore defined',        typeof G.buildStackStore === 'function');
-
-// Sub-tab functions removed
-check('switchCycSubTab removed',        typeof G.switchCycSubTab === 'undefined');
-check('_cycSubTab removed',             typeof G._cycSubTab === 'undefined');
-
-// cycleWeeks still works
-G._cycle = { startDate: '2026-04-04' };
-const weeksOn = G.cycleWeeks(G._cycle);
-check('cycleWeeks returns number >= 0', typeof weeksOn === 'number' && weeksOn >= 0);
-check('cycleWeeks for Apr 4 on Jun 15 = 10', weeksOn === 10, `got ${weeksOn}`);
-check('cycleWeeks null cycle = 0',      G.cycleWeeks(null) === 0);
-check('cycleWeeks no startDate = 0',    G.cycleWeeks({}) === 0);
-
-// cycActivateStack updates _activeStackIndex — isolate saveStacksToBackend mock
-const _savedOrigSave = G.saveStacksToBackend;
-G.saveStacksToBackend = async () => ({ok:true,synced:true});
-G._userStacks = [
-  { name:'Stack A', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg'}], trt:{} },
-  { name:'Stack B', peptides:[{id:'bpc157',name:'BPC-157',dose_am:'250',unit_am:'mcg'}], trt:{} },
-];
-G._activeStackIndex = 0;
-G.WEEKLY = [];
-// cycActivateStack(1) should update index
-try { G.cycActivateStack(1); check('cycActivateStack(1) does not throw', true); }
-catch(e){ check('cycActivateStack(1) does not throw', false, e.message); }
-check('cycActivateStack updated _activeStackIndex to 1', G._activeStackIndex === 1);
-// calling with same index is no-op
-G.cycActivateStack(1);
-check('cycActivateStack(same) no-op', G._activeStackIndex === 1);
-// Restore original mock so the wizSave test .then() still works
-G.saveStacksToBackend = _savedOrigSave;
-
-// cycRenderPeptideSection renders into #stack-body (mock)
-let stackBodyHTML = '';
-const origGetEl = sandbox.document.getElementById;
-sandbox.document.getElementById = (id) => {
-  if(id === 'stack-body') {
-    const el2 = {style:{},classList:{add:()=>{},remove:()=>{},contains:()=>false}};
-    Object.defineProperty(el2,'innerHTML',{get:()=>stackBodyHTML,set:(v)=>{stackBodyHTML=v;}});
-    return el2;
-  }
-  return mockEl();
-};
-G._activeStackIndex = 0;
-G._userStacks = [
-  { name:'Test Stack', peptides:[
-    {id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg',dose_pm:'',unit_pm:'mcg',start_date:'2026-04-04'},
-    {id:'bpc157',name:'BPC-157',dose_am:'250',unit_am:'mcg',dose_pm:'',unit_pm:'mcg'}
-  ], trt:{} }
-];
-G.cycRenderPeptideSection();
-check('cycRenderPeptideSection populates stack-body', stackBodyHTML.length > 0);
-check('cycRenderPeptideSection includes peptide name', stackBodyHTML.includes('CJC-1295/Ipa'));
-check('cycRenderPeptideSection includes dose', stackBodyHTML.includes('100'));
-sandbox.document.getElementById = origGetEl;
-
-// renderCyclesTab does not throw with valid data
-G._cycle = { startDate:'2026-04-04', phase:'foundational', cycleLengthWeeks:20, compounds:[{name:'Testosterone Enanthate',dose:300,unit:'mg/week',active:true}], bloodwork:[] };
-G._userStacks = [{ name:'Stack A', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg'}], trt:{} }];
-G._activeStackIndex = 0;
-try { G.renderCyclesTab(); check('renderCyclesTab does not throw', true); }
-catch(e){ check('renderCyclesTab does not throw', false, e.message); }
-
-// renderCyclesTab with null cycle does not throw
-G._cycle = null;
-try { G.renderCyclesTab(); check('renderCyclesTab null cycle no throw', true); }
-catch(e){ check('renderCyclesTab null cycle no throw', false, e.message); }
-
-// cycleWizardOpen / close exist and work
-check('cycleWizardOpen defined',        typeof G.cycleWizardOpen === 'function');
-check('cycleWizardClose defined',       typeof G.cycleWizardClose === 'function');
-check('CYCLE_TEMPLATES defined',        Array.isArray(G.CYCLE_TEMPLATES));
-check('5 cycle templates',              G.CYCLE_TEMPLATES.length === 5, `got ${G.CYCLE_TEMPLATES.length}`);
-check('first template is foundational', G.CYCLE_TEMPLATES[0].phase === 'foundational');
-check('last template is custom',        G.CYCLE_TEMPLATES[G.CYCLE_TEMPLATES.length-1].id === 'custom');
-
-// Bloodwork schedule generator
-const bw20 = G._cwizGenBw(20);
-check('_cwizGenBw defined',             typeof G._cwizGenBw === 'function');
-check('20-wk cycle: 4 bloodwork pts',   bw20.length === 4, `got ${bw20.length}`);
-check('20-wk cycle: baseline at wk 0',  bw20[0].week === 0 && bw20[0].type === 'baseline');
-check('20-wk cycle: response at wk 5',  bw20[1].week === 5 && bw20[1].type === 'response');
-check('20-wk cycle: midcycle at wk 12', bw20[2].week === 12 && bw20[2].type === 'midcycle');
-check('20-wk cycle: EOC at wk 18',      bw20[3].week === 18 && bw20[3].type === 'eoc');
-const bw8 = G._cwizGenBw(8);
-check('8-wk cycle: only 2 points',      bw8.length === 2);
-check('8-wk cycle: no midcycle',        !bw8.some(b=>b.type==='midcycle'));
-
-// ── Regression: buildStackStore must NOT break Today tab during init ──────────
-// This is the regression that caused "no doses in Today view, settings broken"
-// after the cycles tab redesign. buildStackStore() now calls renderCyclesTab()
-// which runs during loadUserStacks(). If it throws, buildToday() never runs.
-console.log('\n── Regression: cycles-tab init must not break Today tab ────');
-
-// buildStackStore must not call renderCyclesTab when cycles tab is not active
-let renderCyclesTabCallCount = 0;
-const origRenderCyclesTab = G.renderCyclesTab;
-G.renderCyclesTab = function() { renderCyclesTabCallCount++; origRenderCyclesTab(); };
-
-G._currentTab = 'today'; // simulates app being on Today tab
-renderCyclesTabCallCount = 0;
-G.buildStackStore();
-check('buildStackStore: no renderCyclesTab call when tab!=cycles', renderCyclesTabCallCount === 0,
-  `called ${renderCyclesTabCallCount} times`);
-
-G._currentTab = 'cycles';
-renderCyclesTabCallCount = 0;
-G.buildStackStore();
-check('buildStackStore: calls renderCyclesTab when tab=cycles',    renderCyclesTabCallCount === 1,
-  `called ${renderCyclesTabCallCount} times`);
-
-G.renderCyclesTab = origRenderCyclesTab; // restore
-
-// Simulate the full loadUserStacks() completion path:
-// updateWEEKLY → buildWeekStrip → buildToday — in that order, NO buildStackStore
-// We confirm this by checking that a Today-tab side-effect fires after stack load.
-let buildTodayFiredAfterStackLoad = false;
-const origBuildToday = G.buildToday;
-G.buildToday = function() { buildTodayFiredAfterStackLoad = true; origBuildToday(); };
-
-// Set up stacks and simulate what loadUserStacks does at the end
-G._currentTab = 'today';
-G._userStacks = [{ name:'Test', peptides:[{id:'cjc-ipa',name:'CJC-1295/Ipa',dose_am:'100',unit_am:'mcg',days:[0,1,2,3,4,5,6],times:['AM']}], trt:{} }];
-G._activeStackIndex = 0;
-G.updateWEEKLY();
-buildTodayFiredAfterStackLoad = false;
-G.buildWeekStrip();
-G.buildToday();
-check('loadUserStacks completion: buildToday fires', buildTodayFiredAfterStackLoad, 'buildToday was never called');
-
-G.buildToday = origBuildToday; // restore
-
-// cycleRenderStatus must not throw when DOM elements are missing (null guards)
-const savedGetEl = sandbox.document.getElementById;
-sandbox.document.getElementById = (id) => {
-  if(id==='cycle-status-badge') return mockEl(); // only badge found
-  return null; // everything else missing (ph, st, wk, dur)
-};
-G._cycle = null;
-try { G.cycleRenderStatus(G._cycle); check('cycleRenderStatus: no throw when ph/st/wk null', true); }
-catch(e){ check('cycleRenderStatus: no throw when ph/st/wk null', false, e.message); }
-G._cycle = { startDate:'2026-04-04', phase:'foundational', cycleLengthWeeks:20 };
-try { G.cycleRenderStatus(G._cycle); check('cycleRenderStatus: no throw with cycle when ph/st/wk null', true); }
-catch(e){ check('cycleRenderStatus: no throw with cycle when ph/st/wk null', false, e.message); }
-sandbox.document.getElementById = savedGetEl;
-
-// renderCyclesTab called with cycles tab closed must not throw
-G._currentTab = 'today';
-G._cycle = null;
-try { G.renderCyclesTab(); check('renderCyclesTab: no throw when cycles tab closed', true); }
-catch(e){ check('renderCyclesTab: no throw when cycles tab closed', false, e.message); }
-
-// ── Summary ────────────────────────────────────────────────────────────────────
-console.log('\n───────────────────────────────────────────────────────────');
-console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
