@@ -8,264 +8,14 @@
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
 <title>Henrik's Protocol v1.192</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
-  :root{--bg:#0a0a0a;--surface:#131313;--surface2:#1c1c1c;--border:#2a2a2a;--accent:#e8ff3c;--accent2:#ff6b2b;--accent3:#3cffa0;--accent4:#c084fc;--text:#f0f0f0;--muted:#555;--muted2:#888;--danger:#ff3c3c;--warning:#ffb03c;}
-  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
-  html,body{background:var(--bg) !important;color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;margin:0;padding:0;}
-  body.locked{overflow:hidden;height:100vh;}
-  #signin-screen{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;}
-  #signin-screen.hidden{display:none;}
-  .signin-logo{font-family:'Bebas Neue',sans-serif;font-size:38px;letter-spacing:4px;color:var(--accent);}
-  .signin-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:2px;margin-top:4px;margin-bottom:44px;}
-  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
-  #app{display:none;flex-direction:column;min-height:100vh;padding-bottom:40px;}
-  #app.visible{display:flex;}
-  .hdr{padding:22px 20px 0;display:flex;justify-content:space-between;align-items:flex-start;}
-  .hdr-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:3px;color:var(--accent);line-height:1;}
-  .hdr-sub{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1.5px;margin-top:3px;display:flex;align-items:center;gap:5px;}
-  .hdr-right{text-align:right;}
-  .hdr-day{font-family:'Bebas Neue',sans-serif;font-size:30px;color:var(--text);line-height:1;}
-  .hdr-weekday{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
-  .agent-status{display:inline-flex;align-items:center;margin-left:2px;}
-  .agent-dot{width:10px;height:10px;border-radius:50%;background:var(--border);transition:background 0.3s;flex-shrink:0;cursor:pointer;display:inline-block;}
-  .agent-dot.up{background:#3cffa0;box-shadow:0 0 6px rgba(60,255,160,0.7);}
-  .agent-dot.down{background:#ff3c3c;box-shadow:0 0 6px rgba(255,60,60,0.6);}.agent-dot.warn{background:#e8ff3c;box-shadow:0 0 6px rgba(232,255,60,0.6);}
-  .tabs{display:flex;padding:14px 20px 0;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;gap:4px;}
-  .tabs::-webkit-scrollbar{display:none;}
-  .tab{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;padding:8px 14px 12px;color:var(--muted2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.15s;}
-  .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
-  .content{flex:1;padding:20px;display:flex;flex-direction:column;gap:14px;}
-  .content.hidden{display:none;}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
-  .card-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border);}
-  .card-title-wrap{display:flex;align-items:center;gap:10px;}
-  .card-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
-  .card-title{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:1.5px;color:var(--text);}
-  .card-badge{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;padding:3px 8px;border-radius:20px;}
-  .badge-today{background:rgba(232,255,60,0.15);color:var(--accent);border:1px solid rgba(232,255,60,0.3);}
-  .badge-done{background:rgba(60,255,160,0.1);color:var(--accent3);border:1px solid rgba(60,255,160,0.2);}
-  .badge-upcoming{background:rgba(192,132,252,0.1);color:var(--accent4);border:1px solid rgba(192,132,252,0.2);}
-  .badge-bridge{background:rgba(255,107,43,0.1);color:var(--accent2);border:1px solid rgba(255,107,43,0.2);}
-  .card-body{padding:14px 16px;display:flex;flex-direction:column;gap:8px;}
-  .info-row{display:flex;justify-content:space-between;align-items:baseline;}
-  .info-label{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
-  .info-val{font-size:13px;font-weight:500;color:var(--text);}
-  .info-val.accent{color:var(--accent);}
-  .info-val.green{color:var(--accent3);}
-  .info-val.warn{color:var(--warning);}
-  .info-val.purple{color:var(--accent4);}
-  .divider{height:1px;background:var(--border);margin:4px 0;}
-  .note{font-size:11px;color:var(--muted2);background:var(--surface2);border-radius:6px;padding:8px 10px;margin-top:2px;line-height:1.5;}
-  .checklist{display:flex;flex-direction:column;}
-  .check-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.12s;user-select:none;}
-  .check-item:last-child{border-bottom:none;}
-  .check-item:active{background:var(--surface2);}
-  .check-box{width:22px;height:22px;border-radius:6px;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;}
-  .check-box.checked{background:var(--accent3);border-color:var(--accent3);}
-  .check-box svg{display:none;}
-  .check-box.checked svg{display:block;}
-  .check-main{flex:1;}
-  .check-name{font-size:14px;font-weight:500;}
-  .check-detail{font-size:11px;color:var(--muted2);margin-top:2px;}
-  .check-item.checked-item .check-name{text-decoration:line-through;}
-  .check-time{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1px;color:var(--muted2);}
-  .week-strip{display:flex;gap:6px;padding:0 20px 8px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
-  .week-day{flex:0 0 44px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);}
-  .week-day.today{border-color:var(--accent);}.week-day.selected-day{background:var(--surface2);border-color:var(--accent4);}
-  .week-day-name{font-weight:600;}
-  .week-day-num{font-family:'Bebas Neue',sans-serif;font-size:18px;line-height:1;color:var(--text);}
-  .week-day.today .week-day-num{color:var(--accent);}
-  .week-dots{display:flex;gap:3px;flex-wrap:wrap;justify-content:center;min-height:6px;}
-  .week-dot{width:5px;height:5px;border-radius:50%;}
-  .timeline{display:flex;flex-direction:column;}
-  .milestone{display:flex;gap:14px;padding:14px 16px;border-bottom:1px solid var(--border);}
-  .milestone:last-child{border-bottom:none;}
-  .milestone-line{display:flex;flex-direction:column;align-items:center;}
-  .milestone-dot{width:12px;height:12px;border-radius:50%;border:2px solid var(--border);background:var(--surface2);flex-shrink:0;margin-top:3px;}
-  .milestone-dot.past{background:var(--accent3);border-color:var(--accent3);}
-  .milestone-dot.today-dot{background:var(--accent);border-color:var(--accent);box-shadow:0 0 8px rgba(232,255,60,0.5);}
-  .milestone-dot.future{background:transparent;border-color:var(--muted);}
-  .milestone-connector{width:2px;flex:1;background:var(--border);margin-top:4px;min-height:20px;}
-  .milestone-body{flex:1;padding-bottom:4px;}
-  .milestone-date{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;}
-  .milestone-name{font-weight:600;font-size:14px;margin-top:2px;}
-  .milestone-desc{font-size:12px;color:var(--muted2);margin-top:3px;line-height:1.4;}
-  .prog-wrap{padding:12px 16px 14px;}
-  .prog-label{display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-bottom:6px;}
-  .prog-bar{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
-  .prog-fill{height:100%;border-radius:2px;transition:width 0.5s ease;}
-  .stack-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);}
-  .stack-row:last-child{border-bottom:none;}
-  .stack-pct{font-family:'Bebas Neue',sans-serif;font-size:24px;line-height:1;min-width:52px;}
-  .stack-info{flex:1;}
-  .stack-name{font-size:13px;font-weight:500;}
-  .stack-dose{font-size:11px;color:var(--muted2);margin-top:2px;}
-  .stack-bar-wrap{width:60px;}
-  .stack-bar{height:3px;background:var(--border);border-radius:2px;}
-  .stack-fill{height:100%;border-radius:2px;}
-  .alert-bar{padding:10px 14px;border-radius:8px;background:rgba(255,176,60,0.08);border:1px solid rgba(255,176,60,0.25);display:flex;gap:10px;align-items:flex-start;}
-  .alert-bar.green{background:rgba(60,255,160,0.06);border-color:rgba(60,255,160,0.2);}
-  .alert-icon{font-size:14px;margin-top:1px;flex-shrink:0;}
-  .alert-text{font-size:12px;color:var(--muted2);line-height:1.5;}
-  .alert-text strong{color:var(--text);}
-  .sched-day{margin-bottom:12px;}
-  .sched-day-label{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
-  .sched-day-label.is-today{color:var(--accent);}
-  .pill-wrap{display:flex;flex-wrap:wrap;gap:5px;}
-  .pill{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 10px;font-size:11px;}
-  .pill-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
-  .empty{padding:40px 20px;text-align:center;color:var(--muted2);font-size:13px;}
-  .empty-icon{font-size:32px;margin-bottom:12px;}
-  /* Stack wizard */
-  .wiz-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;flex-direction:column;overflow:hidden;transform:translateX(100%);transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);}
-  .wiz-overlay.open{transform:translateX(0);}
-  .wiz-header{display:flex;align-items:center;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--border);flex-shrink:0;}
-  .wiz-back{background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;padding:0;line-height:1;flex-shrink:0;}
-  .wiz-title{font-family:'Bebas Neue',sans-serif;font-size:21px;letter-spacing:1px;color:var(--accent);flex:1;}
-  .wiz-progress{display:flex;gap:4px;align-items:center;}
-  .wiz-cancel{background:var(--accent);color:#000;border:none;font-size:13px;font-weight:700;cursor:pointer;padding:6px 16px;border-radius:50px;font-family:inherit;flex-shrink:0;letter-spacing:0.3px;}
-  .wiz-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all 0.2s;}
-  .wiz-dot.done{background:var(--accent3);}
-  .wiz-dot.active{background:var(--accent);width:18px;border-radius:3px;}
-  .wiz-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 20px 8px;}
-  .wiz-footer{padding:12px 20px 32px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;}
-  .wiz-section{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;margin:18px 0 10px;}
-  .wiz-section:first-child{margin-top:4px;}
-  .goal-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px;}
-  .goal-chip{padding:8px 14px;border:1px solid var(--border);border-radius:20px;font-size:13px;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
-  .goal-chip.sel{border-color:var(--accent);color:var(--accent);background:rgba(232,255,60,0.08);}
-  .pep-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;display:flex;align-items:center;gap:12px;}
-  .pep-card.sel{border-color:var(--accent);background:rgba(232,255,60,0.04);}
-  .pep-dot-sm{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
-  .pep-info{flex:1;min-width:0;}
-  .pep-name{font-size:14px;font-weight:500;color:var(--text);}
-  .pep-meta{font-size:11px;color:var(--muted2);margin-top:2px;}
-  .pep-chk{width:18px;height:18px;border-radius:4px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;}
-  .pep-card.sel .pep-chk{background:var(--accent);border-color:var(--accent);}
-  .cfg-block{border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;}
-  .cfg-name{font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px;}
-  .cfg-lbl{font-size:10px;font-weight:600;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;}
-  .cfg-row{margin-bottom:10px;}
-  .cfg-row:last-child{margin-bottom:0;}
-  .day-chips{display:flex;gap:5px;}
-  .day-chip{width:34px;height:34px;border-radius:50%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
-  .day-chip.sel{background:var(--accent);border-color:var(--accent);color:#000;}
-  .time-chips{display:flex;gap:6px;}
-  .time-chip{padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;color:var(--muted2);transition:all 0.15s;user-select:none;}
-  .time-chip.sel{background:var(--accent);border-color:var(--accent);color:#000;}
-  .bcw-btn{background:none;border:1px solid var(--border);color:var(--muted2);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.2s;}
-  .bcw-btn.active{border-color:var(--accent);color:var(--accent);}
-  .dose-row{display:flex;gap:6px;align-items:center;}
-  input.dose-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:13px;width:72px;font-family:inherit;outline:none;}
-  input.dose-in:focus{border-color:var(--accent);}
-  select.unit-sel{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;}
-  input.note-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px;width:100%;font-family:inherit;box-sizing:border-box;outline:none;}
-  .trt-toggle{display:flex;align-items:center;justify-content:space-between;padding:14px;border:1px solid var(--border);border-radius:10px;cursor:pointer;margin-bottom:10px;}
-  .trt-toggle-label{font-size:14px;color:var(--text);}
-  .toggle-sw{width:38px;height:22px;background:var(--border);border-radius:11px;position:relative;transition:background 0.2s;}
-  .toggle-sw.on{background:var(--accent);}
-  .toggle-sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#000;transition:transform 0.2s;}
-  .toggle-sw.on::after{transform:translateX(16px);}
-  .trt-form{border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;}
-  input.trt-in{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;width:100%;font-family:inherit;box-sizing:border-box;outline:none;margin-bottom:8px;}
-  .inj-row{display:flex;gap:6px;align-items:center;margin-bottom:6px;}
-  .inj-row input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none;}
-  .inj-row button{background:none;border:none;color:var(--danger);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
-  .rule-box{border-radius:8px;padding:12px 14px;margin-bottom:8px;}
-  .rule-box.ok{background:rgba(60,255,160,0.07);border:1px solid rgba(60,255,160,0.2);}
-  .rule-box.warn{background:rgba(255,176,60,0.07);border:1px solid rgba(255,176,60,0.3);}
-  .rule-box.err{background:rgba(255,60,60,0.07);border:1px solid rgba(255,60,60,0.25);}
-  .rule-title{font-size:13px;font-weight:600;margin-bottom:3px;}
-  .rule-title.ok{color:var(--accent3);}
-  .rule-title.warn{color:#ffb03c;}
-  .rule-title.err{color:var(--danger);}
-  .rule-msg{font-size:12px;color:var(--muted2);line-height:1.4;}
-  .stack-empty{text-align:center;padding:52px 24px;}
-  .stack-empty-icon{font-size:44px;margin-bottom:14px;}
-  .stack-empty-title{font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--text);letter-spacing:1px;margin-bottom:8px;}
-  .stack-empty-desc{font-size:13px;color:var(--muted2);line-height:1.6;max-width:270px;margin:0 auto 24px;}
-  .stack-actions{display:flex;gap:8px;margin-bottom:12px;}
-  .stack-card{border:1px solid var(--border);border-radius:10px;padding:12px;background:rgba(255,255,255,0.03);display:flex;flex-direction:column;gap:8px;transition:all 0.15s;cursor:pointer;position:relative;}
-  .stack-card:active{opacity:0.8;}
-  .stack-card.active{border-color:var(--accent);background:rgba(232,255,60,0.08);}
-  .stack-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:4px;}
-  .stack-card-name{font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .stack-card-meta{font-size:11px;color:var(--muted2);display:flex;flex-direction:column;gap:2px;}
-  .stack-card-empty{border:1.5px dashed rgba(255,255,255,0.12);border-radius:10px;padding:12px;background:transparent;display:flex;align-items:center;justify-content:center;min-height:86px;}
-  .stack-icon-btn{background:none;border:none;color:var(--muted2);cursor:pointer;padding:3px 5px;border-radius:4px;font-size:14px;line-height:1;transition:color 0.12s;flex-shrink:0;}
-  .stack-icon-btn:active{color:var(--text);}
-  .stack-icon-btn.danger{color:rgba(255,80,80,0.55);}
-  .stack-icon-btn.danger:active{color:var(--danger);}
-  .btn-sm{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.15s;}
-  .btn-sm:active{background:var(--accent);color:#000;}
-  .btn-sm.btn-danger:active{background:var(--danger);color:#fff;}
-  .btn-check{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
-  .btn{border:none;border-radius:50px;padding:16px 24px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity 0.12s;}
-  .btn-primary{background:var(--accent);color:#000;}
-  .btn-primary:active{opacity:0.8;}
-  .btn-primary:disabled{opacity:0.45;}
-  .today-spinner{display:flex;justify-content:center;align-items:center;padding:48px 20px;}
-  .today-spinner-dot{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;}
-  @keyframes spin{to{transform:rotate(360deg);}}
-  .reset-btn{margin:0 20px;padding:12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-family:'DM Sans',sans-serif;cursor:pointer;transition:all 0.12s;width:calc(100% - 40px);}
-  .reset-btn:active{color:var(--danger);border-color:var(--danger);}
-  .pcard-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:500;display:flex;align-items:flex-end;justify-content:center;}
-  .pcard-sheet{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px 48px;max-height:92vh;overflow-y:auto;}
-  .pcard-name{font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:1.5px;line-height:1.1;color:var(--text);}
-  .pcard-section{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin:18px 0 7px;opacity:0.5;}
-  .pcard-body{font-size:13px;color:var(--text);line-height:1.72;opacity:0.82;}
-  .pcard-ul{padding:0;margin:0;list-style:none;}
-  .pcard-ul li{font-size:13px;color:var(--text);line-height:1.65;padding:2px 0 2px 15px;position:relative;opacity:0.82;}
-  .pcard-ul li::before{content:'·';position:absolute;left:3px;font-size:16px;line-height:1.3;}
-  .pcard-stat{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
-  .pcard-lbl{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted2);}
-  .pcard-val{font-size:12px;color:var(--text);text-align:right;}
-  .pcard-goals{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:4px;}
-  .pcard-goal{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 8px;border-radius:10px;border:1px solid;}
-  .info-btn{background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:3px 7px;line-height:1;opacity:0.55;flex-shrink:0;transition:opacity 0.15s;}
-  .info-btn:active{opacity:1;}
-  .conflict-peps{margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;}
-  .conflict-pep{display:flex;align-items:center;gap:10px;padding:5px 0;cursor:pointer;user-select:none;}
-  .conflict-chk{width:20px;height:20px;border-radius:5px;background:var(--accent3);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  #onboarding-overlay{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;flex-direction:column;overflow:hidden;}
-  #onboarding-overlay.hidden{display:none;}
-  .ob-header{padding:20px 20px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
-  .ob-dots{display:flex;gap:6px;align-items:center;}
-  .ob-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all 0.2s;}
-  .ob-dot.active{background:var(--accent);width:18px;border-radius:3px;}
-  .ob-dot.done{background:var(--accent);opacity:0.5;}
-  .ob-body{flex:1;overflow-y:auto;padding:24px 20px;-webkit-overflow-scrolling:touch;}
-  .ob-footer{padding:16px 20px 32px;display:flex;gap:10px;flex-shrink:0;}
-  .ob-next{flex:1;padding:14px;background:var(--accent);color:#000;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:0.3px;}
-  .ob-back{padding:14px 18px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:20px;cursor:pointer;line-height:1;}
-  .ob-skip{padding:14px 10px;background:transparent;color:var(--muted);border:none;font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;}
-  .ob-theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-  .ob-theme-card{border-radius:12px;padding:12px;cursor:pointer;position:relative;transition:border-color 0.15s;}
-  .ob-field{margin-bottom:18px;}
-  .ob-field label{display:block;font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;}
-  .ob-field input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px;color:var(--text);font-family:'DM Sans',sans-serif;outline:none;transition:border-color 0.2s;}
-  .ob-field input:focus{border-color:var(--accent);}
-  .ob-gender-btn{flex:1;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--muted);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s;}
-  .ob-gender-btn.ob-sel{border-color:var(--accent);color:var(--accent);background:var(--surface2);}
-  .s-sec-hdr{padding:10px 16px;font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;-webkit-user-select:none;}
-  .s-sec-hdr.open{border-bottom:1px solid var(--border);}
-  .s-chev{font-size:18px;color:var(--muted2);transition:transform 0.2s;}
-  .s-sec-hdr.open .s-chev{transform:rotate(180deg);}
-  .s-sec-body.collapsed{display:none;}
-</style>
+<link rel="stylesheet" href="css/main.css">
 </head>
 <body>
 <div id="signin-screen">
   <div class="signin-logo">PROTOCOL</div>
-  <div class="signin-sub" id="pin-version">Beta Access</div>
+  <div class="signin-sub" id="signin-version">Beta Access</div>
   <div id="g_signin_container" style="margin-top:8px"></div>
-  <div style="color:var(--muted);font-size:11px;letter-spacing:2px;margin:20px 0 12px;text-transform:uppercase">or enter access PIN</div>
-  <div style="display:flex;flex-direction:column;align-items:center;gap:10px;width:100%;max-width:280px">
-    <input id="pin-input" type="password" placeholder="••••••" autocomplete="current-password" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:18px;padding:12px 16px;outline:none;text-align:center;letter-spacing:4px;" onkeydown="if(event.key==='Enter')submitPin()"/>
-    <button onclick="submitPin()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:8px;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:2px;padding:12px;cursor:pointer;transition:opacity 0.15s;" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">ENTER</button>
-    <div id="pin-msg" style="font-size:12px;color:var(--muted2);min-height:18px;text-align:center;"></div>
-  </div>
+  <div id="signin-msg" style="font-size:12px;color:var(--muted2);min-height:18px;text-align:center;margin-top:14px;"></div>
 </div>
 <div id="app">
   <div class="hdr">
@@ -419,6 +169,13 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Sync</span><span style="display:flex;align-items:center;gap:8px;font-size:13px;"><span class="agent-dot" id="s-sync-dot"></span><span id="s-sync-label">Checking…</span></span></div>
       </div>
     </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
+      <div class="s-sec-hdr" onclick="toggleSSec('deploy')">Deploy<span class="s-chev">▾</span></div>
+      <div class="s-sec-body collapsed" id="s-sec-deploy">
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Staging build looks good?</span><button id="push-to-prod-btn" onclick="pushToProd()" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">Push to Prod</button></div>
+      <div style="padding:0 16px 12px;font-size:11px;color:var(--muted2)" id="push-to-prod-status"></div>
+      </div>
+    </div>
     <div id="s-tabs-card" style="margin-top:14px"></div>
     <div id="s-appearance-card" style="margin-top:14px"></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
@@ -523,8 +280,8 @@ let _reconStackIdx=0;let _reconState={};
 const TAB_LABELS={today:'Today',cycles:'Cycles',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'};
 const TAB_DEFAULTS={today:true,cycles:true,recon:true,schedule:false,macros:false,timeline:true,body:true};
 let _tabVis={};let _currentTab='today';
-const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let WEIGHTS_TOKEN=localStorage.getItem('app_pin')||'';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={'x-app-token':WEIGHTS_TOKEN};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.body.classList.remove('pin-locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);const _pm=document.getElementById('pin-msg');if(_pm){_pm.style.color='var(--accent3)';_pm.textContent='Google auth done — enter PIN to continue';}}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}const _storedPin=localStorage.getItem('app_pin');if(_storedPin){WEIGHTS_TOKEN=_storedPin;unlockApp();}else{const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);}
-async function submitPin(){const pin=document.getElementById('pin-input').value.trim();if(!pin)return;const errEl=document.getElementById('pin-msg');errEl.style.color='var(--muted2)';errEl.textContent='Verifying…';try{const r=await fetch(AGENT_URL+'/auth/verify',{method:'POST',headers:{'x-app-token':pin}});if(r.ok){localStorage.setItem('app_pin',pin);WEIGHTS_TOKEN=pin;errEl.textContent='';unlockApp();}else if(r.status===403){errEl.style.color='var(--danger)';errEl.textContent='Access denied — contact Henrik';}else{errEl.style.color='var(--danger)';errEl.textContent='Invalid PIN — try again';document.getElementById('pin-input').value='';document.getElementById('pin-input').style.animation='shake 0.3s';setTimeout(()=>{document.getElementById('pin-input').style.animation='';},300);}}catch(e){errEl.style.color='var(--warning)';errEl.textContent='Connection error — try again';}}
+const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);
+
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 const THEMES=[
@@ -541,10 +298,10 @@ function sSecBody(id){return '<div class="s-sec-body'+(!_sOpen[id]?' collapsed':
 function toggleSSec(id){_sOpen[id]=!_sOpen[id];setData('pep-settings-open',_sOpen);var b=document.getElementById('s-sec-'+id);if(!b)return;b.classList.toggle('collapsed',!_sOpen[id]);var h=b.previousElementSibling;if(h)h.classList.toggle('open',!!_sOpen[id]);}
 (function(){['backend','data','app','account'].forEach(function(id){if(!_sOpen[id])return;var b=document.getElementById('s-sec-'+id);if(!b)return;b.classList.remove('collapsed');var h=b.previousElementSibling;if(h)h.classList.add('open');});})();
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
-async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();weights=remote.map(function(w){return{date:_normDt(w.date),weight:w.weight};}).sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){weights=getData('weight_log',[]);}}
-async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:{"x-app-token":WEIGHTS_TOKEN}});if(!r.ok)return;const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();}catch(e){}}
+async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders()});if(!r.ok)return;const remote=await r.json();weights=remote.map(function(w){return{date:_normDt(w.date),weight:w.weight};}).sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){weights=getData('weight_log',[]);}}
+async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:authHeaders()});if(!r.ok)return;const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();}catch(e){}}
 async function pushBodyCompToAgent(entry){try{await fetch(AGENT_URL+"/bodycomp",{method:"POST",headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(entry)});}catch(e){}}
-async function deleteBodyCompFromAgent(date){try{await fetch(AGENT_URL+"/bodycomp/"+date,{method:"DELETE",headers:{"x-app-token":WEIGHTS_TOKEN}});}catch(e){}}
+async function deleteBodyCompFromAgent(date){try{await fetch(AGENT_URL+"/bodycomp/"+date,{method:"DELETE",headers:authHeaders()});}catch(e){}}
 function getWeightForDate(dateStr){if(!weights.length)return null;const target=new Date(dateStr.replace(/-/g,'/'));let best=null,bestDiff=Infinity;for(const w of weights){const diff=Math.abs(target-new Date(w.date.replace(/-/g,'/')));if(diff<bestDiff){bestDiff=diff;best=w.weight;}}return bestDiff<=7*86400000?best:null;}
 function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='macros')loadMacros();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='cycles')openCyclesTab();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');}}
 /* ── CYCLES — enhancement-cycle tracking (backend-synced, offline-first) ── */
@@ -911,9 +668,10 @@ function renderMacros(bw){
   h+='</div>';
   body.innerHTML=h;
 }
-function logout(){_googleToken='';WEIGHTS_TOKEN='';localStorage.removeItem('google_token');localStorage.removeItem('app_pin');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}buildTabsSettingsCard();buildAppearanceCard();checkForUpdate();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
-function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}const token=WEIGHTS_TOKEN;fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':token}}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'Content-Type':'application/json','x-app-token':token},body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
+function logout(){_googleToken='';localStorage.removeItem('google_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData('bc_log',[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});aDot.className='agent-dot '+(r.ok?'up':'down');document.getElementById('s-agent-label').textContent=r.ok?'Online':'Offline';}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}buildTabsSettingsCard();buildAppearanceCard();checkForUpdate();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+function pushToProd(){const btn=document.getElementById('push-to-prod-btn');const status=document.getElementById('push-to-prod-status');if(btn){btn.textContent='Pushing...';btn.disabled=true;}if(status)status.textContent='';fetch(AGENT_URL+'/promote-to-prod',{method:'POST',headers:authHeaders()}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(()=>{if(btn){btn.textContent='Pushed';setTimeout(()=>{btn.textContent='Push to Prod';btn.disabled=false;},4000);}if(status)status.textContent='Promotion PR opened on peptidetracker — check GitHub.';}).catch(e=>{if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(status)status.textContent='Failed: '+e.message;});}
+function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
 async function pushMilestonesToBackend(){const btn=document.getElementById('s-milestones-btn');if(btn){btn.textContent='Pushing…';btn.disabled=true;}const colorMap=[['nebido','#c084fc'],['testoviron','#c084fc'],['trt','#c084fc'],['glow','#3b9eff'],['blood','#ff6b2b'],['panel','#ff6b2b'],['hgh','#3cffa0']];function _mc(name){const n=name.toLowerCase();for(const[kw,col]of colorMap)if(n.includes(kw))return col;return'#e8ff3c';}const milestones=MILESTONES.map(m=>{const d=m.date;const date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');return{date,label:m.name,color:_mc(m.name),desc:m.desc||''};});try{const r=await fetch(AGENT_URL+'/stack-milestones/custom',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({milestones})});if(!r.ok)throw new Error('HTTP '+r.status);const res=await r.json();const el=document.getElementById('s-milestones-count');if(el)el.textContent=res.stored+' pushed ✓';if(btn){btn.textContent='Done';setTimeout(()=>{btn.textContent='Push';btn.disabled=false;},2500);}}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;}}}
 function dateKey(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function _normDt(s){if(!s)return s;var p=s.split('-');return p.length===3?p[0]+'-'+p[1].padStart(2,'0')+'-'+p[2].padStart(2,'0'):s;}
@@ -924,7 +682,7 @@ function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'sh
 function parseLocalDate(s){var p=s.split('-');return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2]));}
 function getChecked(){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);const _d=_viewDate||NOW;const _oldDk=_d.getFullYear()+'-'+(_d.getMonth()+1)+'-'+_d.getDate();try{var v=JSON.parse(localStorage.getItem('proto-chk-'+dk)||localStorage.getItem('proto-chk-'+_oldDk)||'[]');if(!Array.isArray(v))return[];var _a={'cjc-am':'cjc-ipa-am','cjc-pm':'cjc-ipa-pm','glow-1':'glow','glow-2':'glow','reta-sun':'retatrutide','reta-wed':'retatrutide'};return v.map(function(id){id=_normDoseId(id);var i=id.lastIndexOf('_');if(i>0){var pfx=id.slice(0,i);if(_a[pfx])return _a[pfx]+id.slice(i);}return id;});}catch{return[];}}
 function setChecked(arr){const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);localStorage.setItem('proto-chk-'+dk,JSON.stringify(arr));}
-async function checkSyncStatus(){const dot=document.getElementById('sync-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN},signal:ctrl.signal});if(!r.ok){dot.className='agent-dot down';dot.title='Backend unreachable';return;}const remote=await r.json();const remoteDates=new Set(remote.map(e=>e.date));const localKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const unsynced=localKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;dot.className='agent-dot '+(unsynced===0?'up':'warn');dot.title=unsynced===0?'Doses synced ✓ • Body comp synced ✓':'Doses: ⚠ '+unsynced+' day(s) not on backend';}catch(e){dot.className='agent-dot down';dot.title='Sync check failed';}}
+async function checkSyncStatus(){const dot=document.getElementById('sync-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl.signal});if(!r.ok){dot.className='agent-dot down';dot.title='Backend unreachable';return;}const remote=await r.json();const remoteDates=new Set(remote.map(e=>e.date));const localKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const unsynced=localKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;dot.className='agent-dot '+(unsynced===0?'up':'warn');dot.title=unsynced===0?'Doses synced ✓ • Body comp synced ✓':'Doses: ⚠ '+unsynced+' day(s) not on backend';}catch(e){dot.className='agent-dot down';dot.title='Sync check failed';}}
 // ── Peptide catalogue ────────────────────────────────────────────────────────
 const PEPTIDE_CAT=[
   {id:'cjc-ipa',name:'CJC-1295 / IPA Blend',sku:'CP10',group:'GH Axis',goals:['muscle','recovery'],dot:'#3cffa0',cg:['ghrh','ghrp'],desc:'Classic GHRH+GHRP combo. Best bang-for-buck GH stack.',halfLife:'GHRH ~30 min · IPA ~2 h',mechanism:'Pairs a GHRH analog (CJC-1295 no DAC) with Ipamorelin, a selective GHRP. Together they generate synergistic GH pulses — the GHRH loads the pituitary and the GHRP triggers release — producing amplitudes roughly double either compound alone, without raising cortisol or prolactin.',benefits:['GH pulse amplitude 2–3× baseline per dose','Improved muscle protein synthesis and lean mass accrual','Faster recovery from training and injuries','Deeper, more restorative sleep','Gradual reduction in body fat over a full cycle'],protocol:'4–6 IU SC, twice daily: fasted on waking (AM) and pre-sleep (PM). Wait 30–60 min before eating after the AM dose. Inject into abdomen or thigh. Cycle 12–16 weeks, then 4 weeks off.',sideEffects:['Water retention in the first 2–3 weeks','Tingling or warmth at the injection site','Mild increase in hunger','Transient headache when starting'],dflt:{times:['AM','PM'],days:[0,1,2,3,4,5,6],doseAm:'4',dosePm:'5',unitAm:'IU',unitPm:'IU'}},
@@ -1046,7 +804,7 @@ function buildWeeklyFromProtocol(proto){
 // ── Load all stacks ─────────────────────────────────────────────────────────
 async function loadUserStacks(){
   try{
-    var r=await fetch(AGENT_URL+'/protocol/stacks',{headers:{'x-app-token':WEIGHTS_TOKEN}});
+    var r=await fetch(AGENT_URL+'/protocol/stacks',{headers:authHeaders()});
     if(r.ok){
       var data=await r.json();
       _userStacks=data.stacks||[];
@@ -1127,7 +885,7 @@ async function saveStacksToBackend(){
   // localStorage is the primary store — always write first so data is never lost
   try{localStorage.setItem('stacks_cache',body);}catch(e){}
   // Backend sync is best-effort
-  var hdrs={'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'};
+  var hdrs=authHeaders({'Content-Type':'application/json'});
   var lastCode='net';
   for(var attempt=0;attempt<2;attempt++){
     try{
@@ -1211,7 +969,7 @@ function buildStackStore(){
 let _userWeight=null;
 async function loadUserWeight(){
   try{
-    var r=await fetch(AGENT_URL+'/weight',{headers:{'x-app-token':WEIGHTS_TOKEN}});
+    var r=await fetch(AGENT_URL+'/weight',{headers:authHeaders()});
     if(r.ok){
       var data=await r.json();
       _userWeight=data.weight;
@@ -1227,13 +985,13 @@ async function saveUserWeight(weight){
   try{
     await fetch(AGENT_URL+'/weight',{
       method:'POST',
-      headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},
+      headers:authHeaders({'Content-Type':'application/json'}),
       body:JSON.stringify({weight:weight,unit:'kg'})
     });
   }catch(e){}
 }
 async function pushWeightToAgent(date,weightVal){try{await fetch(AGENT_URL+'/weights',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:date,weight:weightVal})});}catch(e){}}
-async function deleteWeightFromAgent(date){try{await fetch(AGENT_URL+'/weights/'+date,{method:'DELETE',headers:{'x-app-token':WEIGHTS_TOKEN}});}catch(e){}}
+async function deleteWeightFromAgent(date){try{await fetch(AGENT_URL+'/weights/'+date,{method:'DELETE',headers:authHeaders()});}catch(e){}}
 function deleteWeight(date){weights=weights.filter(function(w){return w.date!==date;});setData('weight_log',weights);bcRender();deleteWeightFromAgent(date);}
 // ── Cycle length suggestions ───────────────────────────────────────────────
 var CYCLE_WEEKS=[3,6,9,12,15,18,21];
@@ -1652,7 +1410,7 @@ function _rcToggle(ctx,id){
 // ── Save protocol to backend ─────────────────────────────────────────────────
 async function saveProtocolToBackend(proto){
   try{
-    var r=await fetch(AGENT_URL+'/protocol',{method:'POST',headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify(proto)});
+    var r=await fetch(AGENT_URL+'/protocol',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(proto)});
     return r.ok;
   }catch(e){return false;}
 }
@@ -2152,12 +1910,12 @@ function buildAppearanceCard(){
     +'<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">'+tiles+'</div>'
     +'</div></div>';
 }
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('pin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();initTabVis();(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);}})();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();initTabVis();(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);}})();}
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dots=[];WEEKLY.forEach(function(dose){if(dose.dow.includes(dow))dots.push(dose.dot);});TESTO.forEach(function(t){if(t.date.toDateString()===d.toDateString())dots.push('#c084fc');});const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){var _tb=document.getElementById('tab-btn-today');if(_tb)switchTab('today',_tb);showDayInline(dd,ee);};})(d,el);const dotHtml=[...new Set(dots)].slice(0,3).map(function(col){return '<div class="week-dot" style="background:'+col+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
 function buildToday(){const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";const _ci=document.getElementById('today-cycle-info');if(_ci){const _st=_userStacks[_activeStackIndex];const _cs=_st&&_st.cycle_start;const _cl=_st&&(_st.cycle_length||12);if(_cs&&_cl){const _sd=parseLocalDate(_cs);const _ed=new Date(_sd.getTime()+_cl*7*86400000);const _dd=Math.max(0,Math.floor((NOW-_sd)/86400000));const _wk=Math.min(_cl,Math.floor(_dd/7)+1);_ci.textContent='Started '+fmtDate(_sd)+' · Week '+_wk+' of '+_cl+' · Ends '+fmtDate(_ed);}else{_ci.textContent='';}}if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const checked=getChecked();const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';TESTO.forEach((t,i)=>{const diff=Math.round((t.date-NOW)/86400000);if(diff===1){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">💉</div><div class="alert-text"><strong>Testoviron tomorrow</strong> — Injection ${i+1}/4, 125mg SC.</div>`;alertWrap.appendChild(a);}});const panel=new Date(2026,5,29);const pd=Math.round((panel-NOW)/86400000);if(pd>0&&pd<=7){const a=document.createElement('div');a.className='alert-bar';a.innerHTML=`<div class="alert-icon">🩸</div><div class="alert-text"><strong>Blood panel in ${pd} day${pd>1?'s':''}</strong> — Trough draw, urologist.</div>`;alertWrap.appendChild(a);}const hgh=new Date(2026,6,4);const hd=Math.round((hgh-NOW)/86400000);if(hd>0&&hd<=7){const a=document.createElement('div');a.className='alert-bar green';a.innerHTML=`<div class="alert-icon">🧬</div><div class="alert-text"><strong>HGH starts in ${hd} day${hd>1?'s':''}</strong> — Stop CJC/IPA.</div>`;alertWrap.appendChild(a);}const doses=[];WEEKLY.forEach(d=>{if(!d.dow.includes(TODAY_DOW))return;if(d.startDate&&NOW<d.startDate)return;if(d.endDate&&NOW>d.endDate)return;doses.push({id:d.id+'_'+dateKey(NOW),name:d.name,detail:d.detail,time:d.time,dot:d.dot});});TESTO.forEach((t,i)=>{if(t.date.toDateString()===NOW.toDateString())doses.push({id:'testo_'+i+'_'+dateKey(NOW),name:'Testoviron '+t.dose,detail:t.label+' — '+(t.route==='IM'?'IM deltoid':'27G×12mm SC, 18G filter'),time:null,dot:'#c084fc'});});_getDynamicTRTDoses(NOW,true).forEach(function(d){if(!doses.some(function(x){return x.id===d.id;}))doses.push(d);});if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';document.getElementById('today-badge').textContent='—';return;}const order={'AM':0,'null':1,'PM':2};doses.sort((a,b)=>(order[a.time]??1)-(order[b.time]??1));let done=0;doses.forEach(function(dose){var isChk=checked.includes(dose.id);if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=dose.dot;nameEl.textContent=dose.name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.detail;main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=dose.time;item.appendChild(timeEl);}item.onclick=function(){toggle(dose.id);};var _bci=dose.id.substring(0,dose.id.lastIndexOf('_')).replace(/-am$|-pm$/,'');var _bcp=PEPTIDE_CAT.find(function(c){return c.id===_bci;});if(_bcp){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(_bci));item.appendChild(_bib);}list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
 function toggle(id){const chk=getChecked();const i=chk.indexOf(id);if(i===-1)chk.push(id);else chk.splice(i,1);setChecked(chk);const dk=_viewDate?dateKey(_viewDate):dateKey(NOW);if(window._peptideLog){var _pe=window._peptideLog.find(function(e){return e.date===dk;});if(_pe)_pe.doses=chk.slice();else window._peptideLog.push({date:dk,doses:chk.slice()});}syncDayToAgent(dk,chk);if(_viewDate){const activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}
-async function syncDayToAgent(date,doses){try{const r=await fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:{'x-app-token':WEIGHTS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({date,doses})});if(!r.ok)console.error('syncDayToAgent failed',r.status);}catch(e){console.error('syncDayToAgent error',e);}}
-async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:{'x-app-token':WEIGHTS_TOKEN}});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
+async function syncDayToAgent(date,doses){try{const r=await fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});if(!r.ok)console.error('syncDayToAgent failed',r.status);}catch(e){console.error('syncDayToAgent error',e);}}
+async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
   window._peptideLog.forEach(function(entry){
     if(!entry.doses)return;
     localStorage.setItem('proto-chk-'+entry.date,JSON.stringify(entry.doses));
