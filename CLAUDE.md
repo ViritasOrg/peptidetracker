@@ -1,5 +1,29 @@
 # Peptide Tracker — Claude Instructions
 
+## 🔒 PROD IS READ-ONLY — DO NOT TOUCH WITHOUT EXPLICIT PERMISSION
+This repo (`peptidetracker`) is **PRODUCTION**. Claude may read, inspect, and
+diagnose anything here freely (view files, check workflow runs, look at commit
+history, etc.) but must **NEVER** create branches, commit, push, open PRs, or
+merge into this repo on its own initiative — not even for "obvious" fixes,
+hotfixes, or anything CI-related.
+
+The **only** repo Claude may freely make changes to in this app pair is
+`peptidetracker-staging`.
+
+Changes only reach this repo via:
+1. **Henrik explicitly tells Claude, in that specific conversation turn, to make
+   a change directly to prod.** Authorization does not carry over to future
+   turns or sessions — ask again next time.
+2. **The staging → prod promotion pipeline**: Henrik clicks "Push to Prod" in
+   the staging app's Settings UI, which fires a `repository_dispatch` event
+   running `.github/workflows/promote-to-prod.yml` on `peptidetracker-staging`.
+   That workflow opens a PR on this repo. Claude must still **never merge that
+   PR** without Henrik's explicit go-ahead in the moment.
+
+This rule exists because on 2026-06-16 Claude bypassed the agreed workflow by
+directly hand-editing prod's `index.html` locally instead of working through
+staging and the promotion pipeline. Never repeat that.
+
 ## ⚠️ AUTH WARNING — READ BEFORE TOUCHING ANY AUTH CODE ⚠️
 **PIN/passcode auth has been PERMANENTLY REMOVED.** Google Sign-In is the ONLY
 end-user authentication method across this entire ecosystem (peptidetracker,
@@ -10,16 +34,11 @@ users** — not even as a "fallback" or "legacy" path. The only other credential
 in the system is `x-api-secret`, used exclusively by Claude's own backend
 tooling, never by end-user-facing apps.
 
-## Git workflow — ALWAYS follow this
-1. Make changes on a feature branch
-2. Before opening the PR, locally extract the `<script>` block from `index.html` and run `node --check` on it — catch syntax errors before they ever hit CI
-3. Create a PR, then **check its CI status before merging** — call `pull_request_read` with `method: get_check_runs` (or `get_status`) and confirm `conclusion`/`state` is `success`. If it's still running, wait and re-check; if it failed, fix the issue and push again. **Never merge a PR with a failing or pending check** — this caused a real production outage on 2026-06-15 (PR #95 merged with a known-failing CI check, deploying a JS syntax error that broke the entire app)
-4. Once CI is green, merge it yourself — never stop and ask the user to merge, never push directly to main
-5. After merge the `version-bump` GitHub Action auto-increments the minor version in `version.json` and `const VERSION` in `index.html` and commits with `[skip ci]`
-6. **After merging, poll `https://henrikschaub.github.io/peptidetracker/version.json` every 30 s until the new version appears, then tell the user "live as vX.XXX — test now"**
-
-## Structural / refactor changes — staging first
-Any change to the app's file structure (splitting `index.html`, moving CSS/JS to separate files, changing the build/deploy shape) MUST land on `peptidetracker-staging` first, go through its CI + branch-protected `main`, and be verified live on the staging Pages URL before the same diff is ported to this repo. Never make structural changes directly on `peptidetracker` prod. Ordinary bug fixes and feature work that don't change file structure can still go straight to a `peptidetracker` feature branch as usual.
+**Known gap (2026-06-16): prod still has PIN auth.** The original PIN-removal
+PR (#95) on this repo was reverted as part of fixing the 2026-06-15 outage, and
+was never reapplied directly to prod (per the read-only rule above, it now must
+go through staging + the promotion pipeline instead). `peptidetracker-staging`
+already has PIN removed.
 
 ## Deployment
 - GitHub Pages at `https://henrikschaub.github.io/peptidetracker/`
