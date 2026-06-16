@@ -8,6 +8,9 @@
 5. After merge the `version-bump` GitHub Action auto-increments the minor version in `version.json` and `const VERSION` in `index.html` and commits with `[skip ci]`
 6. **After merging, poll `https://henrikschaub.github.io/peptidetracker/version.json` every 30 s until the new version appears, then tell the user "live as vX.XXX — test now"**
 
+## Structural / refactor changes — staging first
+Any change to the app's file structure (splitting `index.html`, moving CSS/JS to separate files, changing the build/deploy shape) MUST land on `peptidetracker-staging` first, go through its CI + branch-protected `main`, and be verified live on the staging Pages URL before the same diff is ported to this repo. Never make structural changes directly on `peptidetracker` prod. Ordinary bug fixes and feature work that don't change file structure can still go straight to a `peptidetracker` feature branch as usual.
+
 ## Deployment
 - GitHub Pages at `https://henrikschaub.github.io/peptidetracker/`
 - Deploys automatically on push to `main`
