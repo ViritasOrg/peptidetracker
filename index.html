@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.214</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -250,7 +251,7 @@ let _reconStackIdx=0;let _reconState={};
 const TAB_LABELS={today:'Today',stacks:'Stacks',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'};
 const TAB_DEFAULTS={today:true,stacks:true,recon:true,schedule:false,macros:false,timeline:true,body:true};
 let _tabVis={};let _currentTab='today';
-const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}function unlockApp(){document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}const _gsiScript=document.createElement('script');_gsiScript.src='https://accounts.google.com/gsi/client?hl=en';_gsiScript.onload=initGoogleAuth;document.head.appendChild(_gsiScript);
+const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}var _appUnlocked=false;function unlockApp(){if(_appUnlocked)return;_appUnlocked=true;document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);unlockApp();}function initGoogleAuth(){google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'});google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}function _loadGsi(){const _gs=document.createElement('script');_gs.src='https://accounts.google.com/gsi/client?hl=en';_gs.onload=initGoogleAuth;document.head.appendChild(_gs);}if(_googleToken){fetch(AGENT_URL+'/auth/verify',{method:'POST',headers:{'Authorization':'Bearer '+_googleToken}}).then(function(r){if(r.ok)unlockApp();else{localStorage.removeItem('google_token');_googleToken='';}}).catch(function(){});}_loadGsi();
 
 function getData(k,d){try{return JSON.parse(localStorage.getItem(k))||d;}catch{return d;}}
 function setData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
@@ -766,14 +767,14 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.213"></script>
-<script src="tab-macros.js?v=1.213"></script>
-<script src="tab-stack.js?v=1.213"></script>
-<script src="tab-today.js?v=1.213"></script>
-<script src="tab-schedule.js?v=1.213"></script>
-<script src="tab-timeline.js?v=1.213"></script>
-<script src="tab-body.js?v=1.213"></script>
-<script src="tab-recon.js?v=1.213"></script>
+<script src="tab-cycles.js?v=1.214"></script>
+<script src="tab-macros.js?v=1.214"></script>
+<script src="tab-stack.js?v=1.214"></script>
+<script src="tab-today.js?v=1.214"></script>
+<script src="tab-schedule.js?v=1.214"></script>
+<script src="tab-timeline.js?v=1.214"></script>
+<script src="tab-body.js?v=1.214"></script>
+<script src="tab-recon.js?v=1.214"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
