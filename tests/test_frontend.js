@@ -1235,3 +1235,15 @@ if(fs.existsSync(plPath)){
       bad.length?`vials [${bad.join(',')}] not in pricelist (available: ${[...available].join(',')})`:'');
   }
 }
+
+// ── syncBodyCompFromAgent: force-push all local BC entries to backend ────────
+console.log('\n── syncBodyCompFromAgent: pushes all local entries to backend ───');
+{
+  const src = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  const fnStart = src.indexOf('async function syncBodyCompFromAgent(');
+  const fnBody = fnStart >= 0 ? src.slice(fnStart, src.indexOf('}catch(e){}', fnStart) + 11) : '';
+  check('syncBodyCompFromAgent fetches remote and merges with local',
+    fnBody.includes('fetch(AGENT_URL+"/bodycomp"') && fnBody.includes('bcLoad()'));
+  check('syncBodyCompFromAgent pushes ALL local entries (not just missing) via Promise.all',
+    fnBody.includes('local.map(e=>pushBodyCompToAgent(e))'));
+}
