@@ -257,7 +257,7 @@ check('updateWEEKLY builds WEEKLY',   G.WEEKLY.length>0,                        
 check('WEEKLY contains cjc-am',       G.WEEKLY.some(w=>w.id==='cjc-am'));
 check('WEEKLY contains glow-1',       G.WEEKLY.some(w=>w.id==='glow-1'));
 G._userStacks=[];G.updateWEEKLY();
-check('empty stacks → WEEKLY_DEFAULT',G.WEEKLY.length===G.WEEKLY_DEFAULT.length);
+check('empty active indices → empty WEEKLY (not WEEKLY_DEFAULT)',G.WEEKLY.length===0);
 
 // ── Stack → daily schedule ────────────────────────────────────────────────────
 console.log('\n── Stack → daily schedule ─────────────────────────────────');
@@ -727,8 +727,9 @@ G.wizSave().then(async ()=>{
   check('derive: returns earliest of multiple',      G._deriveEarliestStartDate([{start_date:'2026-04-16'},{start_date:'2026-04-04'},{start_date:'2026-05-01'}])==='2026-04-04');
   check('derive: ignores peptides without start_date', G._deriveEarliestStartDate([{id:'x'},{start_date:'2026-04-16'},{start_date:'2026-04-04'}])==='2026-04-04');
 
-  // ── cycle_start auto-sync via _collectEditInputs ────────────────────────────
-  console.log('\n── cycle_start auto-sync ───────────────────────────────────');
+  // ── cycle_start in _collectEditInputs ────────────────────────────────────────
+  // cycle_start is NEVER auto-derived from peptide dates — only what user sets in the input
+  console.log('\n── cycle_start collect (no auto-derive) ────────────────────');
   const noop2=()=>{};
   const mkInp=v=>({value:v,style:{},classList:{add:noop2,remove:noop2},appendChild:noop2});
   function runCollect(cycleDateInInput, peptides){
@@ -748,12 +749,11 @@ G.wizSave().then(async ()=>{
   const pepApr4=[{id:'retatrutide',name:'Reta',start_date:'2026-04-04',times:['AM'],days:[0,3],dose_am:'3',unit_am:'mg'}];
   const pepApr4andApr16=[...pepApr4,{id:'glow',name:'GLOW',start_date:'2026-04-16',times:['AM'],days:[0,1,2,3,4,5,6],dose_am:'0.09',unit_am:'ml'}];
 
-  check('collect: fills empty cycle_start from peptide',        runCollect('',pepApr4)==='2026-04-04',                       `got ${runCollect('',pepApr4)}`);
-  check('collect: updates later cycle_start to earlier peptide',runCollect('2026-05-18',pepApr4)==='2026-04-04',             `got ${runCollect('2026-05-18',pepApr4)}`);
-  check('collect: keeps correct cycle_start unchanged',         runCollect('2026-04-04',pepApr4)==='2026-04-04',             `got ${runCollect('2026-04-04',pepApr4)}`);
-  check('collect: picks earliest of multiple peptides',         runCollect('2026-05-18',pepApr4andApr16)==='2026-04-04',     `got ${runCollect('2026-05-18',pepApr4andApr16)}`);
-  check('collect: does not override later cycle_start with earlier user-set date',
-    runCollect('2026-03-01',pepApr4)==='2026-03-01', `got ${runCollect('2026-03-01',pepApr4)}`);
+  check('collect: empty input → cycle_start deleted (not auto-filled)',   runCollect('',pepApr4)===undefined,                     `got ${runCollect('',pepApr4)}`);
+  check('collect: future user date kept, not overridden by past peptide', runCollect('2026-05-18',pepApr4)==='2026-05-18',        `got ${runCollect('2026-05-18',pepApr4)}`);
+  check('collect: explicit date kept unchanged',                           runCollect('2026-04-04',pepApr4)==='2026-04-04',        `got ${runCollect('2026-04-04',pepApr4)}`);
+  check('collect: future date kept even with multiple past peptides',      runCollect('2026-05-18',pepApr4andApr16)==='2026-05-18',`got ${runCollect('2026-05-18',pepApr4andApr16)}`);
+  check('collect: early user-set date kept, not moved forward by peptide', runCollect('2026-03-01',pepApr4)==='2026-03-01',       `got ${runCollect('2026-03-01',pepApr4)}`);
 
   // ── Weight history sort ───────────────────────────────────────────────────────
   console.log('\n── Weight history sort (newest first) ─────────────────────');
@@ -1290,4 +1290,116 @@ console.log('\n── dose dedup migration ────────────�
     });
     check('dedup collapses padded+non-padded into single entry', dd.length===1 && dd[0]==='cjc-am_2026-05-22');
   })();
+}
+
+// ── No active stack (on-break support) ───────────────────────────────────────
+{
+  console.log('\n── No active stack ────────────────────────────────────────');
+  const sA={name:'Stack A',peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
+  const sB={name:'Stack B',peptides:[{id:'semaglutide', name:'Semaglutide',dot:'#f59e0b',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.5',unit_am:'mg',active:true}]};
+
+  // updateWEEKLY with empty activeStackIndices → empty WEEKLY
+  G._userStacks=[sA,sB];G._activeStackIndices=[];G.updateWEEKLY();
+  check('no active stacks → WEEKLY is empty array',G.WEEKLY.length===0);
+
+  // Array.isArray guard prevents [] from being treated as falsy
+  check('toggleStack guard removed: can deactivate last active stack',
+    (function(){
+      var src=rawScript;
+      // The old guard "if(_activeStackIndices.length===1)return;" must not exist
+      return !src.includes('_activeStackIndices.length===1)return;');
+    })()
+  );
+
+  // updateWEEKLY uses WEEKLY=[] not WEEKLY_DEFAULT.slice() for empty active
+  check('updateWEEKLY uses WEEKLY=[] for empty active (not WEEKLY_DEFAULT)',
+    rawScript.includes('if(!active.length){WEEKLY=[];return;}'));
+
+  // active_index sent as null when no active stacks
+  check('saveStacksToBackend sends active_index null when no active stacks',
+    rawScript.includes('_activeStackIndices.length?_activeStackIndices[0]:null'));
+
+  // Array.isArray guard on loading from backend
+  check('loadStacks uses Array.isArray guard (not ||) for active_indices from backend',
+    rawScript.includes('Array.isArray(data.active_indices)?data.active_indices:'));
+
+  // Array.isArray guard on loading from localStorage cache
+  check('loadStacks uses Array.isArray guard (not ||) for active_indices from cache',
+    rawScript.includes('Array.isArray(cached.active_indices)?cached.active_indices:'));
+
+  // deleteStack no longer forces [0] when result is empty
+  check('deleteStack does not force _activeStackIndices=[0] after removal',
+    !rawScript.includes("if(!_activeStackIndices.length)_activeStackIndices=[0];"));
+}
+
+// ── getDosesForDate + _findWeeklyItemInfo (date-range scheduling) ──────────────
+{
+  console.log('\n── getDosesForDate ─────────────────────────────────────────');
+  const fs2=require('fs');
+  const todayJs=fs2.readFileSync(require('path').join(__dirname,'../tab-today.js'),'utf8');
+  const tabStackJs=fs2.readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+  check('getDosesForDate function defined',typeof G.getDosesForDate==='function');
+  check('_findWeeklyItemInfo function defined',typeof G._findWeeklyItemInfo==='function');
+
+  const cycleStack={name:'Cycle A',cycle_start:'2026-06-21',cycle_length:12,end_date:'2026-09-13',
+    peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
+  G._userStacks=[cycleStack];G._activeStackIndices=[];
+  var jun21=new Date(2026,5,21);
+  var doses21=G.getDosesForDate(jun21);
+  check('getDosesForDate: date-ranged stack shows doses on start date',doses21.length>0);
+  check('getDosesForDate: dose id includes the date',doses21[0]&&doses21[0].id.includes('2026-06-21'));
+
+  var may1=new Date(2026,4,1);
+  check('getDosesForDate: no doses before cycle_start',G.getDosesForDate(may1).length===0);
+
+  var dec1=new Date(2026,11,1);
+  check('getDosesForDate: no doses after end_date',G.getDosesForDate(dec1).length===0);
+
+  const noDateStack={name:'No Date',peptides:[{id:'semaglutide',name:'Sema',dot:'#f59e0b',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.5',unit_am:'mg',active:true}]};
+  G._userStacks=[noDateStack];G._activeStackIndices=[];
+  check('getDosesForDate: no-date stack inactive → no doses',G.getDosesForDate(jun21).length===0);
+  G._activeStackIndices=[0];
+  check('getDosesForDate: no-date stack active → shows doses',G.getDosesForDate(jun21).length>0);
+
+  G._userStacks=[cycleStack];
+  var found=G._findWeeklyItemInfo('retatrutide');
+  check('_findWeeklyItemInfo finds peptide by base id',found&&found.name==='Retatrutide');
+  check('_findWeeklyItemInfo returns null for unknown id',G._findWeeklyItemInfo('unknown-peptide')===null);
+
+  check('end_date normalization in loadUserStacks',rawScript.includes('if(stack.end_date){var _cep=stack.end_date.split'));
+
+  check('buildToday uses getDosesForDate(NOW) instead of WEEKLY.forEach',
+    todayJs.includes('getDosesForDate(NOW)') && !todayJs.includes('WEEKLY.forEach(d=>'));
+  check('showDayInline uses getDosesForDate for future days',
+    todayJs.includes('doses=getDosesForDate(d)'));
+  check('showDayInline uses getPastDoses for past days',
+    todayJs.includes('isPast') && todayJs.includes('getPastDoses(d)') && todayJs.includes('_findWeeklyItemInfo(bid)'));
+  check('buildWeekStrip uses getDosesForDate for future/today dots',
+    todayJs.includes('getDosesForDate(d).forEach'));
+  check('buildWeekStrip uses getPastDoses + _findWeeklyItemInfo for past dots',
+    todayJs.includes('getPastDoses(d)') && todayJs.includes('_findWeeklyItemInfo(bid)'));
+  check('tab-stack.js edit view has no Cycle End field (removed — use cycle length instead)',
+    !tabStackJs.includes("id='edit-cycle-end'")&&!tabStackJs.includes('id="edit-cycle-end"'));
+  check('tab-stack.js Cycle Length select has No end date option (value 0)',
+    tabStackJs.includes("value=\"0\"")&&tabStackJs.includes('No end date'));
+}
+
+// ── Storage tab hideable via Settings ─────────────────────────────────────────
+{
+  check('TAB_LABELS uses Object.assign to conditionally include storage (IS_STAGING gate)',
+    rawScript.includes("Object.assign({today:'Today'") && rawScript.includes("IS_STAGING?{storage:'Storage'}:{}"));
+  check('TAB_DEFAULTS uses Object.assign to conditionally include storage:true',
+    rawScript.includes("IS_STAGING?{storage:true}:{}"));
+  check('tab-btn-storage exists in HTML (hidden by default)',
+    html.includes('id="tab-btn-storage"'));
+  check('storage tab controlled by applyTabVis via TAB_LABELS (no manual show override in init)',
+    rawScript.includes("Object.keys(TAB_LABELS).forEach") &&
+    !rawScript.includes("tab-btn-storage').style.display=''"));
+  check('initTabVis called in init() without manual storage override after it',
+    (function(){
+      var i = rawScript.indexOf('initTabVis();');
+      var after = rawScript.slice(i, i + 60);
+      return i >= 0 && !after.includes('tab-btn-storage');
+    })());
 }

@@ -19,12 +19,13 @@ function editStackWithCycle(idx){
   };
   showWizard(true);
 }
-function wizSetCycleLength(val){_wiz.cycle_length=parseInt(val)||12;}
+function wizSetCycleLength(val){var n=parseInt(val);_wiz.cycle_length=(val==='0'||n===0)?0:(n||12);}
 // ── Wizard step 1: Cycle length ────────────────────────────────────────────
 var _CYCLE_SELECT_STYLE='background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;margin-bottom:16px;';
 function wizStep1(body,footer){
   var html='<div class="wiz-section">Cycle Length</div>';
   html+='<select onchange="wizSetCycleLength(this.value)" style="'+_CYCLE_SELECT_STYLE+'">';
+  html+='<option value="0"'+(_wiz.cycle_length===0?' selected':'')+'>No end date</option>';
   CYCLE_WEEKS.forEach(function(w){html+='<option value="'+w+'"'+(_wiz.cycle_length===w?' selected':'')+'>'+w+' weeks</option>';});
   html+='</select>';
   html+='<div style="font-size:11px;color:var(--muted2);">Cycle length helps track when to rotate peptides and manage tapering.</div>';
@@ -93,7 +94,7 @@ function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function showStackEditor(idx){
   if(idx<0||idx>=_userStacks.length)return;
   _editIdx=idx;_editBuf=JSON.parse(JSON.stringify(_userStacks[idx]));
-  if(!_editBuf.cycle_length)_editBuf.cycle_length=12;
+  if(_editBuf.cycle_length==null)_editBuf.cycle_length=12;
   if(!_editBuf.peptides)_editBuf.peptides=[];
   _stackViewTab='peptides';_editInnerTab='peptides';
   renderStackEditor();
@@ -102,7 +103,8 @@ function _collectEditInputs(){
   if(!_editBuf)return;
   var nameEl=document.getElementById('edit-stack-name');
   if(nameEl)_editBuf.name=nameEl.value;
-  var csEl=document.getElementById('edit-cycle-start');if(csEl)_editBuf.cycle_start=csEl.value;
+  var csEl=document.getElementById('edit-cycle-start');if(csEl){if(csEl.value)_editBuf.cycle_start=csEl.value;else delete _editBuf.cycle_start;}
+  delete _editBuf.end_date;
   (_editBuf.peptides||[]).forEach(function(p,pi){
     var el;
     if((el=document.getElementById('ed-dam-'+pi)))p.dose_am=el.value;
@@ -112,9 +114,6 @@ function _collectEditInputs(){
     if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
     if((el=document.getElementById('ed-sd-'+pi))){if(el.value)p.start_date=el.value;else delete p.start_date;}
   });
-  // Keep cycle_start ≤ earliest peptide start_date
-  var _ed=_deriveEarliestStartDate(_editBuf.peptides);
-  if(_ed&&(!_editBuf.cycle_start||_ed<_editBuf.cycle_start)){_editBuf.cycle_start=_ed;}
 }
 function _deriveEarliestStartDate(peptides){
   var dates=(peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
@@ -124,9 +123,9 @@ function _deriveEarliestStartDate(peptides){
 }
 function renderStackEditor(){
   var body=document.getElementById('stack-body');if(!body)return;
-  var st=_editBuf;var cycle=st.cycle_length||12;
+  var st=_editBuf;var _noEnd=(st.cycle_length===0);var cycle=_noEnd?0:(st.cycle_length||12);
   var isActive=_isActiveStack(_editIdx);
-  var _effCs=(function(){var _ec=_deriveEarliestStartDate(st.peptides);var _sc=st.cycle_start||'';if(_ec&&(!_sc||_ec<_sc))_sc=_ec;if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
+  var _effCs=(function(){var _sc=st.cycle_start||'';if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
   var html='';
 
   if(_editReadOnly){
@@ -138,13 +137,19 @@ function renderStackEditor(){
     html+='<div class="wiz-section">Cycle</div>';
     if(_effCs){
       var _sd2=parseLocalDate(_effCs);
-      var _ed2=new Date(_sd2.getTime()+cycle*7*86400000);
       var _dDone2=Math.max(0,Math.floor((NOW-_sd2)/86400000));
-      var _wk2=Math.min(cycle,Math.floor(_dDone2/7)+1);
-      html+='<div style="font-size:13px;color:var(--text);margin-bottom:2px;">Start: '+fmtDate(_sd2)+'</div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk2+' of '+cycle+' · Ends '+fmtDate(_ed2)+'</div>';
+      if(_noEnd){
+        var _wk2o=Math.floor(_dDone2/7)+1;
+        html+='<div style="font-size:13px;color:var(--text);margin-bottom:2px;">'+fmtDate(_sd2)+' → ongoing</div>';
+        html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk2o+' · No end date</div>';
+      }else{
+        var _ed2=new Date(_sd2.getTime()+cycle*7*86400000);
+        var _wk2=Math.min(cycle,Math.floor(_dDone2/7)+1);
+        html+='<div style="font-size:13px;color:var(--text);margin-bottom:2px;">'+fmtDate(_sd2)+' → '+fmtDate(_ed2)+'</div>';
+        html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk2+' of '+cycle+' · '+cycle+' wk cycle</div>';
+      }
     }else{
-      html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">'+cycle+' wk cycle · No start date</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">'+(_noEnd?'No end date':''+cycle+' wk cycle')+' · No start date</div>';
     }
     html+=_stackTabBar(_stackViewTab,'setStackViewTab');
     if(_stackViewTab==='trt'){
@@ -193,10 +198,16 @@ function renderStackEditor(){
   html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
   html+='</div>';
   html+='<div class="wiz-section">Cycle Start</div>';
-  html+='<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="_collectEditInputs();renderStackEditor();" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;margin-bottom:6px;">';
-  if(_effCs&&cycle){var _sd=parseLocalDate(_effCs);var _ed=new Date(_sd.getTime()+cycle*7*86400000);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Ends '+fmtDate(_ed)+' · Week '+_wk+' of '+cycle+'</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
+  var _dateInputStyle='background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;';
+  var _clearBtnStyle='background:none;border:none;color:var(--muted2);font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap;padding:4px 0;flex-shrink:0;';
+  html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+  html+='<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="_collectEditInputs();renderStackEditor();" style="'+_dateInputStyle+'">';
+  if(_effCs)html+='<button onclick="delete _editBuf.cycle_start;delete _editBuf.end_date;renderStackEditor();" style="'+_clearBtnStyle+'">Clear</button>';
+  html+='</div>';
+  if(_effCs&&!_noEnd&&cycle){var _sd=parseLocalDate(_effCs);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk+' of '+cycle+'</div>';}else if(_effCs&&_noEnd){var _sd=parseLocalDate(_effCs);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+(Math.floor(_dDone/7)+1)+' · ongoing</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
   html+='<div class="wiz-section">Cycle Length</div>';
   html+='<select onchange="_collectEditInputs();_editBuf.cycle_length=parseInt(this.value);renderStackEditor();" style="'+_CYCLE_SELECT_STYLE+'">';
+  html+='<option value="0"'+(_noEnd?' selected':'')+'>No end date</option>';
   CYCLE_WEEKS.forEach(function(w){html+='<option value="'+w+'"'+(cycle===w?' selected':'')+'>'+w+' weeks</option>';});
   html+='</select>';
   html+=_stackTabBar(_editInnerTab,'setEditInnerTab');
@@ -311,7 +322,7 @@ function editPickPeptide(id){
 async function saveEditBuf(){
   _collectEditInputs();
   _userStacks[_editIdx]=_editBuf;
-  if(_isActiveStack(_editIdx)){updateWEEKLY();buildWeekStrip();buildToday();}
+  updateWEEKLY();buildWeekStrip();buildToday();
   await saveStacksToBackend();
   buildStackStore();
   buildTimeline();
@@ -719,12 +730,12 @@ function _renderTRTViewTab(st){
     });
   }
   html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:10px;">Injection Log</div>';
-  var _effCsLog=(function(){var _ec=_deriveEarliestStartDate(st.peptides);var _sc=st.cycle_start||'';if(_ec&&(!_sc||_ec<_sc))_sc=_ec;if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
+  var _effCsLog=(function(){var _sc=st.cycle_start||'';if(_sc){var _csp=_sc.split('-');_sc=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}return _sc;})();
   if(!_effCsLog){
     html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Set a start date to see the injection log for this stack.</div>';
   }else{
   var _logStart=parseLocalDate(_effCsLog);
-  var _logEnd=new Date(_logStart.getTime()+(st.cycle_length||12)*7*86400000);
+  var _logEnd=st.cycle_length?new Date(_logStart.getTime()+st.cycle_length*7*86400000):new Date();
   var log=window._peptideLog||[];
   var entries=[];
   log.forEach(function(e){

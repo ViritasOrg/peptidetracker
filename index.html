@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.221</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -251,8 +251,8 @@ let _userStacks=[];let _activeStackIndices=[0];let _stacksLoaded=false;
 function _isActiveStack(i){return _activeStackIndices.indexOf(i)>=0;}
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconState={};
-const TAB_LABELS={today:'Today',stacks:'Stacks',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'};
-const TAB_DEFAULTS={today:true,stacks:true,recon:true,schedule:false,macros:false,timeline:true,body:true};
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Stacks',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
+const TAB_DEFAULTS=Object.assign({today:true,stacks:true,recon:true,schedule:false,macros:false,timeline:true,body:true},IS_STAGING?{storage:true}:{});
 let _tabVis={};let _currentTab='today';
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';function authHeaders(extra){const h={};if(_googleToken)h['Authorization']='Bearer '+_googleToken;return extra?Object.assign({},h,extra):h;}var _appUnlocked=false;function unlockApp(){if(_appUnlocked)return;_appUnlocked=true;document.getElementById('signin-screen').classList.add('hidden');document.body.classList.remove('locked');document.getElementById('app').classList.add('visible');init();}function onGoogleSignIn(resp){_googleToken=resp.credential;localStorage.setItem('google_token',_googleToken);try{var _jp=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(_jp&&_jp.email)localStorage.setItem('google_email',_jp.email);}catch(e){}unlockApp();}function initGoogleAuth(){var _ih={client_id:GOOGLE_CLIENT_ID,callback:onGoogleSignIn,auto_select:true,cancel_on_tap_outside:false,locale:'en'};var _hl=localStorage.getItem('google_email')||'';if(_hl)_ih.login_hint=_hl;google.accounts.id.initialize(_ih);google.accounts.id.renderButton(document.getElementById('g_signin_container'),{theme:'filled_black',size:'large',shape:'pill',text:'sign_in_with',width:260});google.accounts.id.prompt();}function _loadGsi(){const _gs=document.createElement('script');_gs.src='https://accounts.google.com/gsi/client?hl=en';_gs.onload=initGoogleAuth;document.head.appendChild(_gs);}if(_googleToken){fetch(AGENT_URL+'/auth/verify',{method:'POST',headers:{'Authorization':'Bearer '+_googleToken}}).then(function(r){if(r.ok)unlockApp();else{localStorage.removeItem('google_token');_googleToken='';}}).catch(function(){});}_loadGsi();
 
@@ -406,6 +406,36 @@ function buildWeeklyFromProtocol(proto){
   });
   return built;
 }
+function _findWeeklyItemInfo(baseId){
+  for(var _si=0;_si<_userStacks.length;_si++){
+    var _items=buildWeeklyFromProtocol(_userStacks[_si]);
+    for(var _ii=0;_ii<_items.length;_ii++){if(_items[_ii].id===baseId)return _items[_ii];}
+  }
+  return null;
+}
+// Returns dose items for date d from all stacks whose cycle date range covers d.
+// Stacks with no cycle_start fall back to the _activeStackIndices manual toggle.
+function getDosesForDate(d){
+  var dow=d.getDay();var dk=dateKey(d);var seen={};var result=[];
+  _userStacks.forEach(function(st,si){
+    if(st.cycle_start){
+      var sStart=parseLocalDate(st.cycle_start);
+      if(d<sStart)return;
+      var sEnd=st.end_date?parseLocalDate(st.end_date):(st.cycle_length?new Date(sStart.getTime()+st.cycle_length*7*86400000):null);
+      if(sEnd&&d>sEnd)return;
+    }else{
+      if(!_isActiveStack(si))return;
+    }
+    buildWeeklyFromProtocol(st).forEach(function(item){
+      if(!item.dow.includes(dow))return;
+      if(item.startDate&&d<item.startDate)return;
+      if(item.endDate&&d>item.endDate)return;
+      var did=item.id+'_'+dk;
+      if(!seen[did]){seen[did]=true;result.push({id:did,name:item.name,detail:item.detail,time:item.time,dot:item.dot});}
+    });
+  });
+  return result;
+}
 // ── Load user protocol from backend ─────────────────────────────────────────
 // ── Stack store state ────────────────────────────────────────────────────────
 // ── Load all stacks ─────────────────────────────────────────────────────────
@@ -415,7 +445,7 @@ async function loadUserStacks(){
     if(r.ok){
       var data=await r.json();
       _userStacks=data.stacks||[];
-      _activeStackIndices=data.active_indices||(data.active_index!=null?[data.active_index]:[0]);
+      _activeStackIndices=Array.isArray(data.active_indices)?data.active_indices:(data.active_index!=null?[data.active_index]:[0]);
       // Cache to localStorage for offline fallback
       try{localStorage.setItem('stacks_cache',JSON.stringify({stacks:_userStacks,active_indices:_activeStackIndices}));}catch(e){}
     } else {
@@ -425,7 +455,7 @@ async function loadUserStacks(){
     // Try localStorage cache before falling back to synthesized stack
     try{
       var cached=JSON.parse(localStorage.getItem('stacks_cache')||'null');
-      if(cached&&cached.stacks&&cached.stacks.length){_userStacks=cached.stacks;_activeStackIndices=cached.active_indices||(cached.active_index!=null?[cached.active_index]:[0]);}
+      if(cached&&cached.stacks&&cached.stacks.length){_userStacks=cached.stacks;_activeStackIndices=Array.isArray(cached.active_indices)?cached.active_indices:(cached.active_index!=null?[cached.active_index]:[0]);}
       else{_userStacks=[];_activeStackIndices=[0];}
     }catch(e2){_userStacks=[];_activeStackIndices=[0];}
   }
@@ -436,6 +466,7 @@ async function loadUserStacks(){
   }
   _userStacks.forEach(function(stack){
     if(stack.cycle_start){var _csp=stack.cycle_start.split('-');stack.cycle_start=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}
+    if(stack.end_date){var _cep=stack.end_date.split('-');stack.end_date=_cep[0]+'-'+(_cep[1]||'1').padStart(2,'0')+'-'+(_cep[2]||'1').padStart(2,'0');}
     (stack.peptides||[]).forEach(function(pp){if(pp.start_date){var _psp=pp.start_date.split('-');pp.start_date=_psp[0]+'-'+(_psp[1]||'1').padStart(2,'0')+'-'+(_psp[2]||'1').padStart(2,'0');}});
     if(!stack.peptides)return;
     stack.peptides.forEach(function(p){
@@ -461,7 +492,6 @@ async function loadUserStacks(){
     var _fx=function(id,name){var i=(id||'').toLowerCase(),n=(name||'').toLowerCase();if(i.indexOf('reta')>=0||n.indexOf('retat')>=0)return'2026-04-04';if(i.indexOf('cjc')>=0||n.indexOf('cjc')>=0)return'2026-04-04';if(i.indexOf('glow')>=0||n.indexOf('glow')>=0)return'2026-04-16';return null;};
     _userStacks.forEach(function(stack){
       (stack.peptides||[]).forEach(function(p){var c=_fx(p.id,p.name);if(c&&(!p.start_date||p.start_date>='2026-05-01'))p.start_date=c;});
-      var m=_deriveEarliestStartDate(stack.peptides||[]);if(m&&(!stack.cycle_start||m<stack.cycle_start))stack.cycle_start=m;
     });
   })();
   updateWEEKLY();
@@ -473,7 +503,7 @@ async function loadUserStacks(){
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){
   var active=_activeStackIndices.filter(function(i){return i>=0&&i<_userStacks.length;});
-  if(!active.length){WEEKLY=WEEKLY_DEFAULT.slice();return;}
+  if(!active.length){WEEKLY=[];return;}
   if(active.length===1){WEEKLY=buildWeeklyFromProtocol(_userStacks[active[0]]);return;}
   var seen={};WEEKLY=[];
   active.forEach(function(i){
@@ -485,7 +515,7 @@ function updateWEEKLY(){
 }
 // ── Save all stacks to backend ───────────────────────────────────────────────
 async function saveStacksToBackend(){
-  var payload={stacks:_userStacks,active_index:_activeStackIndices[0]||0,active_indices:_activeStackIndices};
+  var payload={stacks:_userStacks,active_index:_activeStackIndices.length?_activeStackIndices[0]:null,active_indices:_activeStackIndices};
   var body=JSON.stringify(payload);
   // localStorage is the primary store — always write first so data is never lost
   try{localStorage.setItem('stacks_cache',body);}catch(e){}
@@ -510,7 +540,6 @@ async function toggleStack(idx){
   if(pos===-1){
     _activeStackIndices.push(idx);
   } else {
-    if(_activeStackIndices.length===1)return; // keep at least one active
     _activeStackIndices.splice(pos,1);
   }
   updateWEEKLY();
@@ -536,8 +565,7 @@ async function deleteStack(idx){
   if(idx>=0&&idx<_userStacks.length){
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
-    if(!_activeStackIndices.length)_activeStackIndices=[0];
-    if(_activeStackIndices[0]>=_userStacks.length)_activeStackIndices=[Math.max(0,_userStacks.length-1)];
+    if(_activeStackIndices.length&&_activeStackIndices[0]>=_userStacks.length)_activeStackIndices=[Math.max(0,_userStacks.length-1)];
     await saveStacksToBackend();
     updateWEEKLY();
     buildWeekStrip();
@@ -563,8 +591,10 @@ function buildStackStore(){
     html+='<div class="stack-card'+(isActive?' active':'')+'" onclick="viewStack('+i+')">';
     html+='<div class="stack-card-header">';
     html+='<div style="flex:1;min-width:0;">';
-    html+='<button onclick="event.stopPropagation();toggleStack('+i+')" style="background:'+(isActive?'var(--accent)':'#444')+';color:'+(isActive?'#000':'#aaa')+';border:none;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:uppercase;cursor:pointer;font-family:inherit;display:inline-block;margin-bottom:3px;letter-spacing:0.5px;">'+(isActive?'Active':'Inactive')+'</button>';
+    html+='<div onclick="event.stopPropagation();toggleStack('+i+')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-bottom:5px;"><div style="width:34px;height:18px;border-radius:9px;background:'+(isActive?'var(--accent)':'rgba(255,255,255,0.15)')+';position:relative;flex-shrink:0;"><div style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:2px;left:'+(isActive?'18px':'2px')+';box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div></div><span style="font-size:10px;font-weight:600;color:'+(isActive?'var(--accent)':'var(--muted2)')+';letter-spacing:0.3px;">'+(isActive?'Active':'Inactive')+'</span></div>';
     html+='<div class="stack-card-name">'+_esc(st.name||'Stack '+(i+1))+'</div>';
+    var _csDisp=st.cycle_start||'';
+    if(_csDisp){var _csdD=parseLocalDate(_csDisp);if(st.cycle_length){var _cedD=new Date(_csdD.getTime()+st.cycle_length*7*86400000);html+='<div style="font-size:10px;color:var(--muted2);margin-top:2px;">'+fmtDate(_csdD)+' → '+fmtDate(_cedD)+'</div>';}else{html+='<div style="font-size:10px;color:var(--muted2);margin-top:2px;">'+fmtDate(_csdD)+' → ongoing</div>';}}
     html+='</div>';
     html+='</div>';
     html+='<div class="stack-card-meta">';
@@ -766,7 +796,7 @@ function buildAppearanceCard(){
     +'</div></div>';
 }
 function buildCacheCard(){var card=document.getElementById('s-cache-card');if(!card)return;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('cache','Local Cache')+sSecBody('cache')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">All data is stored on the server. Clear the local cache to force a full re-sync.</div><button onclick="wipeLocalCache()" style="background:var(--danger,#ff3c3c);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:\'DM Sans\',sans-serif;">Wipe local cache</button></div></div></div>';}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();initTabVis();if(IS_STAGING){var _ssb=document.getElementById('tab-btn-storage');if(_ssb)_ssb.style.display='';}(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);else localStorage.removeItem('pep-last-tab');}})();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();initTabVis();(function(){const _lt=localStorage.getItem('pep-last-tab');if(_lt&&_tabVis[_lt]!==false){const _b=document.getElementById('tab-btn-'+_lt);if(_b)switchTab(_lt,_b);else localStorage.removeItem('pep-last-tab');}})();}
 function initTabVis(){const saved=getData('proto-tab-vis',{});_tabVis=Object.assign({},TAB_DEFAULTS,saved);applyTabVis();}
 async function pushPepSettingsToAgent(kv){try{await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:kv})});}catch(e){}}
 function wipeLocalCache(){if(!confirm('Clear all locally cached data? The app will reload and re-fetch everything from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');window.localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);window.location.reload();}
@@ -777,14 +807,14 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.220"></script>
-<script src="tab-macros.js?v=1.220"></script>
-<script src="tab-stack.js?v=1.220"></script>
-<script src="tab-today.js?v=1.220"></script>
-<script src="tab-schedule.js?v=1.220"></script>
-<script src="tab-timeline.js?v=1.220"></script>
-<script src="tab-body.js?v=1.220"></script>
-<script src="tab-recon.js?v=1.220"></script>
+<script src="tab-cycles.js?v=1.221"></script>
+<script src="tab-macros.js?v=1.221"></script>
+<script src="tab-stack.js?v=1.221"></script>
+<script src="tab-today.js?v=1.221"></script>
+<script src="tab-schedule.js?v=1.221"></script>
+<script src="tab-timeline.js?v=1.221"></script>
+<script src="tab-body.js?v=1.221"></script>
+<script src="tab-recon.js?v=1.221"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
