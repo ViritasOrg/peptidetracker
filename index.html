@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.230</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -465,6 +465,8 @@ const STACK_RULES=[
   {id:'healing-blend-component',check:function(p){var ids=p.map(function(x){return x.id;});var blends=['glow','glow-1','klow','bpc-tb'];var parts=['bpc157','tb500','ghkcu'];return blends.some(function(b){return ids.includes(b);})&&parts.some(function(c){return ids.includes(c);});},getConflicting:function(p){var blends=['glow','glow-1','klow','bpc-tb'];var parts=['bpc157','tb500','ghkcu'];return p.filter(function(x){return blends.includes(x.id)||parts.includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'Healing blend + standalone component — double dose',msg:'Your stack includes a healing blend (Glow/Klow/BPC+TB) that already contains BPC-157, TB-500 and/or GHK-Cu. Adding the individual peptide alongside doubles that compound with no benefit. Remove the standalone or use the blend alone.'},
   {id:'cjc-ipa-double',check:function(p){var ids=p.map(function(x){return x.id;});return ids.includes('cjc-ipa')&&ids.includes('ipamorelin');},getConflicting:function(p){return p.filter(function(x){return['cjc-ipa','ipamorelin'].includes(x.id);}).map(function(x){return x.id;});},level:'warn',title:'CJC/IPA blend + standalone Ipamorelin',msg:'The CJC/IPA blend already includes Ipamorelin. Adding it separately doubles your Ipamorelin dose with no benefit. Use the blend alone, or build the stack from CJC-1295 (no DAC) + Ipamorelin separately.'},
 ];
+// Cross-stack pharmacological axis clusters — compounds sharing the same axis conflict across stacks
+const CROSS_STACK_CLUSTERS={'ghrh':'gh-axis','ghrp':'gh-axis','hgh':'gh-axis','glp1':'glp1-axis'};
 function _doseLabel(pepId,doseVal,unit){var d=parseFloat(doseVal);if(!pepId||!doseVal||isNaN(d)||d<=0)return(doseVal||'')+(unit||'');if(unit==='IU'||unit==='mcg')return doseVal+(unit||'');var rec=RECON_DB[pepId];if(!rec||rec.unit==='IU')return doseVal+(unit||'');var vi=rec.defaultVi!==undefined?rec.defaultVi:0;var wi=rec.defaultWi!==undefined?rec.defaultWi:0;var conc=(rec.vials||[])[vi]/((rec.water||[])[wi]);if(!conc||isNaN(conc))return doseVal+(unit||'');var extra='';if(unit==='mg'){var iu=Math.round(d/conc*100);if(iu>0)extra=' ('+iu+' IU)';}else if(unit==='ml'){var mg=Math.round(d*conc);var iu=Math.round(d*100);var p=[];if(mg>0)p.push(mg+'mg');if(iu>0)p.push(iu+' IU');if(p.length)extra=' ('+p.join(' · ')+')';}return doseVal+(unit||'')+extra;}
 // Returns {dose, unit, phaseIdx, totalPhases} for today based on dose_phases + cycle_start, or null if no ramp
 function _effectiveDose(p,cycleStart){if(!p||!p.dose_phases||!p.dose_phases.length||!cycleStart)return null;var sd=parseLocalDate(cycleStart);var wk=Math.floor((NOW-sd)/604800000);if(wk<0)wk=0;var phases=p.dose_phases.slice().sort(function(a,b){return a.w-b.w;});var cur=phases[0];var curIdx=0;for(var i=1;i<phases.length;i++){if(wk>=phases[i].w){cur=phases[i];curIdx=i;}}return cur?{dose:cur.d,unit:cur.u,phaseIdx:curIdx,totalPhases:phases.length}:null;}
@@ -581,6 +583,7 @@ async function loadUserStacks(){
   buildStackStore();
   buildWeekStrip();
   buildToday();
+  _scanAndShowStartupConflicts();
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){
@@ -615,12 +618,178 @@ async function saveStacksToBackend(){
   // Backend unavailable but data is safe in localStorage
   return {ok:true,synced:false,code:lastCode};
 }
+// ── Stack conflict detection & safety modal ──────────────────────────────────
+var _pendingConflictData=null;
+function _getStackCompounds(st){
+  var out=[];
+  function _cgFor(id){
+    var cat=(PEPTIDE_CAT||[]).find(function(x){return x.id===id;});
+    if(cat&&cat.cg)return cat.cg;
+    var ecat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});
+    return(ecat&&ecat.cg)||[];
+  }
+  (st.peptides||[]).forEach(function(p){if(p.id)out.push({id:p.id,name:p.name||p.id,cg:_cgFor(p.id)});});
+  if(st.trt&&st.trt.compounds)(st.trt.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id)});});
+  if(st.enhanced&&st.enhanced.compounds)(st.enhanced.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id)});});
+  return out;
+}
+function _detectStackConflicts(newIdx){
+  var newSt=_userStacks[newIdx];
+  if(!newSt)return{conflicts:[],conflictingIdxs:[]};
+  var newCompounds=_getStackCompounds(newSt);
+  var newIds={};var newClusters={};
+  newCompounds.forEach(function(c){
+    newIds[c.id]=c.name;
+    (c.cg||[]).forEach(function(tag){var cl=CROSS_STACK_CLUSTERS[tag];if(cl){if(!newClusters[cl])newClusters[cl]=[];newClusters[cl].push(c);}});
+  });
+  var conflicts=[];var conflictingSet={};
+  _activeStackIndices.forEach(function(si){
+    if(si===newIdx)return;
+    var st=_userStacks[si];if(!st)return;
+    _getStackCompounds(st).forEach(function(c){
+      if(newIds[c.id]){
+        conflictingSet[si]=st.name||('Stack '+(si+1));
+        conflicts.push({compoundId:c.id,compoundName:c.name||c.id,existingId:c.id,existingName:c.name||c.id,stackIdx:si,stackName:st.name||('Stack '+(si+1)),reason:'duplicate'});
+      } else {
+        (c.cg||[]).forEach(function(tag){
+          var cl=CROSS_STACK_CLUSTERS[tag];
+          if(cl&&newClusters[cl]){
+            newClusters[cl].forEach(function(nc){
+              conflictingSet[si]=st.name||('Stack '+(si+1));
+              conflicts.push({compoundId:nc.id,compoundName:nc.name,existingId:c.id,existingName:c.name||c.id,stackIdx:si,stackName:st.name||('Stack '+(si+1)),reason:'axis',axisLabel:cl});
+            });
+          }
+        });
+      }
+    });
+  });
+  var seen={};
+  conflicts=conflicts.filter(function(c){var key=c.stackIdx+'|'+c.existingId+'|'+c.compoundId;if(seen[key])return false;seen[key]=true;return true;});
+  return{conflicts:conflicts,conflictingIdxs:Object.keys(conflictingSet).map(Number)};
+}
+function _calcLatestActiveEnd(excludeIdx){
+  var latest=null;
+  _activeStackIndices.forEach(function(si){
+    if(si===excludeIdx)return;
+    var st=_userStacks[si];if(!st)return;
+    var end=null;
+    if(st.end_date){end=parseLocalDate(st.end_date);}
+    else if(st.cycle_start&&st.cycle_length&&st.cycle_length>0){var s=parseLocalDate(st.cycle_start);end=new Date(s.getTime()+st.cycle_length*7*86400000);}
+    if(end&&(!latest||end>latest))latest=end;
+  });
+  return latest;
+}
+function _showConflictModal(newIdx,conflicts,conflictingIdxs){
+  var newSt=_userStacks[newIdx];
+  var newName=newSt?newSt.name||('Stack '+(newIdx+1)):'New stack';
+  var seenKeys={};
+  var uniqConflicts=conflicts.filter(function(c){var key=c.compoundId+'|'+(c.existingId||'');if(seenKeys[key])return false;seenKeys[key]=true;return true;});
+  var cStackNames={};conflicts.forEach(function(c){cStackNames[c.stackIdx]=c.stackName;});
+  var cStackList=Object.values(cStackNames).join(', ');
+  var latestEnd=_calcLatestActiveEnd(newIdx);
+  var schedDate=latestEnd?new Date(latestEnd.getTime()+86400000):null;
+  var schedStr=schedDate?dateKey(schedDate):null;
+  var schedLabel=schedDate?schedDate.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):null;
+  var conflictsHtml=uniqConflicts.map(function(c){
+    var detail=c.reason==='axis'
+      ?'<div style="font-size:11px;color:var(--muted2)">conflicts with '+c.existingName+' in '+c.stackName+' ('+c.axisLabel.replace(/-/g,' ')+')</div>'
+      :'<div style="font-size:11px;color:var(--muted2)">also active in '+c.stackName+'</div>';
+    return'<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);">'
+      +'<span style="font-size:16px">⚠️</span>'
+      +'<div><div style="font-size:13px;font-weight:700;color:var(--text)">'+c.compoundName+'</div>'
+      +detail+'</div></div>';
+  }).join('');
+  var btn='display:block;width:100%;padding:13px 14px;border-radius:10px;border:none;font-size:13px;font-weight:700;text-align:left;cursor:pointer;margin-bottom:10px;';
+  var schedBtn=schedStr
+    ?'<button onclick="_resolveConflict(\'schedule\',\''+schedStr+'\')" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
+      +'📅 Schedule <em>'+newName+'</em> to start '+schedLabel
+      +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Pushes start date to after active cycles finish</div>'
+      +'</button>':'';
+  var overlay=document.createElement('div');
+  overlay.id='stack-conflict-modal';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
+  overlay.innerHTML='<div style="max-width:480px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-top:20px;">'
+    +'<div style="background:#7f1d1d;padding:16px 18px;">'
+    +'<div style="font-size:17px;font-weight:800;color:#fca5a5;">⛔ Dose Conflict Detected</div>'
+    +'<div style="font-size:12px;color:#fca5a5;margin-top:4px;">Activating <strong>'+newName+'</strong> creates duplicate dosing — resolve before continuing</div>'
+    +'</div>'
+    +'<div style="padding:16px 18px;">'
+    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:8px">These compounds would be dosed from multiple stacks simultaneously:</div>'
+    +conflictsHtml
+    +'<div style="font-size:12px;color:var(--muted2);margin-top:14px;margin-bottom:10px;font-weight:700;">Choose a resolution:</div>'
+    +'<button onclick="_resolveConflict(\'deactivate\',null)" style="'+btn+'background:#7f1d1d;color:#fca5a5;">'
+    +'🔴 Deactivate '+cStackList
+    +'<div style="font-size:11px;font-weight:400;opacity:0.8;margin-top:3px">Keep <em>'+newName+'</em> active, deactivate the conflicting stack(s)</div>'
+    +'</button>'
+    +'<button onclick="_resolveConflict(\'remove\',null)" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
+    +'✂️ Remove duplicates from <em>'+newName+'</em>'
+    +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Removes '+uniqConflicts.map(function(c){return c.compoundName;}).join(', ')+' from <em>'+newName+'</em></div>'
+    +'</button>'
+    +schedBtn
+    +'</div></div>';
+  document.body.appendChild(overlay);
+}
+async function _resolveConflict(action,schedDate){
+  var data=_pendingConflictData;_pendingConflictData=null;
+  var overlay=document.getElementById('stack-conflict-modal');
+  if(overlay)overlay.remove();
+  if(!data)return;
+  var newIdx=data.newIdx;var conflicts=data.conflicts;var conflictingIdxs=data.conflictingIdxs;
+  if(action==='deactivate'){
+    conflictingIdxs.forEach(function(si){var pos=_activeStackIndices.indexOf(si);if(pos!==-1)_activeStackIndices.splice(pos,1);});
+  } else if(action==='remove'){
+    var newSt=_userStacks[newIdx];
+    if(newSt){
+      var toRemove={};conflicts.forEach(function(c){toRemove[c.compoundId]=true;});
+      if(newSt.peptides)newSt.peptides=newSt.peptides.filter(function(p){return!toRemove[p.id];});
+      if(newSt.trt&&newSt.trt.compounds)newSt.trt.compounds=newSt.trt.compounds.filter(function(c){return!toRemove[c.id];});
+      if(newSt.enhanced&&newSt.enhanced.compounds)newSt.enhanced.compounds=newSt.enhanced.compounds.filter(function(c){return!toRemove[c.id];});
+    }
+  } else if(action==='schedule'&&schedDate){
+    var newSt=_userStacks[newIdx];
+    if(newSt){
+      newSt.cycle_start=schedDate;
+      if(newSt.cycle_length&&newSt.cycle_length>0){
+        var s=parseLocalDate(schedDate);
+        newSt.end_date=dateKey(new Date(s.getTime()+newSt.cycle_length*7*86400000));
+      }
+    }
+  }
+  updateWEEKLY();
+  await saveStacksToBackend();
+  buildWeekStrip();
+  buildToday();
+  buildSchedule();
+  buildStackStore();
+}
+// Scan all currently-active stacks for conflicts — runs on startup to catch
+// stacks that were already active before the conflict gate was deployed.
+function _scanAndShowStartupConflicts(){
+  if(_activeStackIndices.length<=1)return;
+  for(var i=0;i<_activeStackIndices.length;i++){
+    var idx=_activeStackIndices[i];
+    var det=_detectStackConflicts(idx);
+    if(det.conflicts.length>0){
+      _pendingConflictData={newIdx:idx,conflicts:det.conflicts,conflictingIdxs:det.conflictingIdxs};
+      _showConflictModal(idx,det.conflicts,det.conflictingIdxs);
+      return;
+    }
+  }
+}
 // ── Toggle a stack in/out of the active set ──────────────────────────────────
 async function toggleStack(idx){
   if(idx<0||idx>=_userStacks.length)return;
   var pos=_activeStackIndices.indexOf(idx);
   if(pos===-1){
     _activeStackIndices.push(idx);
+    if(_activeStackIndices.length>1){
+      var det=_detectStackConflicts(idx);
+      if(det.conflicts.length>0){
+        _pendingConflictData={newIdx:idx,conflicts:det.conflicts,conflictingIdxs:det.conflictingIdxs};
+        _showConflictModal(idx,det.conflicts,det.conflictingIdxs);
+        return;
+      }
+    }
   } else {
     _activeStackIndices.splice(pos,1);
   }
@@ -1058,14 +1227,14 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.229"></script>
-<script src="tab-macros.js?v=1.229"></script>
-<script src="tab-stack.js?v=1.229"></script>
-<script src="tab-today.js?v=1.229"></script>
-<script src="tab-schedule.js?v=1.229"></script>
-<script src="tab-timeline.js?v=1.229"></script>
-<script src="tab-body.js?v=1.229"></script>
-<script src="tab-recon.js?v=1.229"></script>
+<script src="tab-cycles.js?v=1.230"></script>
+<script src="tab-macros.js?v=1.230"></script>
+<script src="tab-stack.js?v=1.230"></script>
+<script src="tab-today.js?v=1.230"></script>
+<script src="tab-schedule.js?v=1.230"></script>
+<script src="tab-timeline.js?v=1.230"></script>
+<script src="tab-body.js?v=1.230"></script>
+<script src="tab-recon.js?v=1.230"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
