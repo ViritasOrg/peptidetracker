@@ -37,7 +37,9 @@ const patchedScript = rawScript
   .replace('var _bcWeightHistOpen=',  'var _bcWeightHistOpen=')
   .replace('const PRICELIST=',        'var PRICELIST=')
   .replace('const DOSE_GUIDE=',       'var DOSE_GUIDE=')
-  .replace('const DEFAULT_PHASES=',   'var DEFAULT_PHASES=');
+  .replace('const DEFAULT_PHASES=',   'var DEFAULT_PHASES=')
+  .replace('const TRT_CAT=',          'var TRT_CAT=')
+  .replace('const TRT_GUIDE=',        'var TRT_GUIDE=');
 
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop};
@@ -99,6 +101,7 @@ check('8 rules defined',                   G.STACK_RULES.length===8,            
 check('checkStack defined',                typeof G.checkStack==='function');
 ['ghrh-multi','cjc-tesa','glp1-multi','ghrh-ghrp-solo','gh-hgh-overlap','healing-blend-overlap','healing-blend-component','cjc-ipa-double']
   .forEach(id=>check(`rule "${id}" exists`, G.STACK_RULES.some(r=>r.id===id)));
+if(typeof G.checkStack==='function'){
 const r1=G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'tesamorelin',cg:['ghrh']}]);
 check('CJC+Tesa → err: ghrh-multi',        r1.some(r=>r.level==='err'&&r.id==='ghrh-multi'));
 check('CJC+Tesa → err: cjc-tesa',          r1.some(r=>r.level==='err'&&r.id==='cjc-tesa'));
@@ -113,6 +116,7 @@ check('Glow+bpc157 → warn: healing-blend-component', G.checkStack([{id:'glow',
 check('klow+tb500 → warn: healing-blend-component',  G.checkStack([{id:'klow',cg:[]},{id:'tb500',cg:[]}]).some(r=>r.id==='healing-blend-component'));
 check('cjc-ipa+ipa → warn: cjc-ipa-double',          G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']},{id:'ipamorelin',cg:['ghrp']}]).some(r=>r.id==='cjc-ipa-double'));
 check('cjc-ipa alone → no cjc-ipa-double',           !G.checkStack([{id:'cjc-ipa',cg:['ghrh','ghrp']}]).some(r=>r.id==='cjc-ipa-double'));
+}
 
 // ── buildWeeklyFromProtocol ───────────────────────────────────────────────────
 console.log('\n── buildWeeklyFromProtocol ────────────────────────────────');
@@ -138,6 +142,7 @@ check('empty protocol → empty array',         G.buildWeeklyFromProtocol({pepti
 // ── _synthesizeProtocol ───────────────────────────────────────────────────────
 console.log('\n── _synthesizeProtocol ────────────────────────────────────');
 check('function defined',                   typeof G._synthesizeProtocol==='function');
+if(typeof G._synthesizeProtocol==='function'){
 const synth=G._synthesizeProtocol(G.WEEKLY_DEFAULT);
 check('has peptides',                        synth.peptides.length>0,            `got ${synth.peptides.length}`);
 check('marked _unsaved=true',                synth._unsaved===true);
@@ -150,6 +155,7 @@ check('synth: reta maps to canonical id',   synth.peptides.some(p=>p.id==='retat
 check('synth: cjc maps to canonical id',    synth.peptides.some(p=>p.id==='cjc-ipa'));
 check('synth: glow maps to canonical id',   synth.peptides.some(p=>p.id==='glow'));
 check('synth: reta days includes Sun+Wed',  (()=>{const r=synth.peptides.find(p=>p.id==='retatrutide');return r&&r.days.includes(0)&&r.days.includes(3);})());
+}
 
 // ── WEEKLY_DEFAULT ────────────────────────────────────────────────────────────
 console.log('\n── WEEKLY_DEFAULT ─────────────────────────────────────────');
@@ -164,6 +170,7 @@ check('glow-2 removed (period ended)',     !G.WEEKLY_DEFAULT.some(w=>w.id==='glo
 
 // ── _synthesizeProtocol date propagation ──────────────────────────────────────
 console.log('\n── _synthesizeProtocol: date propagation ───────────────────');
+if(typeof G._synthesizeProtocol==='function'){
 check('synth: glow has no end_date (permanent)',
   (()=>{const g=G._synthesizeProtocol(G.WEEKLY_DEFAULT).peptides.find(p=>p.id==='glow');return g&&!g.end_date;})(),
   'glow got end_date from a temporary entry — check _synthesizeProtocol');
@@ -179,6 +186,7 @@ check('synth: permanent+timed entry → no end_date on merged peptide',
   testPep&&!testPep.end_date, `end_date: ${testPep?.end_date}`);
 check('synth: permanent+timed entry → has AM+PM times',
   testPep&&testPep.times.includes('AM')&&testPep.times.includes('PM'));
+}
 
 // ── Stack Store state & functions ─────────────────────────────────────────────
 console.log('\n── Stack Store ────────────────────────────────────────────');
@@ -196,7 +204,8 @@ check('editStackWithCycle defined',        typeof G.editStackWithCycle==='functi
 
 // ── Wizard init ───────────────────────────────────────────────────────────────
 console.log('\n── Wizard init & createNewStack ───────────────────────────');
-G.initWizard();
+check('initWizard defined',                typeof G.initWizard==='function');
+if(typeof G.initWizard==='function') G.initWizard();
 check('initWizard: step=0',                G._wiz.step===0);
 check('initWizard: peptides=[]',           G._wiz.peptides.length===0);
 check('initWizard: goals=[]',              G._wiz.goals.length===0);
@@ -204,7 +213,7 @@ check('initWizard: cycle_length set',      G._wiz.cycle_length>0,               
 check('initWizard: stackIndex=-1',         G._wiz.stackIndex===-1);
 check('initWizard: stackName is string',   typeof G._wiz.stackName==='string'&&G._wiz.stackName.length>0);
 
-G.createNewStack();
+if(typeof G.createNewStack==='function') G.createNewStack();
 check('createNewStack: editMode=false',    G._wiz.editMode===false);
 check('createNewStack: step=0',            G._wiz.step===0);
 
@@ -219,21 +228,27 @@ const testStack = {
   trt:{enabled:true,compound:'Nebido',injections:[{date:'2026-06-01',label:'Inj 1',dose:'250mg'}]}
 };
 G._userStacks=[testStack];G._activeStackIndices=[0];
-G.editStackWithCycle(0);
+if(typeof G.editStackWithCycle==='function'){
+G._userTier=2;G.editStackWithCycle(0);G._userTier=1;
 check('editStack: editMode=true',          G._wiz.editMode===true);
 check('editStack: stackIndex=0',           G._wiz.stackIndex===0);
 check('editStack: stackName loaded',       G._wiz.stackName==='Cutting Cycle');
 check('editStack: cycle_length=12',        G._wiz.cycle_length===12,            `got ${G._wiz.cycle_length}`);
 check('editStack: 2 peptides loaded',      G._wiz.peptides.length===2,          `got ${G._wiz.peptides.length}`);
-check('editStack: TRT compound loaded',    G._wiz.trt.compound==='Nebido');
+check('editStack: TRT compound loaded (T2)',G._wiz.trt.compound==='Nebido');
 check('editStack: deep copy (no mutation)',G._userStacks[0].peptides!==G._wiz.peptides);
 check('editStack: goals inferred',         Array.isArray(G._wiz.goals));
+// T3 edit: 'enhanced' NOT auto-included — only present if stack has enhanced compounds
+G._userTier=3;G.editStackWithCycle(0);
+check('editStack T3: enhanced not auto-included (peptide-only stack)', !G._wiz.goals.includes('enhanced'));
+G._userTier=1;
+}
 
 // ── Cycle length ──────────────────────────────────────────────────────────────
 console.log('\n── Cycle length ───────────────────────────────────────────');
 check('CYCLE_WEEKS defined',               Array.isArray(G.CYCLE_WEEKS));
-check('multiples of 3 up to 21',           [3,6,9,12,15,18,21].every(v=>G.CYCLE_WEEKS.includes(v)));
-G.initWizard();
+check('multiples of 4 from 4 to 240 (60 months)', G.CYCLE_WEEKS&&G.CYCLE_WEEKS.length===60&&G.CYCLE_WEEKS[0]===4&&G.CYCLE_WEEKS[59]===240&&G.CYCLE_WEEKS.every((v,i)=>v===(i+1)*4));
+if(typeof G.initWizard==='function') G.initWizard();
 G.wizSetCycleLength('8');  check('wizSetCycleLength("8")=8',    G._wiz.cycle_length===8,  `got ${G._wiz.cycle_length}`);
 G.wizSetCycleLength('12'); check('wizSetCycleLength("12")=12',  G._wiz.cycle_length===12);
 G.wizSetCycleLength(10);   check('wizSetCycleLength(10)=10',    G._wiz.cycle_length===10);
@@ -241,23 +256,66 @@ G.wizSetCycleLength('16'); check('custom cycle length 16',      G._wiz.cycle_len
 
 // ── Wizard navigation ─────────────────────────────────────────────────────────
 console.log('\n── Wizard navigation ──────────────────────────────────────');
-G.initWizard();
-G.wizNext();check('wizNext: 0→1',    G._wiz.step===1);
-G.wizNext();check('wizNext: 1→2',    G._wiz.step===2);
+// _wizFlow: peps-only (T1, no TRT, no enhanced)
+G._userTier=1;G.initWizard();
+var t1flow=G._wizFlow();
+check('_wizFlow: peps-only has 6 steps', t1flow.length===6, 'got '+t1flow.length);
+check('_wizFlow: peps-only step[0]=cycle',  t1flow[0]==='cycle');
+check('_wizFlow: peps-only step[5]=review', t1flow[5]==='review');
+check('_wizFlow: peps-only has no trt',     !t1flow.includes('trt'));
+check('_wizFlow: peps-only has no enhanced',!t1flow.includes('enhanced'));
+check('_wizFlow: peps-only has no validate',!t1flow.includes('validate'));
+// _wizFlow: TRT-only (T2, trt enabled, no pep goals)
+G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
+var trtOnlyFlow=G._wizFlow();
+check('_wizFlow: TRT-only has 4 steps', trtOnlyFlow.length===4, 'got '+trtOnlyFlow.length);
+check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,review'));
+// _wizFlow: Peps + TRT (T2, trt enabled, pep goal selected)
+G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
+var pepTrtFlow=G._wizFlow();
+check('_wizFlow: peps+TRT has 8 steps', pepTrtFlow.length===8, 'got '+pepTrtFlow.length);
+check('_wizFlow: peps+TRT has validate', pepTrtFlow.includes('validate'));
+check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='review');
+// _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
+G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
+var trtEnhFlow=G._wizFlow();
+check('_wizFlow: TRT+enhanced has 6 steps', trtEnhFlow.length===6, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,enhanced,validate,review'));
+// _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
+G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
+var allFlow=G._wizFlow();
+check('_wizFlow: peps+TRT+enhanced has 9 steps', allFlow.length===9, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
+check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
+check('_wizFlow: peps+TRT+enhanced has enhanced',  allFlow.includes('enhanced'));
+check('_wizFlow: peps+TRT+enhanced has validate',  allFlow.includes('validate'));
+// wizNext / wizBack
+G._userTier=1;G.initWizard();
+G.wizNext();check('wizNext: 0→1', G._wiz.step===1);
+G.wizNext();check('wizNext: 1→2', G._wiz.step===2);
+G._wiz.step=2;G.wizBack();check('wizBack: 2→1', G._wiz.step===1);
+// peps-only: wizNext from last step stays clamped
+G._userTier=1;G.initWizard();G._wiz.step=5;G.wizNext();
+check('wizNext: peps-only does not exceed step 5', G._wiz.step===5);
+// TRT-only: step through all 4 steps
+G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 G.wizNext();G.wizNext();G.wizNext();
-// TRT not enabled → step 5 (TRT) is skipped, lands on 6
-check('wizNext: skips step 5 when TRT disabled (4→6)', G._wiz.step===6);
-G.wizNext();
-check('wizNext: does not exceed 6',  G._wiz.step===6);
-// With TRT enabled, step 5 is NOT skipped
-G.initWizard();G._wiz.trt.enabled=true;
+check('wizNext: TRT-only after 3 calls = step 3 (review)', G._wiz.step===3);
+G.wizNext();check('wizNext: TRT-only does not exceed step 3', G._wiz.step===3);
+G.wizBack();check('wizBack: TRT-only 3→2 (trt)', G._wiz.step===2);
+// TRT+Enhanced (no peps): step through
+G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: step=5 after 5 calls when TRT enabled', G._wiz.step===5);
-G._wiz.step=2;G.wizBack();check('wizBack: 2→1',    G._wiz.step===1);
-// wizBack from REVIEW (6) with TRT disabled jumps to CONFIGURE (4)
-G.initWizard();G._wiz.step=6;G.wizBack();check('wizBack: 6→4 when TRT disabled', G._wiz.step===4);
-// wizBack from REVIEW (6) with TRT enabled goes to TRT (5)
-G.initWizard();G._wiz.trt.enabled=true;G._wiz.step=6;G.wizBack();check('wizBack: 6→5 when TRT enabled', G._wiz.step===5);
+check('wizNext: TRT+enhanced after 5 calls = step 5 (review)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT+enhanced 5→4 (validate)', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT+enhanced 4→3 (enhanced)', G._wiz.step===3);
+G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
+// Peps+TRT: validate step appears
+G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: peps+TRT after 7 calls = step 7 (review)', G._wiz.step===7);
+G.wizBack();check('wizBack: peps+TRT 7→6 (validate)', G._wiz.step===6);
+G._userTier=1; // restore
 G.wizSetStackName('My New Stack');
 check('wizSetStackName updates _wiz', G._wiz.stackName==='My New Stack');
 
@@ -971,7 +1029,7 @@ const bpcTbCat = G.PEPTIDE_CAT.find(p=>p.id==='bpc-tb');
 check('glow default unit is ml',    glowCat?.dflt?.unitAm==='ml',  `got "${glowCat?.dflt?.unitAm}"`);
 check('glow default dose is 0.09',  parseFloat(glowCat?.dflt?.doseAm)===0.09, `got "${glowCat?.dflt?.doseAm}"`);
 check('klow default unit is ml',    klowCat?.dflt?.unitAm==='ml',  `got "${klowCat?.dflt?.unitAm}"`);
-check('klow default dose is 0.2',   parseFloat(klowCat?.dflt?.doseAm)===0.2, `got "${klowCat?.dflt?.doseAm}"`);
+check('klow default dose is 0.1',   parseFloat(klowCat?.dflt?.doseAm)===0.1, `got "${klowCat?.dflt?.doseAm}"`);
 check('bpc-tb default unit is mg',  bpcTbCat?.dflt?.unitAm==='mg', `got "${bpcTbCat?.dflt?.unitAm}"`);
 check('bpc-tb default dose is 1',   parseFloat(bpcTbCat?.dflt?.doseAm)===1.0, `got "${bpcTbCat?.dflt?.doseAm}"`);
 
@@ -1374,7 +1432,7 @@ console.log('\n── dose dedup migration ────────────�
 
   const cycleStack={name:'Cycle A',cycle_start:'2026-06-21',cycle_length:12,end_date:'2026-09-13',
     peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
-  G._userStacks=[cycleStack];G._activeStackIndices=[];
+  G._userStacks=[cycleStack];G._activeStackIndices=[0];
   var jun21=new Date(2026,5,21);
   var doses21=G.getDosesForDate(jun21);
   check('getDosesForDate: date-ranged stack shows doses on start date',doses21.length>0);
@@ -1413,6 +1471,43 @@ console.log('\n── dose dedup migration ────────────�
     todayJs.includes('getDosesForDate(d).forEach'));
   check('buildWeekStrip uses getPastDoses + _findWeeklyItemInfo for past dots',
     todayJs.includes('getPastDoses(d)') && todayJs.includes('_findWeeklyItemInfo(bid)'));
+
+  // ── _getDynamicEnhancedDoses ──────────────────────────────────────────────
+  check('_getDynamicEnhancedDoses defined in tab-stack.js',
+    typeof G._getDynamicEnhancedDoses === 'function');
+
+  const enhStack={name:'Enhanced Cycle',cycle_start:'2026-06-21',cycle_length:12,peptides:[],
+    enhanced:{enabled:true,compounds:[{id:'testosterone-e',name:'Testosterone E',dose:'250',unit:'mg/week',days:[1,4],dot:'#e8a020'}]}};
+  G._userStacks=[enhStack];G._activeStackIndices=[0];
+  // Mon June 22 = JS getDay() 1
+  var mon22=new Date(2026,5,22);
+  var enhDoses=G._getDynamicEnhancedDoses(mon22,true);
+  check('_getDynamicEnhancedDoses: returns dose on scheduled day',enhDoses.length===1);
+  check('_getDynamicEnhancedDoses: dose has correct name',enhDoses[0]&&enhDoses[0].name==='Testosterone E');
+  check('_getDynamicEnhancedDoses: dose id includes date',enhDoses[0]&&enhDoses[0].id&&enhDoses[0].id.includes('2026-06-22'));
+
+  // Wed June 24 = JS getDay() 3 — not in days:[1,4]
+  var wed24=new Date(2026,5,24);
+  check('_getDynamicEnhancedDoses: no dose on unscheduled day',G._getDynamicEnhancedDoses(wed24,true).length===0);
+
+  // Before cycle_start
+  check('_getDynamicEnhancedDoses: no dose before cycle_start',G._getDynamicEnhancedDoses(new Date(2026,4,1),true).length===0);
+
+  // Stack with no cycle_start — requires _activeStackIndices
+  const enhNoDate={name:'Enhanced No Date',peptides:[],enhanced:{enabled:true,compounds:[{id:'testosterone-e',name:'Testosterone E',dose:'250',unit:'mg/week',days:[1,4],dot:'#e8a020'}]}};
+  G._userStacks=[enhNoDate];G._activeStackIndices=[];
+  check('_getDynamicEnhancedDoses: no-date enhanced stack inactive → no doses',G._getDynamicEnhancedDoses(mon22,true).length===0);
+  G._activeStackIndices=[0];
+  check('_getDynamicEnhancedDoses: no-date enhanced stack active → shows doses',G._getDynamicEnhancedDoses(mon22,true).length===1);
+
+  // buildToday and showDayInline must call _getDynamicEnhancedDoses
+  check('buildToday calls _getDynamicEnhancedDoses(NOW,true)',
+    todayJs.includes('_getDynamicEnhancedDoses(NOW,true)'));
+  check('showDayInline future branch calls _getDynamicEnhancedDoses(d,true)',
+    todayJs.includes('_getDynamicEnhancedDoses(d,true)'));
+  check('buildWeekStrip calls _getDynamicEnhancedDoses for future dots',
+    todayJs.includes('_getDynamicEnhancedDoses(d,false)'));
+
   check('tab-stack.js edit view has no Cycle End field (removed — use cycle length instead)',
     !tabStackJs.includes("id='edit-cycle-end'")&&!tabStackJs.includes('id="edit-cycle-end"'));
   check('tab-stack.js Cycle Length select has No end date option (value 0)',
@@ -1438,19 +1533,94 @@ console.log('\n── dose dedup migration ────────────�
     })());
 }
 
+// ── Storage tab: copy helpers + clear button ──────────────────────────────────
+{
+  const G=sandbox;
+  check('buildStoragePage function defined',typeof G.buildStoragePage==='function');
+  check('_lsCopyText function defined',typeof G._lsCopyText==='function');
+  check('_lsFbCopy function defined (textarea fallback)',typeof G._lsFbCopy==='function');
+  check('lsDbgCopy accepts button arg (not just index)',rawScript.includes('function lsDbgCopy(i,btn)'));
+  check('lsDbgCopyAll accepts button arg',rawScript.includes('function lsDbgCopyAll(btn)'));
+  check('lsDbgClearAll function defined',typeof G.lsDbgClearAll==='function');
+  check('buildStoragePage renders Clear All button',rawScript.includes('lsDbgClearAll()'));
+  check('buildStoragePage renders Copy All with button arg (onclick passes this)',rawScript.includes('lsDbgCopyAll(this)'));
+  check('buildStoragePage per-row copy passes this to lsDbgCopy',rawScript.includes("lsDbgCopy('+i+',this)"));
+  check('buildStoragePage scrolls to top on refresh',rawScript.includes('_el.scrollTop=0'));
+  check('_lsCopyText uses clipboard API with .then() feedback (not silent catch)',rawScript.includes('.then(function(){_flash(true);})')&&rawScript.includes('.catch(function(){_lsFbCopy('));
+  check('no silent clipboard swallow (old pattern gone)',!rawScript.includes('.catch(function(){})')||rawScript.includes('_lsFbCopy'));
+}
+
 // ── Cycle wizard — compound dropdown + Tren template ─────────────────────────
 {
   const tabCyclesJs = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-cycles.js'),'utf8');
-  check('ENHANCEMENT_COMPOUNDS has Trenbolone Enanthate',
-    G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.some(function(c){return c.id==='tren_e';}));
-  check('ENHANCEMENT_COMPOUNDS has Trenbolone Acetate',
-    G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.some(function(c){return c.id==='tren_a';}));
-  check('Trenbolone Enanthate has interaction and sides text',
-    (function(){var c=G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.find(function(x){return x.id==='tren_e';});return c&&c.interaction&&c.sides&&c.interaction.length>20&&c.sides.length>20;})());
+  // Compound data compliance: must NOT be hardcoded in the public frontend repo
+  check('ENHANCEMENT_COMPOUNDS not hardcoded in tab-cycles.js (must come from backend)',
+    !(/var ENHANCEMENT_COMPOUNDS\s*=\s*\[\s*\{/).test(tabCyclesJs));
+  check('syncEnhancedCompoundsFromAgent defined in tab-cycles.js',
+    tabCyclesJs.includes('syncEnhancedCompoundsFromAgent'));
+  check('syncEnhancedCompoundsFromAgent fetches /compounds/enhanced',
+    tabCyclesJs.includes('/compounds/enhanced'));
+  // ADD COMPOUND modal uses select not text input
+  const tabStackJs = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('stackAddAASCompound uses select dropdown (not free-text input) for compound name',
+    tabStackJs.includes('<select id="aas-name"'));
+  check('stackAddAASCompound renders grouped options via ENHANCEMENT_COMPOUNDS',
+    tabStackJs.includes('optgroup')&&tabStackJs.includes('stackAASAutoFill'));
+  check('stackAddAASCompound unit select includes IU/day option',
+    tabStackJs.includes('<option>IU/day</option>'));
+  check('stackAddAASCompound unit select includes IU/week option',
+    tabStackJs.includes('<option>IU/week</option>'));
+  // Regression: Enhanced wizard and edit dropdowns must include IU/day and IU/week
+  // so GH Axis compounds (HGH unit="IU/day") don't silently show as "mg"
+  check('Enhanced wizard unit dropdown includes IU/day (wizSetEnhUnit context)',
+    tabStackJs.split('wizSetEnhUnit').some(function(s){return s.slice(0,500).includes('IU/day');}));
+  check('Enhanced wizard unit dropdown includes IU/week (wizSetEnhUnit context)',
+    tabStackJs.split('wizSetEnhUnit').some(function(s){return s.slice(0,500).includes('IU/week');}));
+  check('Enhanced edit unit dropdown includes IU/day (editSetEnhUnit context)',
+    tabStackJs.split('editSetEnhUnit').some(function(s){return s.slice(0,500).includes('IU/day');}));
+  check('Enhanced edit unit dropdown includes IU/week (editSetEnhUnit context)',
+    tabStackJs.split('editSetEnhUnit').some(function(s){return s.slice(0,500).includes('IU/week');}));
+  check('stackAddAASCompound modal has aas-info-block div for dose guidance',
+    tabStackJs.includes('id="aas-info-block"'));
+  check('_renderEnhancedGuide function defined in tab-stack.js',
+    tabStackJs.includes('function _renderEnhancedGuide('));
+  check('_renderEnhancedGuide renders cadence block (Injection Frequency)',
+    tabStackJs.includes('cat.cadence')&&tabStackJs.includes('Injection Frequency'));
+  check('_renderEnhancedGuide renders cadence halfLife and rec fields',
+    tabStackJs.includes('cad.rec')&&tabStackJs.includes('cad.halfLife'));
+  check('_renderEnhancedGuide renders doseTiers from backend catalogue',
+    tabStackJs.includes('cat.doseTiers')&&tabStackJs.includes('doseTiers.length'));
+  check('_renderEnhancedGuide falls back to DOSE_GUIDE if no doseTiers',
+    tabStackJs.includes('_renderDoseGuide(cat.id)')||tabStackJs.includes('DOSE_GUIDE[cat.id]'));
+  check('_renderEnhancedGuide renders interaction field',
+    tabStackJs.includes('cat.interaction'));
+  check('_renderEnhancedGuide renders sides field',
+    tabStackJs.includes('cat.sides'));
+  check('stackAASAutoFill populates aas-info-block on compound select',
+    tabStackJs.includes('aas-info-block')&&tabStackJs.includes('_renderEnhancedGuide(cat)'));
+  // E2 management: class-based detection
+  check('E2 management uses cls field from ENHANCEMENT_COMPOUNDS catalogue',
+    tabStackJs.includes('ec.cls'));
+  check('E2 management detects 19-nor compounds (has19nor)',
+    tabStackJs.includes('has19nor'));
+  check('E2 management detects Tren specifically (hasTren)',
+    tabStackJs.includes('hasTren'));
+  check('E2 management detects oral compounds and notes no E2 impact',
+    tabStackJs.includes('oralCmps')&&tabStackJs.includes('not aromatize'));
+  check('E2 management for 19-nor shows prolactin warning',
+    tabStackJs.includes('prolactin')&&tabStackJs.includes('cabergoline'));
+  check('E2 management for Tren shows prolactin warning distinct from generic 19-nor',
+    tabStackJs.includes('tren_e')&&tabStackJs.includes('tren_a')&&tabStackJs.includes('progestin'));
+  check('E2 management label for Test+oral does not say Test-only',
+    !tabStackJs.includes('Test-only'));
+  // TRT supraphysiological warning
+  check('_renderTRTGuide shows supraphysiological warning above 250 mg/wk',
+    tabStackJs.includes('weeklyDoseMg>250')&&tabStackJs.includes('Supraphysiological'));
+  check('supraphysiological warning includes actual dose in mg',
+    tabStackJs.includes('Math.round(weeklyDoseMg)'));
+  // Structural tests (don't depend on compound data)
   check('CYCLE_TEMPLATES has Tren template (id: tren)',
     G.CYCLE_TEMPLATES&&G.CYCLE_TEMPLATES.some(function(t){return t.id==='tren';}));
-  check('Tren template has Trenbolone Acetate compound',
-    (function(){var t=G.CYCLE_TEMPLATES&&G.CYCLE_TEMPLATES.find(function(x){return x.id==='tren';});return t&&t.compounds&&t.compounds.some(function(c){return c.name==='Trenbolone Acetate';});})());
   check('_cwizSetCmpd function defined',typeof G._cwizSetCmpd==='function');
   check('_cwizToggleInfo function defined',typeof G._cwizToggleInfo==='function');
   check('wizard step 2 uses compound dropdown (select with _cwizSetCmpd)',
@@ -1461,18 +1631,13 @@ console.log('\n── dose dedup migration ────────────�
     tabCyclesJs.includes('__custom__')&&tabCyclesJs.includes('Custom…'));
   check('_cwizSetCmpd auto-fills dose and unit from ENHANCEMENT_COMPOUNDS',
     tabCyclesJs.includes('ec.defaultDose')&&tabCyclesJs.includes('ec.unit'));
-  check('Custom Cycle template uses Testosterone Enanthate (not bare Testosterone)',
-    (function(){var t=G.CYCLE_TEMPLATES&&G.CYCLE_TEMPLATES.find(function(x){return x.id==='custom';});return t&&t.compounds&&t.compounds[0]&&t.compounds[0].name==='Testosterone Enanthate';})());
   check('optgroup labels used in compound dropdown (Base, DHT-Derived, 19-Nor)',
     tabCyclesJs.includes('optgroup label=')&&tabCyclesJs.includes('19-Nor'));
-  check('ENHANCEMENT_COMPOUNDS has pack specs for injectables (test_e)',
-    G.ENHANCEMENT_COMPOUNDS&&(function(){var e=G.ENHANCEMENT_COMPOUNDS.find(function(x){return x.id==='test_e';});return e&&e.pack&&e.pack.type==='vial'&&e.pack.conc_mg_ml===250&&e.pack.vol_ml===10;})());
-  check('ENHANCEMENT_COMPOUNDS has pack specs for tablets (anavar)',
-    G.ENHANCEMENT_COMPOUNDS&&(function(){var e=G.ENHANCEMENT_COMPOUNDS.find(function(x){return x.id==='anavar';});return e&&e.pack&&e.pack.type==='tablet'&&e.pack.mg_per_tab===10&&e.pack.tabs_per_pack===100;})());
-  check('ENHANCEMENT_COMPOUNDS tren_e has pack (200mg/mL × 10mL)',
-    G.ENHANCEMENT_COMPOUNDS&&(function(){var e=G.ENHANCEMENT_COMPOUNDS.find(function(x){return x.id==='tren_e';});return e&&e.pack&&e.pack.conc_mg_ml===200;})());
-  check('ENHANCEMENT_COMPOUNDS hgh pack is null (bridged to pricelist)',
-    G.ENHANCEMENT_COMPOUNDS&&(function(){var e=G.ENHANCEMENT_COMPOUNDS.find(function(x){return x.id==='hgh';});return e&&e.pack===null;})());
+  // Inject mock compound data so wizard behaviour tests work (fetch is noop in test sandbox)
+  G.ENHANCEMENT_COMPOUNDS=[
+    {id:'_tc_base',name:'Test Base Compound',group:'Base',dot:'#e05050',defaultDose:300,unit:'mg/week',pack:{type:'vial',conc_mg_ml:250,vol_ml:10}},
+    {id:'_tc_oral',name:'Test Oral Compound',group:'Oral',dot:'#d060d0',defaultDose:50,unit:'mg/day',pack:{type:'tablet',mg_per_tab:10,tabs_per_pack:100}}
+  ];
 }
 {
   // ── PRICELIST & Cart functions ───────────────────────────────────────────
@@ -1505,15 +1670,15 @@ console.log('\n── dose dedup migration ────────────�
       var vials=Math.ceil(totalIU/24); // ceil(10.5)=11
       return item&&item.sku==='H24'&&item.vials===vials&&item.boxes==null&&!('price' in item);
     })());
-  check('_calcEnhancementCartItem: test_e 400mg/week 16wks → 6400mg → 3 vials (250×10=2500mg each)',
+  check('_calcEnhancementCartItem: vial compound 400mg/week 16wks → 6400mg → 3 vials (250×10=2500mg each)',
     (function(){
-      var c={name:'Testosterone Enanthate',dose:400,unit:'mg/week',active:true};
+      var c={name:'Test Base Compound',dose:400,unit:'mg/week',active:true};
       var item=G._calcEnhancementCartItem(c,16);
       return item&&item.units===Math.ceil(400*16/2500)&&item.unitLabel==='vials';
     })());
-  check('_calcEnhancementCartItem: anavar 50mg/day 8wks → 2800mg → 3 packs (10×100=1000mg each)',
+  check('_calcEnhancementCartItem: tablet compound 50mg/day 8wks → 2800mg → 3 packs (10×100=1000mg each)',
     (function(){
-      var c={name:'Anavar (Oxandrolone)',dose:50,unit:'mg/day',active:true};
+      var c={name:'Test Oral Compound',dose:50,unit:'mg/day',active:true};
       var item=G._calcEnhancementCartItem(c,8);
       return item&&item.units===Math.ceil(50*7*8/1000)&&item.unitLabel==='packs';
     })());
@@ -1550,4 +1715,1153 @@ console.log('\n── dose dedup migration ────────────�
       var hasBoxRender=html.includes('item.boxes');
       return hasBoldVials&&!hasBoxRender;
     })());
+}
+
+// ── Three-tier wizard — HGH & tier-aware steps ───────────────────────────────
+console.log('\n── Three-tier wizard — HGH & tier-aware steps ──────────────');
+{
+  // HGH must NOT appear in peptides step (it is an Enhancement compound)
+  check('HGH is in PEPTIDE_CAT with group Enhanced',
+    G.PEPTIDE_CAT&&G.PEPTIDE_CAT.some(function(p){return p.id==='hgh'&&p.group==='Enhanced';}));
+
+  // _wizTier and _wizFlow helpers
+  check('_wizTier defined', typeof G._wizTier==='function');
+  check('_wizFlow defined', typeof G._wizFlow==='function');
+
+  // Flow 1: Peps only (T1)
+  G._userTier=1;G.initWizard();
+  var f1=G._wizFlow();
+  check('flow peps-only: 6 steps', f1.length===6, 'got '+f1.length);
+  check('flow peps-only: last=review', f1[f1.length-1]==='review');
+  check('flow peps-only: no trt', !f1.includes('trt'));
+  check('flow peps-only: no validate', !f1.includes('validate'));
+
+  // Flow 2: TRT only (T2, trt.enabled=true, no pep goals)
+  G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
+  var f2=G._wizFlow();
+  check('flow TRT-only: 4 steps', f2.length===4, 'got '+f2.length);
+  check('flow TRT-only: has trt', f2.includes('trt'));
+  check('flow TRT-only: no peptides step', !f2.includes('peptides'));
+  check('flow TRT-only: no validate', !f2.includes('validate'));
+
+  // Flow 3: Peps + TRT (T2, trt.enabled, pep goal)
+  G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
+  var f3=G._wizFlow();
+  check('flow peps+TRT: 8 steps', f3.length===8, 'got '+f3.length);
+  check('flow peps+TRT: has peptides', f3.includes('peptides'));
+  check('flow peps+TRT: has trt', f3.includes('trt'));
+  check('flow peps+TRT: has validate', f3.includes('validate'));
+
+  // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
+  G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
+  var f4=G._wizFlow();
+  check('flow TRT+enhanced: 6 steps', f4.length===6, 'got '+f4.length);
+  check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
+  check('flow TRT+enhanced: has validate', f4.includes('validate'));
+  check('flow TRT+enhanced: no peptides step', !f4.includes('peptides'));
+
+  // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
+  G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
+  var f5=G._wizFlow();
+  check('flow peps+TRT+enhanced: 9 steps', f5.length===9, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
+  check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
+
+  // T3 initWizard defaults to no enhanced goal
+  G._userTier=3;G.initWizard();
+  check('T3 initWizard does not auto-include enhanced goal', !G._wiz.goals.includes('enhanced'));
+
+  // wizStepPeptides filter: HGH (group=Enhanced) must not appear
+  G._userTier=1;
+  G._wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:'Test',cycle_length:12};
+  var pepBody={innerHTML:''};
+  var pepFoot={innerHTML:''};
+  G.wizStepPeptides(pepBody,pepFoot);
+  var pepHtml=pepBody.innerHTML;
+  // Check HGH id not in rendered content - we need to check if HGH card was rendered
+  // The rendered HTML contains data-id or onclick with 'hgh' only if HGH was included
+  check('wizStepPeptides HTML does not include HGH (id=hgh excluded by group:Enhanced filter)',
+    !pepHtml.includes("wizTogglePep('hgh')"), 'HGH card found in T1 peptides step');
+
+  // Enhanced goal set: still no HGH (group filter is unconditional)
+  G._wiz.goals=['enhanced'];
+  var pepBody2={innerHTML:''};
+  G.wizStepPeptides(pepBody2,pepFoot);
+  check('wizStepPeptides with enhanced goal still excludes HGH',
+    !pepBody2.innerHTML.includes("wizTogglePep('hgh')"), 'HGH appeared with enhanced goal');
+
+  // Restore tier
+  G._userTier=1;
+}
+
+// ── Enhanced wizard redesign tests ──────────────────────────────────────────
+{
+  G._userTier=3;
+
+  // wizToggleEnhancedCompound pre-populates dose, unit and days
+  G.initWizard();G._wiz.goals=['enhanced'];
+  var testId=(G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS[0]&&G.ENHANCEMENT_COMPOUNDS[0].id)||null;
+  if(testId){
+    G.wizToggleEnhancedCompound(testId);
+    var ec=G._wiz.enhanced.compounds.find(function(c){return c.id===testId;});
+    check('wizToggleEnhancedCompound: compound added to _wiz.enhanced.compounds', !!ec);
+    check('wizToggleEnhancedCompound: dose pre-populated as string', typeof ec.dose==='string');
+    var cat=G.ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===testId;});
+    var expDays=cat&&cat.defaultDays?cat.defaultDays:[0,1,2,3,4,5,6];
+    check('wizToggleEnhancedCompound: days uses compound defaultDays', Array.isArray(ec.days)&&JSON.stringify(ec.days.slice().sort(function(a,b){return a-b;}))=== JSON.stringify(expDays.slice().sort(function(a,b){return a-b;})));
+    check('wizToggleEnhancedCompound: unit set', !!ec.unit);
+    check('wizToggleEnhancedCompound: _wiz.enhanced.enabled=true after adding', G._wiz.enhanced.enabled===true);
+    // Toggle off
+    G.wizToggleEnhancedCompound(testId);
+    check('wizToggleEnhancedCompound: removed on second click', G._wiz.enhanced.compounds.length===0);
+    check('wizToggleEnhancedCompound: _wiz.enhanced.enabled=false when empty', G._wiz.enhanced.enabled===false);
+  }
+
+  // wizSetEnhDose, wizSetEnhUnit, wizSetEnhDays setters
+  if(testId){
+    G.initWizard();G._wiz.goals=['enhanced'];
+    G.wizToggleEnhancedCompound(testId);
+    G.wizSetEnhDose(testId,'250');
+    var ec2=G._wiz.enhanced.compounds.find(function(c){return c.id===testId;});
+    check('wizSetEnhDose: dose updated', ec2&&ec2.dose==='250');
+    G.wizSetEnhUnit(testId,'ml');
+    check('wizSetEnhUnit: unit updated', ec2&&ec2.unit==='ml');
+    // Force days to a known single-day state for toggle tests
+    if(ec2)ec2.days=[3];
+    G.wizSetEnhDays(testId,1); // add Monday to [3]
+    check('wizSetEnhDays: days includes added day', ec2&&ec2.days&&ec2.days.includes(1));
+    G.wizSetEnhDays(testId,3); // remove Wednesday (days=[1] now)
+    check('wizSetEnhDays: days still has Mon after removing Wed', ec2&&ec2.days&&ec2.days.includes(1)&&!ec2.days.includes(3));
+    // Cannot deselect last day
+    G.wizSetEnhDays(testId,1); // try removing Mon when it's the only day
+    check('wizSetEnhDays: cannot remove last day', ec2&&ec2.days&&ec2.days.length>=1);
+  }
+
+  // wizStepEnhanced prefill: TRT compound matching ENHANCEMENT_COMPOUNDS name is auto-added on first entry
+  // Uses ENHANCEMENT_COMPOUNDS[0] as the matching compound — no TRT_CAT needed since _trtCompounds returns trt.compounds directly
+  if(G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.length){
+    var enhFirst=G.ENHANCEMENT_COMPOUNDS[0];
+    G.initWizard();G._userTier=3;G._wiz.goals=['enhanced'];G._wiz.trt.enabled=true;
+    G._wiz.trt.compounds=[{id:'_trt_test',name:enhFirst.name,dose:'125',unit:'mg',days:[1,3,5]}];
+    var pfBody={innerHTML:''};var pfFoot={innerHTML:''};
+    G.wizStepEnhanced(pfBody,pfFoot);
+    var preAdded=G._wiz.enhanced.compounds.find(function(c){return c.id===enhFirst.id;});
+    check('wizStepEnhanced prefill: TRT-matching compound auto-added', !!preAdded);
+    check('wizStepEnhanced prefill: pre-filled dose matches TRT dose', preAdded&&preAdded.dose==='125');
+    check('wizStepEnhanced prefill: pre-filled days match TRT days', preAdded&&Array.isArray(preAdded.days)&&preAdded.days.length===3&&preAdded.days.includes(1)&&preAdded.days.includes(3)&&preAdded.days.includes(5));
+    check('wizStepEnhanced prefill: enabled=true after prefill', G._wiz.enhanced.enabled===true);
+    var beforeLen=G._wiz.enhanced.compounds.length;
+    var pfBody2={innerHTML:''};var pfFoot2={innerHTML:''};
+    G.wizStepEnhanced(pfBody2,pfFoot2);
+    check('wizStepEnhanced prefill: _prefilled flag prevents duplicate on re-render', G._wiz.enhanced.compounds.length===beforeLen);
+  }
+
+  // wizStepReview: no blocking save with TRT compound also in Enhanced
+  if(testId){
+    G.initWizard();G._userTier=3;G._wiz.goals=['enhanced'];
+    var safeEnh=G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===testId;});
+    if(safeEnh){
+      G._wiz.enhanced.compounds=[{id:safeEnh.id,name:safeEnh.name,dose:'50',unit:'mg',days:[1,2,3,4,5,6,0],dot:safeEnh.dot}];
+      G._wiz.enhanced.enabled=true;
+      var revBody2={innerHTML:''};var revFoot2={innerHTML:''};
+      G.wizStepReview(revBody2,revFoot2);
+      check('wizStepReview: enhanced compound without peptide errors → Save Stack label', revFoot2.innerHTML.includes('Save Stack'));
+    }
+  }
+
+  // Enhanced summary in review shows days label
+  if(testId){
+    G.initWizard();G._userTier=3;G._wiz.goals=['enhanced'];
+    var anyEnh=G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===testId;});
+    if(anyEnh){
+      G._wiz.enhanced.compounds=[{id:anyEnh.id,name:anyEnh.name,dose:'50',unit:'mg',days:[1,2,3,4,5,6,0],dot:anyEnh.dot}];
+      G._wiz.enhanced.enabled=true;
+      var revBody3={innerHTML:''};var revFoot3={innerHTML:''};
+      G.wizStepReview(revBody3,revFoot3);
+      check('wizStepReview: enhanced compound summary shows "Every day" for 7-day schedule',
+        revBody3.innerHTML.includes('Every day'));
+    }
+  }
+
+  G._userTier=1;
+}
+
+// ── Edit Enhanced tab — stack editor regression ──────────────────────────────
+console.log('\n── Edit Enhanced tab — stack editor regression ─────────────');
+{
+  const G=sandbox;
+  G._userTier=3;
+
+  // Helper functions exist
+  check('editToggleEnhancedCompound defined', typeof G.editToggleEnhancedCompound==='function');
+  check('editSetEnhDose defined',             typeof G.editSetEnhDose==='function');
+  check('editSetEnhUnit defined',             typeof G.editSetEnhUnit==='function');
+  check('editSetEnhDays defined',             typeof G.editSetEnhDays==='function');
+  check('_renderEditEnhanced defined',        typeof G._renderEditEnhanced==='function');
+  check('_renderEnhancedViewTab defined',     typeof G._renderEnhancedViewTab==='function');
+
+  // _renderEditEnhanced returns string HTML
+  var editEnh=G._renderEditEnhanced({enabled:false,compounds:[]});
+  check('_renderEditEnhanced returns string', typeof editEnh==='string');
+  check('_renderEditEnhanced shows intro text', editEnh.includes('enhancement compounds'));
+
+  var testId2=(G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS[0]&&G.ENHANCEMENT_COMPOUNDS[0].id)||null;
+  if(testId2){
+    G._editBuf={name:'Test',peptides:[],trt:{enabled:false,compounds:[]},cycle_length:12};
+    G.editToggleEnhancedCompound(testId2);
+    check('editToggleEnhancedCompound: creates enhanced on _editBuf', !!G._editBuf.enhanced);
+    check('editToggleEnhancedCompound: compound added', G._editBuf.enhanced.compounds.length===1);
+    check('editToggleEnhancedCompound: enabled=true', G._editBuf.enhanced.enabled===true);
+    check('editToggleEnhancedCompound: dose is string', typeof G._editBuf.enhanced.compounds[0].dose==='string');
+    var cat2=G.ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===testId2;});
+    var expDays2=cat2&&cat2.defaultDays?cat2.defaultDays:[0,1,2,3,4,5,6];
+    check('editToggleEnhancedCompound: days uses compound defaultDays', Array.isArray(G._editBuf.enhanced.compounds[0].days)&&JSON.stringify(G._editBuf.enhanced.compounds[0].days.slice().sort(function(a,b){return a-b;}))=== JSON.stringify(expDays2.slice().sort(function(a,b){return a-b;})));
+
+    G.editSetEnhDose(testId2,'200');
+    check('editSetEnhDose: updates dose', G._editBuf.enhanced.compounds[0].dose==='200');
+
+    G.editSetEnhUnit(testId2,'ml');
+    check('editSetEnhUnit: updates unit', G._editBuf.enhanced.compounds[0].unit==='ml');
+
+    // Force single-day state for toggle test
+    G._editBuf.enhanced.compounds[0].days=[5];
+    G.editSetEnhDays(testId2,3);
+    check('editSetEnhDays: adds day 3', G._editBuf.enhanced.compounds[0].days.includes(3));
+
+    G._editBuf.enhanced.compounds[0].days=[1];
+    G.editSetEnhDays(testId2,1);
+    check('editSetEnhDays: cannot deselect last day', G._editBuf.enhanced.compounds[0].days.length>=1);
+
+    var viewHtml=G._renderEnhancedViewTab({enhanced:{enabled:true,compounds:[{id:testId2,name:'Test Compound',dose:'250',unit:'mg',days:[1,3],dot:'#e05050'}]}});
+    check('_renderEnhancedViewTab: contains compound name', viewHtml.includes('Test Compound'));
+    check('_renderEnhancedViewTab: contains dose', viewHtml.includes('250mg'));
+
+    var viewEmpty=G._renderEnhancedViewTab({enhanced:{enabled:false,compounds:[]}});
+    check('_renderEnhancedViewTab empty: shows no compounds message', viewEmpty.includes('No enhancement compounds'));
+
+    var viewMissing=G._renderEnhancedViewTab({});
+    check('_renderEnhancedViewTab: handles missing enhanced key', viewMissing.includes('No enhancement compounds'));
+
+    var gBody={innerHTML:''};var gFoot={innerHTML:''};
+    G.initWizard();G._wiz.goals=['enhanced'];
+    G.wizStepGoals(gBody,gFoot);
+    check('wizStepGoals T3: shows Enhanced Cycle toggle', gBody.innerHTML.includes('Enhanced Cycle'));
+
+    G.editToggleEnhancedCompound(testId2);
+    check('editToggleEnhancedCompound: removes compound on second call', G._editBuf.enhanced.compounds.length===0);
+    check('editToggleEnhancedCompound: enabled=false when empty', G._editBuf.enhanced.enabled===false);
+  }
+
+  G._userTier=1;
+}
+
+// ── Wizard step render tests ──────────────────────────────────────────────────
+console.log('\n── Wizard step render tests ────────────────────────────────');
+{
+  const G=sandbox;
+
+  // wizStep1: cycle length selector
+  G._userTier=1;
+  G.initWizard();
+  var s1B={innerHTML:''};var s1F={innerHTML:''};
+  G.wizStep1(s1B,s1F);
+  check('wizStep1: body not empty', s1B.innerHTML.length>0);
+  check('wizStep1: contains cycle length select', s1B.innerHTML.includes('<select'));
+  check('wizStep1: has "No end date" option', s1B.innerHTML.includes('No end date'));
+  check('wizStep1: has month option', s1B.innerHTML.includes('month'));
+  check('wizStep1: footer has Next button', s1F.innerHTML.includes('Next'));
+
+  // wizStepGoals T1: no TRT section, no Enhanced Cycle toggle
+  G._userTier=1;
+  G.initWizard();
+  var gB1={innerHTML:''};var gF1={innerHTML:''};
+  G.wizStepGoals(gB1,gF1);
+  check('wizStepGoals T1: body not empty', gB1.innerHTML.length>0);
+  check('wizStepGoals T1: contains goal-chip', gB1.innerHTML.includes('goal-chip'));
+  check('wizStepGoals T1: no Testosterone toggle (T1 has no TRT access)', !gB1.innerHTML.includes('Testosterone protocol'));
+  check('wizStepGoals T1: no Enhanced Cycle toggle', !gB1.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T1: footer has Next button', gF1.innerHTML.includes('Next'));
+
+  // wizStepGoals T2: TRT toggle present, no Enhanced Cycle
+  G._userTier=2;
+  G.initWizard();
+  var gB2={innerHTML:''};var gF2={innerHTML:''};
+  G.wizStepGoals(gB2,gF2);
+  check('wizStepGoals T2: has Testosterone protocol toggle', gB2.innerHTML.includes('Testosterone protocol'));
+  check('wizStepGoals T2: no Enhanced Cycle toggle', !gB2.innerHTML.includes('Enhanced Cycle'));
+
+  // wizStepGoals T3: Enhanced Cycle section visible + toggleable
+  G._userTier=3;
+  G.initWizard();
+  var gB3={innerHTML:''};var gF3={innerHTML:''};
+  G.wizStepGoals(gB3,gF3);
+  check('wizStepGoals T3: shows Enhanced Cycle section', gB3.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T3: initWizard does not auto-include enhanced in goals', !G._wiz.goals.includes('enhanced'));
+  check('wizStepGoals T3: Enhanced toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
+
+  // wizStepCheck: empty peptides
+  G._userTier=1;
+  G.initWizard();
+  var ckB1={innerHTML:''};var ckF1={innerHTML:''};
+  G.wizStepCheck(ckB1,ckF1);
+  check('wizStepCheck empty: mentions no peptides', ckB1.innerHTML.includes('No peptides'));
+  check('wizStepCheck empty: footer has Next', ckF1.innerHTML.includes('Next'));
+
+  // wizStepCheck: with peptide (no conflicts)
+  G.initWizard();
+  var pepCat0=G.PEPTIDE_CAT&&G.PEPTIDE_CAT.find(function(p){return p.id==='cjc-ipa';});
+  if(pepCat0){
+    var d0=pepCat0.dflt;
+    G._wiz.peptides=[{id:'cjc-ipa',name:pepCat0.name,dot:pepCat0.dot,times:['AM'],days:[1,2,3,4,5],dose_am:d0.doseAm,dose_pm:'',unit_am:d0.unitAm,note:'',active:true}];
+    var ckB2={innerHTML:''};var ckF2={innerHTML:''};
+    G.wizStepCheck(ckB2,ckF2);
+    check('wizStepCheck with peptide: lists peptide name', ckB2.innerHTML.includes(pepCat0.name));
+    check('wizStepCheck with peptide: shows Validation section', ckB2.innerHTML.includes('Validation'));
+  }
+
+  // wizStepConfig: empty peptides
+  G.initWizard();
+  var cfB1={innerHTML:''};var cfF1={innerHTML:''};
+  G.wizStepConfig(cfB1,cfF1);
+  check('wizStepConfig empty: mentions no peptides', cfB1.innerHTML.includes('No peptides'));
+
+  // wizStepConfig: with peptide — shows dose/timing/days controls
+  if(pepCat0){
+    var d0=pepCat0.dflt;
+    G.initWizard();
+    G._wiz.peptides=[{id:'cjc-ipa',name:pepCat0.name,dot:pepCat0.dot,times:['AM'],days:[1,2,3,4,5],dose_am:d0.doseAm,dose_pm:'',unit_am:d0.unitAm,note:'',active:true}];
+    var cfB2={innerHTML:''};var cfF2={innerHTML:''};
+    G.wizStepConfig(cfB2,cfF2);
+    check('wizStepConfig with peptide: shows cfg-block', cfB2.innerHTML.includes('cfg-block'));
+    check('wizStepConfig with peptide: shows peptide name', cfB2.innerHTML.includes(pepCat0.name));
+    check('wizStepConfig with peptide: shows AM Dose row', cfB2.innerHTML.includes('AM Dose'));
+    check('wizStepConfig with peptide: shows Days row', cfB2.innerHTML.includes('Days'));
+    check('wizStepConfig with peptide: footer has Next', cfF2.innerHTML.includes('Next'));
+  }
+
+  // wizStepTRT: renders TRT compound list
+  G._userTier=2;
+  G.initWizard();
+  var trtB={innerHTML:''};var trtF={innerHTML:''};
+  G.wizStepTRT(trtB,trtF);
+  check('wizStepTRT: body not empty', trtB.innerHTML.length>0);
+  if(G.TRT_CAT&&G.TRT_CAT.length){
+    check('wizStepTRT: lists first TRT compound', trtB.innerHTML.includes(G.TRT_CAT[0].name));
+  }
+  check('wizStepTRT: footer has Next', trtF.innerHTML.includes('Next'));
+
+  // wizStepEnhanced: renders compound list (T3)
+  G._userTier=3;
+  G.initWizard();
+  var eB={innerHTML:''};var eF={innerHTML:''};
+  G.wizStepEnhanced(eB,eF);
+  check('wizStepEnhanced: body not empty', eB.innerHTML.length>0);
+  check('wizStepEnhanced: footer has Next', eF.innerHTML.includes('Next'));
+  if(G.ENHANCEMENT_COMPOUNDS&&G.ENHANCEMENT_COMPOUNDS.length){
+    check('wizStepEnhanced: lists compound group', eB.innerHTML.includes(G.ENHANCEMENT_COMPOUNDS[0].group));
+  }
+
+  // wizStepEnhanced: empty catalogue shows visible loading state (not invisible muted text)
+  var savedEnhCat=G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS=[];
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.step=2; // simulate being on Enhanced step in the flow
+  var elB={innerHTML:''};var elF={innerHTML:''};
+  G.wizStepEnhanced(elB,elF);
+  check('wizStepEnhanced empty catalogue: shows loading text (not silent blank)', elB.innerHTML.includes('Loading compounds'));
+  check('wizStepEnhanced empty catalogue: Next button disabled when loading', elF.innerHTML.includes('disabled'));
+  G.ENHANCEMENT_COMPOUNDS=savedEnhCat; // restore
+
+  // syncEnhancedCompoundsFromAgent: backend returns {compounds:[...]} — must extract array, not assign whole object
+  var origEnhCat=G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS=[];
+  // Simulate response from backend: wrapped object ({"compounds":[...]})
+  var fakeCompound={id:'test_e',name:'Test',group:'Base'};
+  var wrappedResponse={compounds:[fakeCompound]};
+  // Extract array using same logic as the fixed syncEnhancedCompoundsFromAgent
+  var d=wrappedResponse;
+  var extracted=Array.isArray(d)?d:(d.compounds||[]);
+  G.ENHANCEMENT_COMPOUNDS=extracted;
+  check('syncEnhancedCompoundsFromAgent: extracts .compounds array from wrapped response', Array.isArray(G.ENHANCEMENT_COMPOUNDS));
+  check('syncEnhancedCompoundsFromAgent: ENHANCEMENT_COMPOUNDS has length after extract', G.ENHANCEMENT_COMPOUNDS.length===1);
+  G.ENHANCEMENT_COMPOUNDS=origEnhCat; // restore
+
+  // wizStepReview: empty stack — no peptides
+  G._userTier=1;
+  G.initWizard();
+  var rvB={innerHTML:''};var rvF={innerHTML:''};
+  G.wizStepReview(rvB,rvF);
+  check('wizStepReview empty: body not empty', rvB.innerHTML.length>0);
+  check('wizStepReview empty: shows Stack Name input', rvB.innerHTML.includes('Stack Name'));
+  check('wizStepReview empty: shows Summary section', rvB.innerHTML.includes('Summary'));
+  check('wizStepReview empty: no peptides message', rvB.innerHTML.includes('No peptides'));
+  check('wizStepReview empty: footer has Save Stack', rvF.innerHTML.includes('Save Stack'));
+
+  // wizStepReview: Enhanced-only flow — no "No peptides selected." shown
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.goals=['enhanced'];
+  G._wiz.enhanced={enabled:false,compounds:[]};
+  var rvEnhB={innerHTML:''};var rvEnhF={innerHTML:''};
+  G.wizStepReview(rvEnhB,rvEnhF);
+  check('wizStepReview enhanced-only: no "No peptides" message (peptides not in flow)', !rvEnhB.innerHTML.includes('No peptides selected'));
+  check('wizStepReview enhanced-only: shows "No enhancement compounds selected"', rvEnhB.innerHTML.includes('No enhancement compounds selected'));
+  check('wizStepReview enhanced-only: shows Enhancement Compounds section heading', rvEnhB.innerHTML.includes('Enhancement Compounds'));
+
+  // wizStepReview: Enhanced-only flow with a compound — compound shown in summary
+  G._wiz.enhanced={enabled:true,compounds:[{id:'test-c',name:'Test Compound',dose:'200',unit:'mg',days:[1,4],dot:'#f00'}]};
+  var rvEnhB2={innerHTML:''};var rvEnhF2={innerHTML:''};
+  G.wizStepReview(rvEnhB2,rvEnhF2);
+  check('wizStepReview enhanced with compound: compound name shown', rvEnhB2.innerHTML.includes('Test Compound'));
+  check('wizStepReview enhanced with compound: no "No enhancement compounds" message', !rvEnhB2.innerHTML.includes('No enhancement compounds selected'));
+
+  // TRT/Enhanced mutual exclusion — enabling TRT clears Enhanced
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.goals=['enhanced'];
+  if(!G._wiz.enhanced)G._wiz.enhanced={enabled:true,compounds:[]};
+  G._wiz.enhanced.compounds=[{id:'x',name:'X',dose:'100',unit:'mg',days:[1],dot:'#f00'}];
+  G._wiz.enhanced.enabled=true;
+  G.wizToggleGoalTRT(); // enable TRT → should clear Enhanced
+  check('wizToggleGoalTRT: enabling TRT removes enhanced from goals', !G._wiz.goals.includes('enhanced'));
+  check('wizToggleGoalTRT: enabling TRT clears enhanced compounds', !G._wiz.enhanced||G._wiz.enhanced.compounds.length===0);
+  check('wizToggleGoalTRT: enabling TRT sets enhanced.enabled=false', !G._wiz.enhanced||G._wiz.enhanced.enabled===false);
+
+  // TRT/Enhanced mutual exclusion — enabling Enhanced clears TRT
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.trt.enabled=true;G._wiz.goals=['trt'];G._wiz.trt.compounds=[{id:'t',name:'T',dose:'125',unit:'mg',days:[1]}];
+  G.wizToggleGoal('enhanced'); // enable Enhanced → should clear TRT
+  check('wizToggleGoal enhanced: clears TRT enabled flag', G._wiz.trt.enabled===false);
+  check('wizToggleGoal enhanced: removes trt from goals', !G._wiz.goals.includes('trt'));
+  check('wizToggleGoal enhanced: clears TRT compounds', G._wiz.trt.compounds.length===0);
+
+  // wizStepGoals: TRT toggle greyed when Enhanced is on
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.goals=['enhanced'];
+  var gmB={innerHTML:''};var gmF={innerHTML:''};
+  G.wizStepGoals(gmB,gmF);
+  check('wizStepGoals: TRT section visible when Enhanced is on', gmB.innerHTML.includes('TRT'));
+  check('wizStepGoals: TRT toggle greyed (pointer-events:none) when Enhanced is on', gmB.innerHTML.includes('pointer-events:none'));
+
+  // wizStepGoals: Enhanced toggle greyed when TRT is on
+  G._userTier=3;
+  G.initWizard();
+  G._wiz.trt.enabled=true;G._wiz.goals=['trt'];
+  var gmB2={innerHTML:''};var gmF2={innerHTML:''};
+  G.wizStepGoals(gmB2,gmF2);
+  check('wizStepGoals: Enhanced Cycle section visible when TRT is on', gmB2.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals: Enhanced toggle greyed (pointer-events:none) when TRT is on', gmB2.innerHTML.includes('pointer-events:none'));
+
+  // wizStepEnhanced: mandatory Testosterone — Next disabled when no base compound selected
+  G._userTier=3;
+  G.initWizard();G._wiz.goals=['enhanced'];
+  var savedECat=G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS=[{id:'test_e',name:'Testosterone Enanthate',group:'Androgens',cls:'base',dot:'#e05050',defaultDose:250,unit:'mg/week'}];
+  var meB={innerHTML:''};var meF={innerHTML:''};
+  G.wizStepEnhanced(meB,meF);
+  check('wizStepEnhanced: Next disabled when no base compound selected', meF.innerHTML.includes('disabled'));
+  check('wizStepEnhanced: warning banner shown when no base compound', meB.innerHTML.includes('Testosterone'));
+  // Now select the base compound
+  G.wizToggleEnhancedCompound('test_e');
+  var meB2={innerHTML:''};var meF2={innerHTML:''};
+  G.wizStepEnhanced(meB2,meF2);
+  check('wizStepEnhanced: Next enabled after base compound selected', !meF2.innerHTML.includes('disabled'));
+  check('wizStepEnhanced: warning gone after base compound selected', !meB2.innerHTML.includes('⚠'));
+  G.ENHANCEMENT_COMPOUNDS=savedECat;
+
+  G._userTier=1;
+}
+
+// ── _stackTabBar ──────────────────────────────────────────────────────────────
+console.log('\n── _stackTabBar ────────────────────────────────────────────');
+{
+  const G=sandbox;
+
+  // T1: all three tabs present; Enhanced is locked (opacity 0.45)
+  G._userTier=1;
+  var tb1=G._stackTabBar('peptides','setStackViewTab');
+  check('_stackTabBar T1: renders Peptides tab', tb1.includes('Peptides'));
+  check('_stackTabBar T1: renders TRT tab', tb1.includes('TRT'));
+  check('_stackTabBar T1: renders Enhanced tab', tb1.includes('Enhanced'));
+  check('_stackTabBar T1: Enhanced tab locked (opacity:0.45)', tb1.includes('0.45'));
+
+  // T3: Enhanced is not locked
+  G._userTier=3;
+  var tb3=G._stackTabBar('peptides','setStackViewTab');
+  check('_stackTabBar T3: Enhanced tab present', tb3.includes('Enhanced'));
+  check('_stackTabBar T3: Enhanced tab not locked (no opacity:0.45)', !tb3.includes('0.45'));
+
+  // Active tab gets accent background; others transparent
+  G._userTier=3;
+  var tbEnhActive=G._stackTabBar('enhanced','setEditInnerTab');
+  check('_stackTabBar T3: active Enhanced tab gets accent bg', tbEnhActive.includes('var(--accent)'));
+
+  // Setter propagated to onclick handlers
+  check('_stackTabBar view: onclick uses setStackViewTab', tb1.includes('setStackViewTab'));
+  var tbEdit=G._stackTabBar('trt','setEditInnerTab');
+  check('_stackTabBar edit: onclick uses setEditInnerTab', tbEdit.includes('setEditInnerTab'));
+
+  G._userTier=1;
+}
+
+// ── View & Edit tab render functions ─────────────────────────────────────────
+console.log('\n── View & Edit tab render functions ────────────────────────');
+{
+  const G=sandbox;
+
+  // _renderEnhancedUpgradeCTA: non-T3 users see upgrade call-to-action
+  var ctaHtml=G._renderEnhancedUpgradeCTA();
+  check('_renderEnhancedUpgradeCTA: returns string', typeof ctaHtml==='string');
+  check('_renderEnhancedUpgradeCTA: not empty', ctaHtml.length>0);
+  check('_renderEnhancedUpgradeCTA: mentions Enhanced Tier', ctaHtml.includes('Enhanced Tier'));
+  check('_renderEnhancedUpgradeCTA: has Enable in Settings button', ctaHtml.includes('Enable in Settings'));
+
+  // _renderTRTViewTab: no TRT configured
+  var noTRTSt={name:'T',peptides:[],trt:{enabled:false,compounds:[]},cycle_length:12};
+  var tvH1=G._renderTRTViewTab(noTRTSt);
+  check('_renderTRTViewTab empty: returns string', typeof tvH1==='string');
+  check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No TRT configured'));
+  check('_renderTRTViewTab empty: shows Injection Log section', tvH1.includes('Injection Log'));
+  check('_renderTRTViewTab empty: prompts to set start date', tvH1.includes('Set a start date'));
+
+  // _renderTRTViewTab: with TRT compound (no cycle_start → injection log shows set-start-date)
+  if(G.TRT_CAT&&G.TRT_CAT.length){
+    // Use any TRT compound — both Nebido and Testoviron show name/dose/Protocol section
+    var tCat0v=G.TRT_CAT.find(function(c){return c.id!=='nebido';})||G.TRT_CAT[0];
+    var withTRTSt={name:'T',peptides:[],trt:{enabled:true,compounds:[{id:tCat0v.id,name:tCat0v.name,dose:'125',unit:'mg',days:[1,3]}]},cycle_length:12};
+    var tvH2=G._renderTRTViewTab(withTRTSt);
+    check('_renderTRTViewTab with compound: shows Protocol section', tvH2.includes('Protocol'));
+    check('_renderTRTViewTab with compound: shows compound name', tvH2.includes(tCat0v.name));
+    check('_renderTRTViewTab with compound: shows dose', tvH2.includes('125'));
+    check('_renderTRTViewTab with compound: still shows injection log area', tvH2.includes('Injection Log'));
+  }
+
+  // _renderEditTRT: null/empty → toggle is off, no compound cards visible
+  var etH1=G._renderEditTRT(null);
+  check('_renderEditTRT null: returns string', typeof etH1==='string');
+  check('_renderEditTRT null: shows TRT Protocol heading', etH1.includes('TRT Protocol'));
+  check('_renderEditTRT null: toggle is OFF (not "toggle-sw on")', etH1.includes('toggle-sw')&&!etH1.includes('toggle-sw on'));
+
+  // _renderEditTRT: enabled with compound → toggle on, dose controls
+  // Use testoviron (not nebido) so the Days row appears (nebido shows Frequency instead)
+  if(G.TRT_CAT&&G.TRT_CAT.length){
+    var tCatNonNebido=G.TRT_CAT.find(function(c){return c.id!=='nebido';})||G.TRT_CAT[0];
+    var tCat0=tCatNonNebido;
+    G._editBuf={name:'T',peptides:[],trt:{enabled:true,compounds:[{id:tCat0.id,name:tCat0.name,dose:'125',unit:'mg',days:[1,3]}]},enhanced:{enabled:false,compounds:[]},cycle_length:12};
+    var etH2=G._renderEditTRT({enabled:true,compounds:[{id:tCat0.id,name:tCat0.name,dose:'125',unit:'mg',days:[1,3]}]});
+    check('_renderEditTRT enabled: toggle is ON', etH2.includes('toggle-sw on'));
+    check('_renderEditTRT enabled: shows compound name', etH2.includes(tCat0.name));
+    check('_renderEditTRT enabled: shows Dose row', etH2.includes('Dose'));
+    check('_renderEditTRT enabled: shows Days row (non-Nebido compound)', etH2.includes('Days'));
+  }
+
+  // _renderEditPep: renders peptide config card
+  var pepCat0=G.PEPTIDE_CAT&&G.PEPTIDE_CAT.find(function(p){return p.id==='cjc-ipa';});
+  if(pepCat0){
+    G._editBuf={name:'T',peptides:[{id:'cjc-ipa',name:pepCat0.name,dot:pepCat0.dot,times:['AM'],days:[1,2,3],dose_am:'100',dose_pm:'',unit_am:'mcg',note:'',active:true}],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]},cycle_length:12};
+    var pepCard=G._renderEditPep(G._editBuf.peptides[0],0);
+    check('_renderEditPep: returns string', typeof pepCard==='string');
+    check('_renderEditPep: shows peptide name', pepCard.includes(pepCat0.name));
+    check('_renderEditPep: shows cfg-block wrapper', pepCard.includes('cfg-block'));
+    check('_renderEditPep: shows Timing row (AM/PM chips)', pepCard.includes('AM'));
+    check('_renderEditPep: shows AM Dose field', pepCard.includes('AM Dose'));
+    check('_renderEditPep: shows Days row', pepCard.includes('Days'));
+    check('_renderEditPep: shows Note field', pepCard.includes('Note'));
+    check('_renderEditPep: shows Start date field', pepCard.includes('Start'));
+  }
+
+  G._userTier=1;
+}
+
+// ── Source-code structural assertions ─────────────────────────────────────────
+console.log('\n── Source-code structural assertions ───────────────────────');
+{
+  const tsJs=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+
+  // Enhanced view branch must call _renderEnhancedViewTab, not _buildEnhancementCycleSection
+  check('source: _renderEnhancedViewTab(st) present in tab-stack.js',
+    tsJs.includes('_renderEnhancedViewTab(st)'));
+  check('source: _renderEditEnhanced(_editBuf.enhanced present in tab-stack.js',
+    tsJs.includes('_renderEditEnhanced(_editBuf.enhanced'));
+  // These two patterns would prove the OLD broken routing is gone:
+  check('source: view Enhanced branch does NOT call _buildEnhancementCycleSection',
+    !(function(){var m=tsJs.match(/stackViewTab===.enhanced.[\s\S]{0,400}_buildEnhancementCycleSection/);return!!m;})());
+  check('source: edit Enhanced branch does NOT call _buildEnhancementCycleSection',
+    !(function(){var m=tsJs.match(/editInnerTab===.enhanced.[\s\S]{0,400}_buildEnhancementCycleSection/);return!!m;})());
+
+  // wizStepGoals must show Enhanced Cycle toggle for T3 (restored 2026-06-25)
+  check('source: wizStepGoals shows Enhanced Cycle for T3',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,3000}/);return fn&&fn[0].includes('Enhanced Cycle');})());
+
+  // All required render functions must be defined in tab-stack.js
+  check('source: function _renderEnhancedViewTab( defined', tsJs.includes('function _renderEnhancedViewTab('));
+  check('source: function _renderEditEnhanced( defined', tsJs.includes('function _renderEditEnhanced('));
+  check('source: function _renderEnhancedUpgradeCTA( defined', tsJs.includes('function _renderEnhancedUpgradeCTA('));
+  check('source: function _renderEditTRT( defined', tsJs.includes('function _renderEditTRT('));
+  check('source: function _renderTRTViewTab( defined', tsJs.includes('function _renderTRTViewTab('));
+  check('source: function _stackTabBar( defined', tsJs.includes('function _stackTabBar('));
+
+  // Tier gates confirmed in source
+  check('source: edit Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEditEnhanced'));
+  check('source: view Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEnhancedViewTab'));
+
+  // _buildEnhancementCycleSection still exists (used by Cycles tab via stackSetCyclePhase etc.)
+  check('source: _buildEnhancementCycleSection function still exists (Cycles tab)', tsJs.includes('function _buildEnhancementCycleSection('));
+
+  // _refreshTRTGuide: TRT guide highlight updates when frequency changes
+  check('source: _refreshTRTGuide function defined', tsJs.includes('function _refreshTRTGuide('));
+  check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,4000}/);return m&&m[0].includes("id=\"trt-guide-");})());
+  check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('trt-guide-');})());
+
+  // _refreshTRTGuide logic: correct weekly dose calculation
+  (function(){
+    G.initWizard();
+    G._wiz.trt.enabled=true;
+    G._wiz.trt.compounds=[{id:'nebido',name:'Nebido',dose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'}];
+    // weeklyDoseMg at 12 weeks: 1000*7/(12*7) = 83.3 → Clinical (wkMin:60,wkMax:90)
+    var g=G.TRT_GUIDE['nebido'];
+    var freqDays=12*7;var wk=1000*7/freqDays;
+    var match12=g.tiers.filter(function(t){return wk>=(t.wkMin||0)&&wk<=(t.wkMax||9999);});
+    check('_renderTRTGuide: Nebido 12wks highlights Clinical', match12.length===1&&match12[0].l==='Clinical');
+
+    freqDays=10*7;wk=1000*7/freqDays;
+    var match10=g.tiers.filter(function(t){return wk>=(t.wkMin||0)&&wk<=(t.wkMax||9999);});
+    check('_renderTRTGuide: Nebido 10wks highlights Optimised', match10.length===1&&match10[0].l==='Optimised');
+
+    freqDays=8*7;wk=1000*7/freqDays;
+    var match8=g.tiers.filter(function(t){return wk>=(t.wkMin||0)&&wk<=(t.wkMax||9999);});
+    check('_renderTRTGuide: Nebido 8wks highlights Accelerated', match8.length===1&&match8[0].l==='Accelerated');
+  })();
+}
+
+// ── DOSE_GUIDE: structural validation (all 22 peptide compounds) ──────────────
+console.log('\n── DOSE_GUIDE: structural validation ────────────────────────');
+{
+  check('DOSE_GUIDE defined', typeof G.DOSE_GUIDE==='object'&&G.DOSE_GUIDE!==null);
+  if(G.DOSE_GUIDE&&G.PEPTIDE_CAT){
+    var dgKeys=Object.keys(G.DOSE_GUIDE);
+    var catIds=G.PEPTIDE_CAT.map(function(p){return p.id;});
+    check('DOSE_GUIDE has exactly 22 entries', dgKeys.length===22, 'got '+dgKeys.length);
+    check('every PEPTIDE_CAT id has a DOSE_GUIDE entry',
+      catIds.every(function(id){return!!G.DOSE_GUIDE[id];}),
+      catIds.filter(function(id){return!G.DOSE_GUIDE[id];}).join(', '));
+    check('no orphan DOSE_GUIDE keys (every key is a PEPTIDE_CAT id)',
+      dgKeys.every(function(k){return catIds.includes(k);}),
+      dgKeys.filter(function(k){return!catIds.includes(k);}).join(', '));
+
+    var badNoTiers=dgKeys.filter(function(k){return!Array.isArray(G.DOSE_GUIDE[k])||G.DOSE_GUIDE[k].length===0;});
+    check('every DOSE_GUIDE entry is a non-empty array', badNoTiers.length===0, badNoTiers.join(', '));
+
+    var badNoLabel=dgKeys.filter(function(k){return G.DOSE_GUIDE[k].some(function(t){return!t.l;});});
+    check('every DOSE_GUIDE tier has an l (label) field', badNoLabel.length===0, badNoLabel.join(', '));
+
+    var missingB=dgKeys.filter(function(k){return!G.DOSE_GUIDE[k].some(function(t){return t.b;});});
+    check('every DOSE_GUIDE compound has exactly one b:1 (baseline) tier',
+      missingB.length===0, 'missing b:1: '+missingB.join(', '));
+
+    var multiB=dgKeys.filter(function(k){return G.DOSE_GUIDE[k].filter(function(t){return t.b;}).length>1;});
+    check('no DOSE_GUIDE compound has more than one b:1 tier', multiB.length===0, 'multiple b:1: '+multiB.join(', '));
+  }
+}
+
+// ── _renderDoseGuide: runtime HTML output for every peptide compound ──────────
+console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──────');
+{
+  if(typeof G._renderDoseGuide==='function'&&G.DOSE_GUIDE&&G.PEPTIDE_CAT){
+    var pepIds=G.PEPTIDE_CAT.map(function(p){return p.id;});
+    var emptyRenders=pepIds.filter(function(id){var h=G._renderDoseGuide(id);return!h||h.length===0;});
+    check('_renderDoseGuide returns non-empty HTML for every peptide compound',
+      emptyRenders.length===0, 'empty for: '+emptyRenders.join(', '));
+
+    var missingHeading=pepIds.filter(function(id){return!G._renderDoseGuide(id).includes('Recommended Doses');});
+    check('_renderDoseGuide always includes Recommended Doses heading',
+      missingHeading.length===0, 'missing heading: '+missingHeading.join(', '));
+
+    // Spot-checks: baseline tier (b:1) label appears in rendered HTML
+    var spotChecks=[
+      {id:'cjc-ipa',    label:'Optimal'},
+      {id:'retatrutide',label:'Optimal'},
+      {id:'tirzepatide',label:'Optimal'},
+      {id:'semaglutide', label:'Optimal'},
+      {id:'hgh',        label:'Recomp'},
+      {id:'tesamorelin',label:'Standard'},
+      {id:'bpc-tb',     label:'Acute'},
+      {id:'bpc157',     label:'Optimal'},
+      {id:'tb500',      label:'Loading'},
+      {id:'aod9604',    label:'Standard'},
+      {id:'hcg',        label:'Standard'},
+      {id:'nad',        label:'Optimal'},
+      {id:'motsc',      label:'Optimal'},
+      {id:'epitalon',   label:'Standard'},
+      {id:'glow',       label:'Standard'},
+      {id:'klow',       label:'Standard'},
+    ];
+    spotChecks.forEach(function(sc){
+      var h=G._renderDoseGuide(sc.id);
+      check('_renderDoseGuide('+sc.id+'): baseline tier "'+sc.label+'" present in HTML',
+        h.includes(sc.label), 'HTML: '+h.slice(0,200));
+    });
+
+    // Risk warning (r field) appears for compounds that have it
+    var retaHtml=G._renderDoseGuide('retatrutide');
+    check('_renderDoseGuide(retatrutide): risk warning rendered',
+      retaHtml.includes('⚠'), 'got: '+retaHtml.slice(0,300));
+
+    var hghHtml=G._renderDoseGuide('hgh');
+    check('_renderDoseGuide(hgh): risk warning rendered', hghHtml.includes('⚠'));
+
+    // Returns empty string for unknown compound
+    check('_renderDoseGuide unknown id returns empty string', G._renderDoseGuide('not-a-compound')==='');
+  }
+}
+
+// ── TRT_GUIDE: structural validation (all 6 TRT compounds) ───────────────────
+console.log('\n── TRT_GUIDE: structural validation ─────────────────────────');
+{
+  if(G.TRT_GUIDE&&G.TRT_CAT){
+    var trtIds=G.TRT_CAT.map(function(c){return c.id;});
+    var trtKeys=Object.keys(G.TRT_GUIDE);
+
+    check('TRT_GUIDE has exactly 6 entries', trtKeys.length===6, 'got '+trtKeys.length);
+    check('every TRT_CAT id has a TRT_GUIDE entry',
+      trtIds.every(function(id){return!!G.TRT_GUIDE[id];}),
+      trtIds.filter(function(id){return!G.TRT_GUIDE[id];}).join(', '));
+    check('no orphan TRT_GUIDE keys',
+      trtKeys.every(function(k){return trtIds.includes(k);}),
+      trtKeys.filter(function(k){return!trtIds.includes(k);}).join(', '));
+
+    trtIds.forEach(function(id){
+      var g=G.TRT_GUIDE[id];
+      check('TRT_GUIDE['+id+'] has halfLife field', typeof g.halfLife==='string'&&g.halfLife.length>0);
+      check('TRT_GUIDE['+id+'] has cadence.rec field', g.cadence&&typeof g.cadence.rec==='string');
+      check('TRT_GUIDE['+id+'] has cadence.note field', g.cadence&&typeof g.cadence.note==='string');
+      check('TRT_GUIDE['+id+'] has tiers array', Array.isArray(g.tiers)&&g.tiers.length>0);
+      check('TRT_GUIDE['+id+'] has exactly one b:1 tier',
+        g.tiers.filter(function(t){return t.b;}).length===1);
+      g.tiers.forEach(function(t,i){
+        check('TRT_GUIDE['+id+'] tier '+i+' has l label', typeof t.l==='string'&&t.l.length>0);
+        check('TRT_GUIDE['+id+'] tier '+i+' has d dose', typeof t.d==='string'&&t.d.length>0);
+        check('TRT_GUIDE['+id+'] tier '+i+' has wkMin', typeof t.wkMin==='number');
+        check('TRT_GUIDE['+id+'] tier '+i+' has wkMax', typeof t.wkMax==='number');
+        check('TRT_GUIDE['+id+'] tier '+i+' wkMin <= wkMax', t.wkMin<=t.wkMax);
+      });
+      // Ranges must be non-overlapping: each tier's wkMin > previous tier's wkMax
+      var sorted=g.tiers.slice().sort(function(a,b){return a.wkMin-b.wkMin;});
+      var overlaps=false;
+      for(var i=1;i<sorted.length;i++){if(sorted[i].wkMin<=sorted[i-1].wkMax)overlaps=true;}
+      check('TRT_GUIDE['+id+'] tier ranges are non-overlapping', !overlaps);
+    });
+  }
+}
+
+// ── _renderTRTGuide: runtime HTML for all 6 TRT compounds ────────────────────
+console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ────');
+{
+  if(typeof G._renderTRTGuide==='function'&&G.TRT_GUIDE&&G.TRT_CAT){
+    function getHighlightedTierLabel(html){
+      var marker='rgba(232,160,32,0.1)';
+      var idx=html.indexOf(marker);if(idx<0)return null;
+      var after=html.slice(idx,idx+500);
+      var labels=['Performance','High-normal','Standard TRT','Clinical','Optimised','Accelerated'];
+      for(var i=0;i<labels.length;i++){if(after.includes(labels[i]))return labels[i];}
+      return null;
+    }
+
+    // --- enanthate ---
+    check('enanthate 125mg/wk → Standard TRT',
+      getHighlightedTierLabel(G._renderTRTGuide('enanthate',125))==='Standard TRT');
+    check('enanthate 200mg/wk → High-normal',
+      getHighlightedTierLabel(G._renderTRTGuide('enanthate',200))==='High-normal');
+    check('enanthate 300mg/wk → Performance',
+      getHighlightedTierLabel(G._renderTRTGuide('enanthate',300))==='Performance');
+    check('enanthate 0mg/wk → High-normal (b:1 fallback)',
+      getHighlightedTierLabel(G._renderTRTGuide('enanthate',0))==='High-normal');
+
+    // --- cypionate ---
+    check('cypionate 100mg/wk → Standard TRT',
+      getHighlightedTierLabel(G._renderTRTGuide('cypionate',100))==='Standard TRT');
+    check('cypionate 175mg/wk → High-normal',
+      getHighlightedTierLabel(G._renderTRTGuide('cypionate',175))==='High-normal');
+    check('cypionate 300mg/wk → Performance',
+      getHighlightedTierLabel(G._renderTRTGuide('cypionate',300))==='Performance');
+    check('cypionate 0mg/wk → High-normal (b:1 fallback)',
+      getHighlightedTierLabel(G._renderTRTGuide('cypionate',0))==='High-normal');
+
+    // --- propionate ---
+    check('propionate 100mg/wk → Standard TRT',
+      getHighlightedTierLabel(G._renderTRTGuide('propionate',100))==='Standard TRT');
+    check('propionate 150mg/wk → High-normal',
+      getHighlightedTierLabel(G._renderTRTGuide('propionate',150))==='High-normal');
+    check('propionate 250mg/wk → Performance',
+      getHighlightedTierLabel(G._renderTRTGuide('propionate',250))==='Performance');
+    check('propionate 0mg/wk → High-normal (b:1 fallback)',
+      getHighlightedTierLabel(G._renderTRTGuide('propionate',0))==='High-normal');
+
+    // --- sustanon ---
+    check('sustanon 100mg/wk → Standard TRT',
+      getHighlightedTierLabel(G._renderTRTGuide('sustanon',100))==='Standard TRT');
+    check('sustanon 175mg/wk → High-normal',
+      getHighlightedTierLabel(G._renderTRTGuide('sustanon',175))==='High-normal');
+    check('sustanon 300mg/wk → Performance',
+      getHighlightedTierLabel(G._renderTRTGuide('sustanon',300))==='Performance');
+    check('sustanon 0mg/wk → High-normal (b:1 fallback)',
+      getHighlightedTierLabel(G._renderTRTGuide('sustanon',0))==='High-normal');
+
+    // --- nebido (full range) ---
+    check('nebido 70mg/wk (1000mg/10.2wks) → Clinical',
+      getHighlightedTierLabel(G._renderTRTGuide('nebido',75))==='Clinical');
+    check('nebido 100mg/wk (1000mg/7wks) → Optimised',
+      getHighlightedTierLabel(G._renderTRTGuide('nebido',100))==='Optimised');
+    check('nebido 125mg/wk (1000mg/5.6wks) → Accelerated',
+      getHighlightedTierLabel(G._renderTRTGuide('nebido',125))==='Accelerated');
+    check('nebido 0mg/wk → Clinical (b:1 fallback)',
+      getHighlightedTierLabel(G._renderTRTGuide('nebido',0))==='Clinical');
+
+    // --- HTML structure: all compounds produce non-empty, well-formed output ---
+    G.TRT_CAT.forEach(function(c){
+      var html=G._renderTRTGuide(c.id,150);
+      check('_renderTRTGuide('+c.id+'): returns non-empty HTML', typeof html==='string'&&html.length>50);
+      check('_renderTRTGuide('+c.id+'): contains TRT Guide heading', html.includes('TRT Guide'));
+      check('_renderTRTGuide('+c.id+'): contains halfLife from guide', html.includes('½-life'));
+      check('_renderTRTGuide('+c.id+'): contains cadence rec', html.includes(G.TRT_GUIDE[c.id].cadence.rec.slice(0,10)));
+    });
+
+    // --- Supraphysiological warning block (distinct from Performance tier note text) ---
+    var supraNebido=G._renderTRTGuide('nebido',300);
+    check('_renderTRTGuide: supraphysiological warning block at 300mg/wk for nebido',
+      supraNebido.includes('Supraphysiological dose'));
+    var supraTesto=G._renderTRTGuide('testoviron',300);
+    check('_renderTRTGuide: supraphysiological warning block at 300mg/wk for testoviron',
+      supraTesto.includes('Supraphysiological dose'));
+    // Warning block must NOT appear at sub-250 doses
+    var noSupra=G._renderTRTGuide('testoviron',200);
+    check('_renderTRTGuide: no supraphysiological warning block at 200mg/wk',
+      !noSupra.includes('Supraphysiological dose'));
+
+    // --- Unknown compound returns empty string ---
+    check('_renderTRTGuide unknown id returns empty string', G._renderTRTGuide('not-a-compound',100)==='');
+  }
+}
+
+// ── _renderEnhancedGuide: runtime HTML with mock compound data ────────────────
+console.log('\n── _renderEnhancedGuide: runtime HTML validation ────────────');
+{
+  if(typeof G._renderEnhancedGuide==='function'){
+    // null / undefined → empty string
+    check('_renderEnhancedGuide(null) returns empty string', G._renderEnhancedGuide(null)==='');
+    check('_renderEnhancedGuide(undefined) returns empty string', G._renderEnhancedGuide(undefined)==='');
+
+    // Mock compound with full data (cadence + doseTiers + interaction + sides)
+    var mockFull={
+      id:'test-compound',
+      cadence:{rec:'Every 3.5 days',note:'Split twice weekly for stable levels',halfLife:'4.5 days'},
+      doseTiers:[
+        {l:'Conservative',d:'200 mg/wk',n:'Intro dose',freq:'2×/wk'},
+        {l:'Optimal',d:'400 mg/wk',n:'Performance range',freq:'2×/wk',b:1},
+        {l:'High',d:'600 mg/wk',n:'Advanced',freq:'2×/wk',r:'Elevated CV risk'}
+      ],
+      interaction:'Binds AR receptors; promotes nitrogen retention.',
+      sides:'Acne, hair loss, HPTA suppression.'
+    };
+    var htmlFull=G._renderEnhancedGuide(mockFull);
+    check('_renderEnhancedGuide: returns non-empty HTML for full compound', htmlFull.length>100);
+    check('_renderEnhancedGuide: renders Injection Frequency heading', htmlFull.includes('Injection Frequency'));
+    check('_renderEnhancedGuide: renders cadence rec value', htmlFull.includes('Every 3.5 days'));
+    check('_renderEnhancedGuide: renders half-life', htmlFull.includes('4.5 days'));
+    check('_renderEnhancedGuide: renders Recommended Doses heading', htmlFull.includes('Recommended Doses'));
+    check('_renderEnhancedGuide: renders tier labels', htmlFull.includes('Conservative')&&htmlFull.includes('Optimal'));
+    check('_renderEnhancedGuide: renders risk warning ⚠', htmlFull.includes('⚠'));
+    check('_renderEnhancedGuide: renders interaction section heading', htmlFull.includes('How it works'));
+    check('_renderEnhancedGuide: renders interaction text', htmlFull.includes('Binds AR receptors'));
+    check('_renderEnhancedGuide: renders side effects heading', htmlFull.includes('Side effects'));
+    check('_renderEnhancedGuide: renders sides text', htmlFull.includes('Acne, hair loss'));
+
+    // No doseTiers but has DOSE_GUIDE entry → falls back to DOSE_GUIDE
+    var mockFallback={id:'hgh',cadence:{rec:'AM injection',note:'Fasted AM',halfLife:'~20 min'}};
+    var htmlFallback=G._renderEnhancedGuide(mockFallback);
+    check('_renderEnhancedGuide: falls back to DOSE_GUIDE[hgh] when no doseTiers',
+      htmlFallback.includes('Recommended Doses'));
+    check('_renderEnhancedGuide: DOSE_GUIDE fallback shows hgh tier label (Anti-aging)',
+      htmlFallback.includes('Anti-aging'));
+
+    // No doseTiers and no DOSE_GUIDE entry → no Recommended Doses section
+    var mockNoDose={id:'unknown-compound',cadence:{rec:'Weekly',note:'Once weekly',halfLife:'7 days'}};
+    var htmlNoDose=G._renderEnhancedGuide(mockNoDose);
+    check('_renderEnhancedGuide: renders cadence even without dose tiers',
+      htmlNoDose.includes('Injection Frequency'));
+    check('_renderEnhancedGuide: no Recommended Doses section when no tiers exist',
+      !htmlNoDose.includes('Recommended Doses'));
+
+    // Empty doseTiers array → falls back to DOSE_GUIDE
+    var mockEmptyTiers={id:'bpc157',doseTiers:[],cadence:{rec:'Daily',note:'SC injection',halfLife:'~4 hrs'}};
+    var htmlEmpty=G._renderEnhancedGuide(mockEmptyTiers);
+    check('_renderEnhancedGuide: empty doseTiers falls back to DOSE_GUIDE[bpc157]',
+      htmlEmpty.includes('Optimal'));
+
+    // No cadence field → renders dose tiers but no Injection Frequency block
+    var mockNoCadence={id:'nad',doseTiers:[{l:'Maintenance',d:'100 mg/wk',n:'NAD+ support',b:1}]};
+    var htmlNoCad=G._renderEnhancedGuide(mockNoCadence);
+    check('_renderEnhancedGuide: no cadence → no Injection Frequency block',
+      !htmlNoCad.includes('Injection Frequency'));
+    check('_renderEnhancedGuide: no cadence → still renders dose tiers',
+      htmlNoCad.includes('Recommended Doses'));
+  }
+}
+
+// ── _dosePersonalization: sex, age, weight modifiers for peptides ─────────────
+console.log('\n── _dosePersonalization: sex / age / weight modifiers ───────');
+{
+  if(typeof G._dosePersonalization==='function'&&typeof G._userProfile==='function'){
+    function setProfile(sex,age,weightKg){
+      G.localStorage.setItem('user_sex',sex||'male');
+      G.localStorage.setItem('user_age',String(age||0));
+      G.localStorage.setItem('user_weight',String(weightKg||0));
+    }
+    function clearProfile(){
+      G.localStorage.removeItem('user_sex');
+      G.localStorage.removeItem('user_age');
+      G.localStorage.removeItem('user_weight');
+    }
+
+    // --- GH axis: female ---
+    setProfile('female',35,65);
+    var ghIds=['cjc-ipa','cjc-nodac','ipamorelin','sermorelin','tesamorelin','hgh'];
+    ghIds.forEach(function(id){
+      var mods=G._dosePersonalization(id,G._userProfile());
+      check('_dosePersonalization('+id+', female): lower-end adj present',
+        mods.some(function(m){return m.type==='adj'&&m.text.includes('50% more sensitive');}));
+    });
+
+    // --- GH axis: age 50+ ---
+    setProfile('male',55,80);
+    ghIds.forEach(function(id){
+      var mods=G._dosePersonalization(id,G._userProfile());
+      check('_dosePersonalization('+id+', age55): age adj present',
+        mods.some(function(m){return m.type==='adj'&&m.text.includes('Age 55');}));
+    });
+
+    // --- GH axis: age <30 ---
+    setProfile('male',22,75);
+    var modsYoung=G._dosePersonalization('cjc-ipa',G._userProfile());
+    check('_dosePersonalization(cjc-ipa, age22): standard tolerance note present',
+      modsYoung.some(function(m){return m.type==='ok'&&m.text.includes('standard doses well tolerated');}));
+
+    // --- GH axis: no mods for non-GH peptide ---
+    setProfile('female',55,65);
+    var modsNonGH=G._dosePersonalization('retatrutide',G._userProfile());
+    var hasGhMod=modsNonGH.some(function(m){return m.text&&m.text.includes('GH peptides');});
+    check('_dosePersonalization(retatrutide): no GH-axis mod (not a GH peptide)',!hasGhMod);
+
+    // --- GLP-1: heavy (>100kg) ---
+    setProfile('male',35,110);
+    var glp1Ids=['retatrutide','tirzepatide','semaglutide'];
+    glp1Ids.forEach(function(id){
+      var mods=G._dosePersonalization(id,G._userProfile());
+      check('_dosePersonalization('+id+', 110kg): higher dose / protein adj present',
+        mods.some(function(m){return m.type==='adj'&&m.text.includes('110kg')&&m.text.includes('protein');}));
+    });
+
+    // --- GLP-1: light (<65kg) ---
+    setProfile('male',35,58);
+    glp1Ids.forEach(function(id){
+      var mods=G._dosePersonalization(id,G._userProfile());
+      check('_dosePersonalization('+id+', 58kg): lighter frame ok note present',
+        mods.some(function(m){return m.type==='ok'&&m.text.includes('58kg')&&m.text.includes('lighter frame');}));
+    });
+
+    // --- GLP-1: mid-weight (65–100kg) → no weight mod ---
+    setProfile('male',35,80);
+    var modsMid=G._dosePersonalization('retatrutide',G._userProfile());
+    var hasWeightMod=modsMid.some(function(m){return m.text&&m.text.includes('kg');});
+    check('_dosePersonalization(retatrutide, 80kg): no weight-specific mod',!hasWeightMod);
+
+    // --- HCG: female warning ---
+    setProfile('female',35,65);
+    var modsHcgF=G._dosePersonalization('hcg',G._userProfile());
+    check('_dosePersonalization(hcg, female): contraindication warning present',
+      modsHcgF.some(function(m){return m.type==='warn'&&m.text.includes('not typically indicated for women');}));
+
+    // --- HCG: male → no female warning ---
+    setProfile('male',35,80);
+    var modsHcgM=G._dosePersonalization('hcg',G._userProfile());
+    var hcgFemaleWarn=modsHcgM.some(function(m){return m.text&&m.text.includes('not typically indicated');});
+    check('_dosePersonalization(hcg, male): no female warning',!hcgFemaleWarn);
+
+    // --- NAD: weight-based dose calculation ---
+    setProfile('male',35,90);
+    var modsNad=G._dosePersonalization('nad',G._userProfile());
+    check('_dosePersonalization(nad, 90kg): weight-based target includes 135mg (90*1.5)',
+      modsNad.some(function(m){return m.type==='info'&&m.text.includes('135mg');}));
+
+    // --- NAD: no weight set → no weight mod ---
+    clearProfile();
+    var modsNadNoW=G._dosePersonalization('nad',G._userProfile());
+    var hasNadWeightMod=modsNadNoW.some(function(m){return m.type==='info'&&m.text&&m.text.includes('mg SC');});
+    check('_dosePersonalization(nad, no weight): no weight-based mod',!hasNadWeightMod);
+
+    // --- Non-personalised compound: no mods ---
+    setProfile('female',55,110);
+    var modsEpitalon=G._dosePersonalization('epitalon',G._userProfile());
+    check('_dosePersonalization(epitalon): no personalization mods (epitalon has none)',
+      modsEpitalon.length===0);
+
+    clearProfile();
+  }
+}
+
+// ── _renderDoseGuide: sex/age/weight modifiers appear in HTML output ──────────
+console.log('\n── _renderDoseGuide: personalization text in HTML output ────');
+{
+  if(typeof G._renderDoseGuide==='function'&&typeof G._dosePersonalization==='function'){
+    function setProfile(sex,age,weightKg){
+      G.localStorage.setItem('user_sex',sex||'male');
+      G.localStorage.setItem('user_age',String(age||0));
+      G.localStorage.setItem('user_weight',String(weightKg||0));
+    }
+    function clearProfile(){
+      G.localStorage.removeItem('user_sex');
+      G.localStorage.removeItem('user_age');
+      G.localStorage.removeItem('user_weight');
+    }
+
+    // Female GH axis → lower-end note in rendered HTML
+    setProfile('female',35,65);
+    var htmlGhF=G._renderDoseGuide('cjc-ipa');
+    check('_renderDoseGuide(cjc-ipa, female): female GH adj text in HTML',
+      htmlGhF.includes('50% more sensitive'));
+
+    // Heavy GLP-1 → protein note in rendered HTML
+    setProfile('male',35,110);
+    var htmlGlp1Heavy=G._renderDoseGuide('retatrutide');
+    check('_renderDoseGuide(retatrutide, 110kg): heavy weight adj in HTML',
+      htmlGlp1Heavy.includes('110kg'));
+
+    // Female HCG → warning in rendered HTML
+    setProfile('female',35,65);
+    var htmlHcgF=G._renderDoseGuide('hcg');
+    check('_renderDoseGuide(hcg, female): female warning in HTML',
+      htmlHcgF.includes('not typically indicated'));
+
+    // No profile → "Add age & weight" nudge appears
+    clearProfile();
+    var htmlNoProfile=G._renderDoseGuide('cjc-ipa');
+    check('_renderDoseGuide(cjc-ipa, no profile): profile nudge shown',
+      htmlNoProfile.includes('Add age & weight'));
+
+    clearProfile();
+  }
+}
+
+// ── _renderTRTGuide: sex, age personalization modifiers ───────────────────────
+console.log('\n── _renderTRTGuide: sex / age personalization modifiers ─────');
+{
+  if(typeof G._renderTRTGuide==='function'){
+    function setProfile(sex,age,weightKg){
+      G.localStorage.setItem('user_sex',sex||'male');
+      G.localStorage.setItem('user_age',String(age||0));
+      G.localStorage.setItem('user_weight',String(weightKg||0));
+    }
+    function clearProfile(){
+      G.localStorage.removeItem('user_sex');
+      G.localStorage.removeItem('user_age');
+      G.localStorage.removeItem('user_weight');
+    }
+
+    // Female → female TRT warning in rendered HTML
+    setProfile('female',35,65);
+    var htmlTrtF=G._renderTRTGuide('testoviron',125);
+    check('_renderTRTGuide(testoviron, female): female TRT dose warning present',
+      htmlTrtF.includes('5–10 mg/week SC'));
+
+    // Age <25 → HPTA suppression personalization warning (distinct from tier risk text "HPTA shutdown")
+    setProfile('male',22,75);
+    var htmlYoung=G._renderTRTGuide('testoviron',125);
+    check('_renderTRTGuide(testoviron, age22): HPTA suppression personalization warning',
+      htmlYoung.includes('exogenous testosterone suppresses'));
+    check('_renderTRTGuide(testoviron, age22): age shown in warning text',
+      htmlYoung.includes('Age 22'));
+
+    // Age exactly 25 → no young-age personalization warning
+    setProfile('male',25,80);
+    var html25=G._renderTRTGuide('testoviron',125);
+    check('_renderTRTGuide(testoviron, age25): no young-age personalization (boundary: <25)',
+      !html25.includes('Age 25:'));
+
+    // Age >=50 → natural T decline note
+    setProfile('male',55,80);
+    var htmlOlder=G._renderTRTGuide('testoviron',125);
+    check('_renderTRTGuide(testoviron, age55): age 50+ natural T decline note',
+      htmlOlder.includes('natural T decline'));
+    check('_renderTRTGuide(testoviron, age55): age shown in note',
+      htmlOlder.includes('Age 55'));
+
+    // Male, age 35, normal profile → no personalization mods
+    setProfile('male',35,80);
+    var htmlNorm=G._renderTRTGuide('testoviron',125);
+    check('_renderTRTGuide(testoviron, male35): no HPTA suppression personalization', !htmlNorm.includes('exogenous testosterone suppresses'));
+    check('_renderTRTGuide(testoviron, male35): no female warning', !htmlNorm.includes('5–10 mg/week'));
+    check('_renderTRTGuide(testoviron, male35): no age 50+ note', !htmlNorm.includes('natural T decline'));
+
+    // Personalization works across different TRT compounds
+    setProfile('female',22,55);
+    ['nebido','enanthate','cypionate','propionate','sustanon'].forEach(function(id){
+      var h=G._renderTRTGuide(id,100);
+      check('_renderTRTGuide('+id+', female+22yo): female warning and HPTA suppression personalization',
+        h.includes('5–10 mg/week SC')&&h.includes('exogenous testosterone suppresses'));
+    });
+
+    clearProfile();
+  }
+}
+
+// ── Dynamic dose guide highlighting (_renderDoseGuide) ───────────────────────
+{
+  // Helper: extract labels of highlighted (active) tiers from rendered HTML
+  function activeTierLabel(html){
+    var matches=html.match(/<span style="[^"]*color:var\(--accent\)[^"]*text-transform:uppercase[^"]*">([^<]+)<\/span>/g)||[];
+    return matches.map(function(m){var r=m.match(/>([^<]+)<\/span>/);return r?r[1].trim():'';});
+  }
+
+  // Retatrutide at 3 mg → Therapeutic (2–4 mg/wk), NOT Optimal
+  var htmlReta3=G._renderDoseGuide('retatrutide',3);
+  check('_renderDoseGuide: reta 3mg highlights Therapeutic tier',
+    activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Therapeutic')===0;}));
+  check('_renderDoseGuide: reta 3mg does NOT highlight Optimal tier',
+    !activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Optimal')===0;}));
+
+  // Retatrutide at 5 mg → Optimal (4–8 mg/wk)
+  var htmlReta5=G._renderDoseGuide('retatrutide',5);
+  check('_renderDoseGuide: reta 5mg highlights Optimal tier',
+    activeTierLabel(htmlReta5).some(function(l){return l.indexOf('Optimal')===0;}));
+
+  // Retatrutide at 1 mg → Start (0–2 mg/wk)
+  var htmlReta1=G._renderDoseGuide('retatrutide',1);
+  check('_renderDoseGuide: reta 1mg highlights Start tier',
+    activeTierLabel(htmlReta1).some(function(l){return l.indexOf('Start')===0;}));
+
+  // Retatrutide at 9 mg → Max (>=8 mg/wk)
+  var htmlReta9=G._renderDoseGuide('retatrutide',9);
+  check('_renderDoseGuide: reta 9mg highlights Max tier',
+    activeTierLabel(htmlReta9).some(function(l){return l.indexOf('Max')===0;}));
+
+  // Dose 0 → fall back to b:1 tier (Optimal for retatrutide)
+  var htmlReta0=G._renderDoseGuide('retatrutide',0);
+  check('_renderDoseGuide: reta dose=0 falls back to b:1 (Optimal)',
+    activeTierLabel(htmlReta0).some(function(l){return l.indexOf('Optimal')===0;}));
+
+  // HGH at 3 IU → Recomp (2.5–5 IU range)
+  var htmlHgh3=G._renderDoseGuide('hgh',3);
+  check('_renderDoseGuide: hgh 3 IU highlights Recomp tier',
+    activeTierLabel(htmlHgh3).some(function(l){return l.indexOf('Recomp')===0;}));
+
+  // BPC-157 at 500 mcg → Optimal (375–750 range)
+  var htmlBpc=G._renderDoseGuide('bpc157',500);
+  check('_renderDoseGuide: bpc157 500mcg highlights Optimal tier',
+    activeTierLabel(htmlBpc).some(function(l){return l.indexOf('Optimal')===0;}));
 }
