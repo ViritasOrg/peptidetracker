@@ -985,12 +985,12 @@ function stackAddAASCompound(){
     +'</div>';
   overlay.appendChild(sheet);document.body.appendChild(overlay);
 }
-function _renderEnhancedGuide(cat){
+function _renderEnhancedGuide(cat,activeDose){
   if(!cat)return'';
   var html='';
   if(cat.cadence){var cad=cat.cadence;html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Injection Frequency</div><div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;"><div style="font-size:12px;font-weight:700;color:var(--accent);">'+cad.rec+'</div><div style="font-size:11px;color:var(--muted2);margin-top:2px;line-height:1.5;">'+cad.note+'</div><div style="font-size:10px;color:var(--muted2);margin-top:3px;font-style:italic;">½-life: '+cad.halfLife+'</div></div></div>';}
   var tiers=(cat.doseTiers&&cat.doseTiers.length)?cat.doseTiers:(DOSE_GUIDE&&DOSE_GUIDE[cat.id]?DOSE_GUIDE[cat.id]:null);
-  if(tiers&&tiers.length){var rows=tiers.map(function(t){var bg=t.b?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:'+(t.b?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+'</div>'+note+risk+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
+  if(tiers&&tiers.length){var rows=tiers.map(function(t){var _isActive=(activeDose&&activeDose>0)?(function(){var _ns=(t.d||'').match(/[\d.]+/g);if(_ns&&_ns.length>=2){var _mn=parseFloat(_ns[0]),_mx=parseFloat(_ns[_ns.length-1]);return activeDose>=_mn&&activeDose<=_mx;}return!!t.b;})():!!t.b;var bg=_isActive?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:'+(_isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+'</div>'+note+risk+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
   if(cat.interaction)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">How it works</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.interaction+'</div></div>';
   if(cat.sides)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Side effects</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.sides+'</div></div>';
   return html;
@@ -1175,12 +1175,14 @@ function editToggleEnhancedCompound(id){
   if(!_editBuf.enhanced.compounds)_editBuf.enhanced.compounds=[];
   var idx=_editBuf.enhanced.compounds.findIndex(function(c){return c.id===id;});
   if(idx!==-1){_editBuf.enhanced.compounds.splice(idx,1);}
-  else{var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});if(cat)_editBuf.enhanced.compounds.push({id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot});}
+  else{var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});if(cat){var _eEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_eEntry.amPm=true;_eEntry.dose_am=String(cat.defaultDoseAm||'');_eEntry.dose_pm=String(cat.defaultDosePm||'');}_editBuf.enhanced.compounds.push(_eEntry);}}
   _editBuf.enhanced.enabled=_editBuf.enhanced.compounds.length>0;
   renderStackEditor();
 }
-function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.dose=v;}
+function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(v||0));}}
 function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function editSetEnhDoseAm(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_am=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(c.dose_am||0)+parseFloat(c.dose_pm||0));}}
+function editSetEnhDosePm(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_pm=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(c.dose_am||0)+parseFloat(c.dose_pm||0));}}
 function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
 function _renderEditEnhanced(enh){
   if(!enh)enh={enabled:false,compounds:[]};
@@ -1197,9 +1199,16 @@ function _renderEditEnhanced(enh){
       html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="editToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(c.group)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-        html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-        html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
-        html+=_renderEnhancedGuide(c);
+        if(c.amPm){
+          var _eUnit=(c.unit||'IU').split('/')[0];
+          html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_am||'')+'" oninput="editSetEnhDoseAm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_pm||'')+'" oninput="editSetEnhDosePm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+        }else{
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+        }
+        html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?(parseFloat(selData.dose_am||0)+parseFloat(selData.dose_pm||0)):parseFloat(selData.dose||0))+'</div>';
         html+='</div>';
       }
     });
@@ -1219,7 +1228,8 @@ function _renderEnhancedViewTab(st){
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name||c.id)+'</div>';
-      html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+(days?' · '+days:''):(days||''))+'</div>';
+      var doseStr=c.amPm?([(c.dose_am?c.dose_am+' AM':''),( c.dose_pm?c.dose_pm+' PM':'')].filter(Boolean).join(' / ')+' '+(c.unit||'IU').split('/')[0]+(days?' · '+days:'')):((c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:''));
+      html+='<div style="font-size:12px;color:var(--muted2);">'+doseStr+'</div>';
       html+='</div>';
     });
   }
@@ -1252,7 +1262,9 @@ function wizStepEnhanced(body,footer){
       var match=ENHANCEMENT_COMPOUNDS.find(function(ec){return ec.name.toLowerCase()===(tc.name||'').toLowerCase();});
       if(match&&!(_wiz.enhanced.compounds||[]).some(function(c){return c.id===match.id;})){
         if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
-        _wiz.enhanced.compounds.push({id:match.id,name:match.name,dose:String(tc.dose||match.defaultDose||''),unit:tc.unit||match.unit||'mg',days:tc.days?tc.days.slice():(match.defaultDays?match.defaultDays.slice():[0,1,2,3,4,5,6]),dot:match.dot});
+        var _pfEntry={id:match.id,name:match.name,dose:String(tc.dose||match.defaultDose||''),unit:tc.unit||match.unit||'mg',days:tc.days?tc.days.slice():(match.defaultDays?match.defaultDays.slice():[0,1,2,3,4,5,6]),dot:match.dot};
+        if(match.amPm){_pfEntry.amPm=true;_pfEntry.dose_am=String(tc.dose_am||match.defaultDoseAm||'');_pfEntry.dose_pm=String(tc.dose_pm||match.defaultDosePm||'');}
+        _wiz.enhanced.compounds.push(_pfEntry);
       }
     });
     _wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
@@ -1273,8 +1285,16 @@ function wizStepEnhanced(body,footer){
       html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(c.group)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-        html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-        html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+        if(c.amPm){
+          var _wUnit=(c.unit||'IU').split('/')[0];
+          html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_am||'')+'" oninput="wizSetEnhDoseAm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_pm||'')+'" oninput="wizSetEnhDosePm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+        }else{
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+        }
+        html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?(parseFloat(selData.dose_am||0)+parseFloat(selData.dose_pm||0)):parseFloat(selData.dose||0))+'</div>';
         html+='</div>';
       }
     });
@@ -1297,13 +1317,15 @@ function wizToggleEnhancedCompound(id){
     _wiz.enhanced.compounds.splice(idx,1);
   }else{
     var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});
-    if(cat)_wiz.enhanced.compounds.push({id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot});
+    if(cat){var _wEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_wEntry.amPm=true;_wEntry.dose_am=String(cat.defaultDoseAm||'');_wEntry.dose_pm=String(cat.defaultDosePm||'');}_wiz.enhanced.compounds.push(_wEntry);}
   }
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
-function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.dose=v;}
+function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(v||0));}}
 function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function wizSetEnhDoseAm(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_am=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(c.dose_am||0)+parseFloat(c.dose_pm||0));}}
+function wizSetEnhDosePm(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_pm=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseFloat(c.dose_am||0)+parseFloat(c.dose_pm||0));}}
 function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function wizStepValidate(body,footer){
   var g=(_wiz&&_wiz.goals)||[];
