@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.233</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -252,6 +252,8 @@ const BC_KEY='proto-bodycomp-v2';
 let weights=[];
 let _viewDate=null;
 let _syncPending=true;
+var _injectionsCache={};
+var _injCacheReady=false;
 let _userProtocol=null;
 let _protocolLoaded=false;
 let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false};
@@ -481,7 +483,8 @@ function buildWeeklyFromProtocol(proto){
   var built=[];
   proto.peptides.forEach(function(p){
     if(p.active===false)return;
-    var days=p.days||[0,1,2,3,4,5,6];
+    var _trtEntry=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===p.id;}):null;
+    var days=p.days||(_trtEntry?(_trtEntry.defaultDays?_trtEntry.defaultDays.slice():[1]):[0,1,2,3,4,5,6]);
     var times=p.times||['AM'];
     var dot=p.dot||'#888';
     var startDate=p.start_date?parseLocalDate(p.start_date):null;
@@ -585,8 +588,20 @@ async function loadUserStacks(){
   updateWEEKLY();
   _stacksLoaded=true;
   buildStackStore();
+  // Fetch injection cache; regenerate if backend has no entries, or if this is the
+  // first load since the Nebido/orphan fix (v1.384) to replace stale daily entries
+  await refreshInjectionsCache();
+  var _hasActiveStacks=_activeStackIndices.some(function(si){return _userStacks[si]&&_userStacks[si].cycle_start;});
+  var _injRegenDone=getData('proto-inj-regen','');
+  if(_hasActiveStacks&&(_injRegenDone!=='1.384'||!Object.keys(_injectionsCache).length)){
+    var _regenFrom=new Date(NOW);_regenFrom.setHours(0,0,0,0);
+    await generateInjectionsForActiveStacks(_regenFrom);
+    setData('proto-inj-regen','1.384');
+    await refreshInjectionsCache();
+  }
   buildWeekStrip();
   buildToday();
+  buildSchedule();
   _scanAndShowStartupConflicts();
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
@@ -621,6 +636,64 @@ async function saveStacksToBackend(){
   }
   // Backend unavailable but data is safe in localStorage
   return {ok:true,synced:false,code:lastCode};
+}
+// ── Injection cache ───────────────────────────────────────────────────────────
+async function fetchInjectionsForRange(dateFrom,dateTo){
+  try{
+    var r=await fetch(AGENT_URL+'/injections?date_from='+dateFrom+'&date_to='+dateTo+'&active_only=false',{headers:authHeaders()});
+    if(!r.ok){_logHttp('fetchInj',r.status,'/injections');return[];}
+    var _d=await r.json();return Array.isArray(_d)?_d:[];
+  }catch(e){_logErr('fetchInj',e);return[];}
+}
+async function refreshInjectionsCache(){
+  var activeCycleIds=_activeStackIndices.reduce(function(set,si){
+    var st=_userStacks[si];
+    if(st&&st.cycle_start)set.add(_stackCycleId(st));
+    return set;
+  },new Set());
+  var _validCids={};
+  _activeStackIndices.forEach(function(si){
+    var st=_userStacks[si];
+    if(!st||!st.cycle_start)return;
+    var cid=_stackCycleId(st);
+    _validCids[cid]=(typeof _getProtocolCompoundIds==='function')?_getProtocolCompoundIds(st):[];
+  });
+  var today0=new Date(NOW);today0.setHours(0,0,0,0);
+  var from=new Date(today0.getTime()-14*86400000);
+  var to=new Date(today0.getTime()+90*86400000);
+  var entries=await fetchInjectionsForRange(dateKey(from),dateKey(to));
+  _injectionsCache={};
+  var _todayKey=dateKey(today0);
+  var _orphanBulkDel={};
+  entries.forEach(function(e){
+    // T-calc entries always pass through — no orphan check, no cycle_id filter
+    if(e.cycle_id==='tcalc'){
+      if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
+      _injectionsCache[e.date].push(e);
+      return;
+    }
+    if(!activeCycleIds.has(e.cycle_id))return;
+    var _vids=_validCids[e.cycle_id]||[];
+    if(_vids.length&&!_vids.includes(e.compound_id)){
+      if(e.date>=_todayKey){
+        if(!_orphanBulkDel[e.cycle_id])_orphanBulkDel[e.cycle_id]={};
+        _orphanBulkDel[e.cycle_id][e.compound_id]=true;
+      }
+      return;
+    }
+    if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
+    _injectionsCache[e.date].push(e);
+  });
+  var _ockeys=Object.keys(_orphanBulkDel);
+  for(var _ci=0;_ci<_ockeys.length;_ci++){
+    var _cid=_ockeys[_ci];
+    var _cmpIds=Object.keys(_orphanBulkDel[_cid]);
+    for(var _oi=0;_oi<_cmpIds.length;_oi++){
+      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&compound_id='+encodeURIComponent(_cmpIds[_oi])+'&from_date='+_todayKey,{method:'DELETE',headers:authHeaders()});}
+      catch(e){_logErr('delOrphanInj',e);}
+    }
+  }
+  _injCacheReady=true;
 }
 // ── Stack conflict detection & safety modal ──────────────────────────────────
 var _pendingConflictData=null;
@@ -1020,7 +1093,7 @@ function _renderCartModal(){
       h+='<div style="font-size:12px;color:var(--muted2);padding:8px 0">No peptide data available</div>';
     }
   }
-  var enhanceCmpds=_cycle&&_cycle.compounds?_cycle.compounds.filter(function(c){return c.active&&c.name;}):[];
+  var enhanceCmpds=(st.enhanced&&st.enhanced.compounds)?st.enhanced.compounds.filter(function(c){return c.active!==false&&c.name;}):[];
   if(enhanceCmpds.length){
     h+='<div style="font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:18px">Enhancement Compounds — source separately</div>';
     enhanceCmpds.forEach(function(c){
@@ -1231,16 +1304,16 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.232"></script>
-<script src="tab-macros.js?v=1.232"></script>
-<script src="tab-stack.js?v=1.232"></script>
-<script src="tab-today.js?v=1.232"></script>
-<script src="tab-schedule.js?v=1.232"></script>
-<script src="tab-timeline.js?v=1.232"></script>
-<script src="tab-body.js?v=1.232"></script>
-<script src="tab-recon.js?v=1.232"></script>
-<script src="tab-blood.js?v=1.232"></script>
-<script src="tab-tcalc.js?v=1.232"></script>
+<script src="tab-cycles.js?v=1.233"></script>
+<script src="tab-macros.js?v=1.233"></script>
+<script src="tab-stack.js?v=1.233"></script>
+<script src="tab-today.js?v=1.233"></script>
+<script src="tab-schedule.js?v=1.233"></script>
+<script src="tab-timeline.js?v=1.233"></script>
+<script src="tab-body.js?v=1.233"></script>
+<script src="tab-recon.js?v=1.233"></script>
+<script src="tab-blood.js?v=1.233"></script>
+<script src="tab-tcalc.js?v=1.233"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}

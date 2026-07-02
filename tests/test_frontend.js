@@ -61,6 +61,7 @@ const sandbox = vm.createContext({
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
   google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
+  AbortController:class{constructor(){this.signal={};}abort(){}},
 });
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
@@ -1457,18 +1458,18 @@ console.log('\n── dose dedup migration ────────────�
 
   check('end_date normalization in loadUserStacks',rawScript.includes('if(stack.end_date){var _cep=stack.end_date.split'));
 
-  check('buildToday uses getDosesForDate(NOW) instead of WEEKLY.forEach',
-    todayJs.includes('getDosesForDate(NOW)') && !todayJs.includes('WEEKLY.forEach(d=>'));
-  check('showDayInline uses getDosesForDate for future days',
-    todayJs.includes('doses=getDosesForDate(d)'));
-  check('showDayInline past days: getDosesForDate used inside isPast branch',
-    /if\(isPast\)[\s\S]{0,200}getDosesForDate\(d\)/.test(todayJs));
+  check('buildToday reads from _injectionsCache instead of getDosesForDate or WEEKLY',
+    todayJs.includes('_injectionsCache') && !todayJs.includes('getDosesForDate(NOW)') && !todayJs.includes('WEEKLY.forEach(d=>'));
+  check('showDayInline uses _injectionsCache for scheduled doses',
+    todayJs.includes('_injectionsCache[dk]') && !todayJs.includes('doses=getDosesForDate(d)'));
+  check('buildWeekStrip past days: falls back to getPastDoses within isPast branch',
+    /if\(isPast\)[\s\S]{0,400}getPastDoses\(d\)/.test(todayJs));
   check('showDayInline past days: getPastDoses used to surface orphaned logged doses',
     todayJs.includes('isPast') && todayJs.includes('getPastDoses(d)') && todayJs.includes('_findWeeklyItemInfo(bid)'));
   check('showDayInline past days: isChk does not use _pastChecked shortcut',
     !todayJs.includes('_pastChecked||checked') && !todayJs.includes('dose._pastChecked'));
-  check('buildWeekStrip uses getDosesForDate for future/today dots',
-    todayJs.includes('getDosesForDate(d).forEach'));
+  check('buildWeekStrip uses _injectionsCache for future/today dots',
+    todayJs.includes('_injectionsCache[dk]') && !todayJs.includes('getDosesForDate(d).forEach'));
   check('buildWeekStrip uses getPastDoses + _findWeeklyItemInfo for past dots',
     todayJs.includes('getPastDoses(d)') && todayJs.includes('_findWeeklyItemInfo(bid)'));
 
@@ -1500,13 +1501,13 @@ console.log('\n── dose dedup migration ────────────�
   G._activeStackIndices=[0];
   check('_getDynamicEnhancedDoses: no-date enhanced stack active → shows doses',G._getDynamicEnhancedDoses(mon22,true).length===1);
 
-  // buildToday and showDayInline must call _getDynamicEnhancedDoses
-  check('buildToday calls _getDynamicEnhancedDoses(NOW,true)',
-    todayJs.includes('_getDynamicEnhancedDoses(NOW,true)'));
-  check('showDayInline future branch calls _getDynamicEnhancedDoses(d,true)',
-    todayJs.includes('_getDynamicEnhancedDoses(d,true)'));
-  check('buildWeekStrip calls _getDynamicEnhancedDoses for future dots',
-    todayJs.includes('_getDynamicEnhancedDoses(d,false)'));
+  // buildToday/showDayInline/buildWeekStrip now use _injectionsCache (not _getDynamicEnhancedDoses directly)
+  check('buildToday reads enhanced doses from _injectionsCache, not _getDynamicEnhancedDoses directly',
+    todayJs.includes('_injectionsCache') && !todayJs.includes('_getDynamicEnhancedDoses(NOW,true)'));
+  check('showDayInline reads enhanced doses from _injectionsCache, not _getDynamicEnhancedDoses directly',
+    todayJs.includes('_injectionsCache') && !todayJs.includes('_getDynamicEnhancedDoses(d,true)'));
+  check('buildWeekStrip reads enhanced dots from _injectionsCache, not _getDynamicEnhancedDoses directly',
+    todayJs.includes('_injectionsCache') && !todayJs.includes('_getDynamicEnhancedDoses(d,false)'));
 
   check('tab-stack.js edit view has no Cycle End field (removed — use cycle length instead)',
     !tabStackJs.includes("id='edit-cycle-end'")&&!tabStackJs.includes('id="edit-cycle-end"'));
@@ -3264,6 +3265,66 @@ console.log('\n── _getDynamicEnhancedDoses ───────────
   G._userStacks = [noEnhStack];
   const noEnhDoses = G._getDynamicEnhancedDoses(monday, false);
   check('Enhanced: 0 doses when enabled=false',       noEnhDoses.length === 0, `got ${noEnhDoses.length}`);
+
+  // amPm compound with both doses non-zero → 2 separate entries
+  const enhStackBothAmPm = {
+    name: 'HGH Stack',
+    cycle_start: '2026-06-01',
+    cycle_length: 12,
+    peptides: [],
+    trt: { enabled: false, compounds: [] },
+    enhanced: { enabled: true, compounds: [
+      { id: 'hgh', name: 'HGH', dot: '#3cffa0', days: [0,1,2,3,4,5,6],
+        amPm: true, dose_am: '3', dose_pm: '3', unit: 'IU/day' }
+    ]}
+  };
+  G._userStacks = [enhStackBothAmPm];
+  G._activeStackIndices = [0];
+  const bothAmPmDoses = G._getDynamicEnhancedDoses(monday, true);
+  check('Enhanced amPm: both AM+PM non-zero → 2 entries', bothAmPmDoses.length === 2, `got ${bothAmPmDoses.length}`);
+  check('Enhanced amPm: AM entry has time=AM', bothAmPmDoses.some(function(d){return d.time==='AM';}));
+  check('Enhanced amPm: PM entry has time=PM', bothAmPmDoses.some(function(d){return d.time==='PM';}));
+  check('Enhanced amPm: AM detail includes dose', bothAmPmDoses.some(function(d){return d.time==='AM'&&d.detail.includes('3');}));
+  check('Enhanced amPm: AM entry id unique from PM', bothAmPmDoses[0].id!==bothAmPmDoses[1].id);
+
+  // amPm via catalog fallback (stored compound lacks amPm:true but ENHANCEMENT_COMPOUNDS has it)
+  const enhStackCatalogFallback = {
+    name: 'HGH Fallback',
+    cycle_start: '2026-06-01',
+    cycle_length: 12,
+    peptides: [],
+    trt: { enabled: false, compounds: [] },
+    enhanced: { enabled: true, compounds: [
+      { id: 'hgh-fallback', name: 'HGH', dot: '#3cffa0', days: [0,1,2,3,4,5,6],
+        // amPm NOT set, but dose_am/dose_pm present — catalog should provide fallback
+        dose_am: '2', dose_pm: '2', unit: 'IU/day' }
+    ]}
+  };
+  // Simulate ENHANCEMENT_COMPOUNDS catalog entry with amPm:true
+  G.ENHANCEMENT_COMPOUNDS = (G.ENHANCEMENT_COMPOUNDS||[]).concat([{id:'hgh-fallback',name:'HGH',amPm:true,dot:'#3cffa0',group:'GH Axis'}]);
+  G._userStacks = [enhStackCatalogFallback];
+  G._activeStackIndices = [0];
+  const fallbackDoses = G._getDynamicEnhancedDoses(monday, true);
+  check('Enhanced catalog fallback: amPm via ENHANCEMENT_COMPOUNDS → 2 entries', fallbackDoses.length === 2, `got ${fallbackDoses.length}`);
+  check('Enhanced catalog fallback: entries have compId', fallbackDoses.every(function(d){return d.compId==='hgh-fallback';}));
+  // Restore
+  G.ENHANCEMENT_COMPOUNDS = (G.ENHANCEMENT_COMPOUNDS||[]).filter(function(c){return c.id!=='hgh-fallback';});
+
+  // compId field present on regular (non-amPm) dose
+  const enhStackSingle = {
+    name: 'Single Enhanced',
+    cycle_start: '2026-06-01',
+    cycle_length: 12,
+    peptides: [],
+    trt: { enabled: false, compounds: [] },
+    enhanced: { enabled: true, compounds: [
+      { id: 'primo', name: 'Primobolan', dot: '#a855f7', days: [0,1,2,3,4,5,6], dose: '200', unit: 'mg/week' }
+    ]}
+  };
+  G._userStacks = [enhStackSingle];
+  G._activeStackIndices = [0];
+  const singleEnhDoses = G._getDynamicEnhancedDoses(monday, true);
+  check('Enhanced single: compId set on non-amPm dose', singleEnhDoses.length===1 && singleEnhDoses[0].compId==='primo');
 
   G._userStacks = _des;
   G._activeStackIndices = _dea;
