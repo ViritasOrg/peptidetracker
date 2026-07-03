@@ -29,6 +29,11 @@ var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] =
 var _tcBwLoading      = false;
 var _tcBwAddExtras    = [];   // custom extra-test rows while add sheet is open
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
+var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
+var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
+var _tcGhStack = [];          // [{pepId, startDateStr, interactions}] — GH compounds from active stacks
+var _tcSysInter = null;       // compounds map from /systemic-interactions
+var _tcActiveStacks = null;   // raw response from /protocol/stacks
 
 // ── Blood test catalogue ───────────────────────────────────────────────────────
 var _TC_BW_TESTS = [
@@ -141,6 +146,26 @@ function _tcLoadProfile() {
       buildTCalc();
     })
     .catch(function(){ _tcAgeMissing = true; buildTCalc(); });
+  // GH→SHBG interaction parameters (public endpoint, no auth)
+  fetch(AGENT_URL + '/systemic-interactions')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d) {
+      if (!d || !d.compounds) return;
+      _tcSysInter = d.compounds;
+      _tcComputeGhStack();
+      buildTCalc();
+    })
+    .catch(function(){});
+  // Active peptide stacks — find GH compounds for SHBG model
+  fetch(AGENT_URL + '/protocol/stacks', {headers: h})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d) {
+      if (!d) return;
+      _tcActiveStacks = d;
+      _tcComputeGhStack();
+      buildTCalc();
+    })
+    .catch(function(){});
 }
 
 function _tcSaveProfile() {
@@ -152,6 +177,46 @@ function _tcSaveProfile() {
     headers: Object.assign({'Content-Type':'application/json'}, h),
     body: JSON.stringify(_tcp)
   }).catch(function(){});
+}
+
+function _tcComputeGhStack() {
+  if (!_tcActiveStacks || !_tcSysInter) return;
+  _tcGhStack = [];
+  var idxs = _tcActiveStacks.active_indices ||
+    (_tcActiveStacks.active_index != null ? [_tcActiveStacks.active_index] : []);
+  idxs.forEach(function(idx) {
+    var stack = (_tcActiveStacks.stacks || [])[idx];
+    if (!stack) return;
+    var cycleStart = stack.cycle_start || '';
+    // Peptides — each entry has its own start_date
+    (stack.peptides || []).forEach(function(pep) {
+      var pepId = pep.id;
+      if (!pepId || !_tcSysInter[pepId]) return;
+      var inter = _tcSysInter[pepId];
+      if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
+      _tcGhStack.push({pepId: pepId, startDateStr: pep.start_date || cycleStart, interactions: inter});
+    });
+    // Enhanced compounds — no per-compound start_date, fall back to cycle_start
+    if (stack.enhanced && stack.enhanced.compounds) {
+      (stack.enhanced.compounds || []).forEach(function(c) {
+        var cId = c.id;
+        if (!cId || !_tcSysInter[cId]) return;
+        var inter = _tcSysInter[cId];
+        if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
+        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter});
+      });
+    }
+    // TRT compounds — same fallback
+    if (stack.trt && stack.trt.compounds) {
+      (stack.trt.compounds || []).forEach(function(c) {
+        var cId = c.id;
+        if (!cId || !_tcSysInter[cId]) return;
+        var inter = _tcSysInter[cId];
+        if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
+        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter});
+      });
+    }
+  });
 }
 
 // ── Compound helpers ──────────────────────────────────────────────────────────
@@ -668,6 +733,92 @@ function _tcCloseEditSeriesSheet() {
   var ol=document.getElementById('tc-edit-series-overlay');if(ol)ol.remove();_tcEditSeriesId=null;
 }
 
+function _tcShowSeriesDetail(sid) {
+  if (!_tcp || !_tcp.manualLog) return;
+  var entries = _tcp.manualLog.filter(function(e){ return e.seriesId === sid; }).sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+  if (!entries.length) return;
+  var mcd = _tcCompInfo(entries[0].compId || '');
+  var fmtD = function(iso){ if(!iso)return''; var p=iso.split('-'); var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return parseInt(p[2],10)+' '+M[parseInt(p[1],10)-1]; };
+  var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase';
+  var listHtml = entries.map(function(e, i){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="'+lSty+'">INJ ' + (i+1) + '</div>' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text)">' + fmtD(e.date||'') + '</div>' +
+      '<div style="font-size:13px;font-weight:600;color:#6688cc">' + _esc(String(e.doseMg||'')) + ' mg</div>' +
+      '</div>';
+  }).join('');
+  var ol = document.createElement('div');
+  ol.id = 'tc-series-detail-overlay';
+  ol.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  ol.onclick = function(e){ if(e.target===ol) ol.remove(); };
+  ol.innerHTML =
+    '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:80vh;overflow-y:auto">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+    '<div><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--text)">SERIES INJECTIONS</div>' +
+    '<div style="font-size:11px;color:var(--muted2);margin-top:2px">' + _esc(mcd.name) + ' · ' + entries.length + ' injections</div></div>' +
+    '<button onclick="document.getElementById(\'tc-series-detail-overlay\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
+    '</div>' + listHtml + '</div>';
+  document.body.appendChild(ol);
+}
+
+function _tcSetChartZoom(z) {
+  _tcChartZoom = z;
+  _tcChartPanOffset = 0;
+  var validLog = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseFloat(e.doseMg) > 0; }) : [];
+  _tcDrawManualChart('tc-main-chart', validLog, z);
+  _tcAttachPanListeners(document.getElementById('tc-main-chart'));
+  ['today','week','month','whole'].forEach(function(zz) {
+    var btn = document.getElementById('tc-zoom-' + zz);
+    if (!btn) return;
+    btn.style.background   = zz === z ? 'rgba(102,136,204,0.25)' : 'none';
+    btn.style.color        = zz === z ? '#6688cc' : 'var(--muted2)';
+    btn.style.borderColor  = zz === z ? '#6688cc66' : 'var(--border)';
+  });
+}
+
+function _tcAttachPanListeners(canvas) {
+  if (!canvas) return;
+  if (canvas._tcTouchStart) {
+    canvas.removeEventListener('touchstart', canvas._tcTouchStart);
+    canvas.removeEventListener('touchmove', canvas._tcTouchMove);
+    canvas.removeEventListener('touchend', canvas._tcTouchEnd);
+    canvas.removeEventListener('mousedown', canvas._tcMouseDown);
+    canvas.removeEventListener('mousemove', canvas._tcMouseMove);
+    canvas.removeEventListener('mouseup', canvas._tcMouseEnd);
+    canvas._tcTouchStart = null;
+  }
+  var state = canvas._tcPanState;
+  if (!state || state.zoom === 'whole') { canvas.style.cursor = ''; canvas.style.touchAction = ''; return; }
+  canvas.style.cursor = 'grab';
+  canvas.style.touchAction = 'pan-y';
+  var _pDX = null, _pDY = null, _pOff = null;
+  canvas._tcTouchStart = function(e) {
+    var t = e.touches ? e.touches[0] : e;
+    _pDX = t.clientX; _pDY = t.clientY; _pOff = _tcChartPanOffset;
+  };
+  canvas._tcTouchMove = function(e) {
+    if (_pDX === null) return;
+    var t = e.touches ? e.touches[0] : e;
+    var dx = t.clientX - _pDX, dy = t.clientY - (_pDY || 0);
+    if (e.touches && Math.abs(dx) <= Math.abs(dy)) return;
+    if (e.preventDefault) e.preventDefault();
+    var s = canvas._tcPanState || state;
+    _tcChartPanOffset = _pOff - dx * ((s.xEnd - s.xStart) / (s.cW || 250));
+    var vl = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e2){ return e2.date && e2.doseMg && parseFloat(e2.doseMg) > 0; }) : [];
+    _tcDrawManualChart(canvas.id, vl, _tcChartZoom);
+  };
+  canvas._tcTouchEnd = function() { _pDX = null; };
+  canvas._tcMouseDown = canvas._tcTouchStart;
+  canvas._tcMouseMove = function(e) { if (e.buttons & 1) canvas._tcTouchMove(e); };
+  canvas._tcMouseEnd = canvas._tcTouchEnd;
+  canvas.addEventListener('touchstart', canvas._tcTouchStart, {passive: true});
+  canvas.addEventListener('touchmove', canvas._tcTouchMove, {passive: false});
+  canvas.addEventListener('touchend', canvas._tcTouchEnd);
+  canvas.addEventListener('mousedown', canvas._tcMouseDown);
+  canvas.addEventListener('mousemove', canvas._tcMouseMove);
+  canvas.addEventListener('mouseup', canvas._tcMouseEnd);
+}
+
 function _tcSaveEditSeries() {
   var sid = _tcEditSeriesId;
   if (!sid || !_tcp || !_tcp.manualLog) return;
@@ -722,7 +873,7 @@ function _tcSetManualField(idx, field, val) {
   } else {
     var validLog = _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseFloat(e.doseMg) > 0; });
     if (validLog.length > 0 && document.getElementById('tc-main-chart')) {
-      _tcDrawManualChart('tc-main-chart', validLog);
+      _tcDrawManualChart('tc-main-chart', validLog, _tcChartZoom);
     } else {
       buildTCalc();
     }
@@ -911,7 +1062,7 @@ function _tcDefaultFT(birthYear) {
   return 180;
 }
 
-function _tcDrawManualChart(canvasId, log) {
+function _tcDrawManualChart(canvasId, log, zoom3) {
   var canvas = document.getElementById(canvasId);
   if (!canvas || !log || log.length === 0) return;
 
@@ -969,12 +1120,54 @@ function _tcDrawManualChart(canvasId, log) {
     }
   }
 
+  // Unified calibration anchor: the reference time at which _mftNum (the measured or
+  // estimated free T) is taken to hold.  With an explicit bloodwork entry it is the draw
+  // date; with none it is "today" — the measured level describes the user now, and any
+  // injections planned after today must not rescale the historical curve.  Clamped into
+  // the plotted range so an all-future plan anchors at the start and an all-past log at
+  // the end.  This is what makes calFT immune to appended future injections in BOTH the
+  // bloodwork and no-bloodwork cases (previously only the bloodwork case was anchored,
+  // so a no-bloodwork schedule re-scaled — and its peak dropped — as injections grew).
+  var _bwAnchorDate = _tcBwEntries && _tcBwEntries.length ? _tcBwEntries[0].date : null;
+  var _anchorDay, _anchorCutoffDate;
+  var _bwAnchorDay = _bwAnchorDate
+    ? Math.round((new Date(_bwAnchorDate + 'T12:00:00') - firstDate) / 86400000)
+    : null;
+  if (_bwAnchorDay !== null && _bwAnchorDay >= 0 && _bwAnchorDay <= totalDays) {
+    // Bloodwork drawn on/after the first injection — anchor exactly at the draw date.  A
+    // real draw is always in the past and planned injections are in the future (after the
+    // draw), so total[drawDay] stays invariant to them and the peak cannot drop.
+    _anchorDay = _bwAnchorDay;
+    _anchorCutoffDate = _bwAnchorDate;
+  } else {
+    // Either no bloodwork, or bloodwork drawn OUTSIDE the injection span — before the cycle
+    // (a pre-cycle baseline draw, the normal case) or after it washed out.  In all of these
+    // the measured level is a baseline/reference, not a mid-cycle waypoint, so anchor at a
+    // stable in-span day: "today" when it falls within the span, otherwise day 0.  total[0]
+    // is immune to every later injection (PkConc(dt=0)=0), so calFT cannot move and the peak
+    // can only rise as injections are added.  A pre-cycle bloodwork made _anchorDay negative,
+    // which skipped the anchor entirely and fell back to calFT = _mftNum / _logMean over a
+    // window that grew with the schedule — that was the reported peak drop.  Anchoring in the
+    // washout tail is likewise avoided: its value climbs with the accumulating depot.
+    var _nowDayA = Math.round((Date.now() - firstDate.getTime()) / 86400000);
+    _anchorDay = (_nowDayA >= 0 && _nowDayA <= _logDays) ? _nowDayA : 0;
+    var _adD = new Date(firstDate.getTime() + _anchorDay * 86400000);
+    _anchorCutoffDate = _adD.getFullYear() + '-' + String(_adD.getMonth() + 1).padStart(2, '0') + '-' + String(_adD.getDate()).padStart(2, '0');
+  }
+
   // Warm-start: pre-fill curve so the chart starts at the user's measured free T.
   if (calFT && _mftNum > 0) {
     if (_curDose > 0) {
       // Known prior dose: model each compound's residual from a steady-state protocol.
+      // Use only injections up to the anchor date so that adding later injections
+      // cannot change the compound-fraction mix and thereby shift total[anchorDay].
+      var _wsFilterDate = _anchorCutoffDate;
+      var _wsSorted = _wsFilterDate
+        ? sorted.filter(function(e){ return e.date <= _wsFilterDate; })
+        : sorted;
+      if (_wsSorted.length === 0) _wsSorted = sorted;
       var _wsGroups = {}, _wsTotalAbsMg = 0;
-      sorted.forEach(function(e) {
+      _wsSorted.forEach(function(e) {
         var _wsBioav = (_tcCompInfo(e.compId).bioavailability || 1);
         var _wsAbs   = parseFloat(e.doseMg) * _wsBioav;
         _wsTotalAbsMg += _wsAbs;
@@ -1007,14 +1200,138 @@ function _tcDrawManualChart(canvasId, log) {
       // here was wrong: it represented a fictional prior-dose residual that drained away
       // at peak time (making the peak read too low) and post-dose (making levels appear
       // to crash faster than the compound's half-life actually dictates).
+      //
+      // Derive the baseline from only the pre-anchor portion of total[] so that
+      // injections after the anchor cannot inflate it, shift total[anchorDay], and
+      // thereby move calFT.  The anchor is the bloodwork draw date when one exists, or
+      // "today" otherwise — the same immunity now applies with or without bloodwork.
+      var _p2Baseline = _logMean;
+      if (_anchorDay >= 0) {
+        var _p2MaxT = Math.min(_logDays, _anchorDay);
+        var _p2Pk = 0, _p2Tr = Infinity;
+        for (var _p2i = 0; _p2i <= _p2MaxT; _p2i++) {
+          if (total[_p2i] > _p2Pk) _p2Pk = total[_p2i];
+          if (total[_p2i] < _p2Tr) _p2Tr = total[_p2i];
+        }
+        if (_p2Pk > 0) {
+          if (_p2Tr === Infinity) _p2Tr = _p2Pk;
+          _p2Baseline = (_p2Pk + _p2Tr) / 2 || _p2Pk;
+        } else {
+          // Anchor on day 0: total[0] = 0 for every injection (tcPkConc(dt=0)=0), so
+          // the pre-anchor scan finds nothing.  Compute the stable baseline from the
+          // anchor-date injections' OWN settled PK — later injections are excluded so
+          // adding them cannot change this value or shift total[anchorDay].
+          var _bwDateStr2 = _anchorCutoffDate;
+          var _bwDayArr = new Float64Array(totalDays + 1);
+          sorted.forEach(function(e) {
+            if (e.date !== _bwDateStr2) return;
+            var _bwcd = _tcCompInfo(e.compId);
+            var _bwke = Math.LN2 / (_bwcd.halfLifeDays || 1);
+            var _bwka = _tcKa(_bwcd.halfLifeDays || 1);
+            var _bwabs = parseFloat(e.doseMg) * (_bwcd.bioavailability || 1);
+            for (var _bwt = 0; _bwt <= totalDays; _bwt++) {
+              _bwDayArr[_bwt] += _tcPkConc(_bwabs, _bwka, _bwke, _bwt);
+            }
+          });
+          var _bwDayPk = 0, _bwDayTr = Infinity;
+          for (var _bwst = 0; _bwst <= totalDays; _bwst++) {
+            if (_bwDayArr[_bwst] > _bwDayPk) _bwDayPk = _bwDayArr[_bwst];
+            if (_bwDayArr[_bwst] < _bwDayTr) _bwDayTr = _bwDayArr[_bwst];
+          }
+          if (_bwDayPk > 0) {
+            if (_bwDayTr === Infinity) _bwDayTr = _bwDayPk;
+            _p2Baseline = (_bwDayPk + _bwDayTr) / 2 || _bwDayPk;
+          }
+          // If still 0 (no anchor-date injection data), _logMean fallback stands.
+        }
+      }
       for (var _blt = 0; _blt <= totalDays; _blt++) {
-        total[_blt] += _logMean;
+        total[_blt] += _p2Baseline;
       }
     }
   }
 
+  // Anchor calFT at the unified anchor day (the bloodwork draw date, or today when no
+  // bloodwork entry exists) so that adding future injections cannot re-scale the curve.
+  // total[] now includes any warm-start residual, so total[anchorDay] reflects exactly
+  // what the model predicts at the anchor — and calFT is chosen to make that equal
+  // _mftNum.  Injections after anchorDay contribute 0 at anchorDay (PkConc(dt<0)=0), so
+  // calFT is immune to log extensions beyond the anchor.  Without this, a no-bloodwork
+  // schedule fell back to calFT = _mftNum / _logMean over a window that grew with the
+  // schedule, so appending injections lowered calFT and dragged the peak down.
+  if (calFT && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays && total[_anchorDay] > 0) {
+    calFT = _mftNum / total[_anchorDay];
+  }
+  if (canvas._testCalFTHook) canvas._testCalFTHook(calFT);
+
   var scale     = calFT || 1;
   var unitLabel = calFT ? 'pmol/L' : 'mg';
+
+  // Time-varying SHBG → free-T model when SHBG-suppressing compounds are active in protocol.
+  // Combines multiple compounds multiplicatively:
+  //   SHBG(t) = SHBG_baseline × ∏_i (1 − maxSupp_i × (1 − e^(−t_i/halfTime_i)))
+  // SHBG_baseline is back-calculated from the bloodwork SHBG using the same product at bw date,
+  // so the model is exactly anchored at the measured value.
+  var calFT_arr = null;
+  var _ghAnnot  = '';
+  if (calFT && _tcGhStack.length > 0) {
+    var _ttNum  = parseFloat(_tcp.totalT) || 0;
+    var _shbgBw = parseFloat(_tcp.shbg)   || 0;
+    if (_ttNum > 0 && _shbgBw > 0) {
+      var _vermBw = _tcVermeulenFT(_ttNum, _shbgBw);
+      if (_vermBw) {
+        // Precompute per-compound parameters (day offsets relative to firstDate)
+        var _ghParams = [];
+        _tcGhStack.forEach(function(gh) {
+          var _ghStart = gh.startDateStr ? new Date(gh.startDateStr + 'T12:00:00') : null;
+          if (!_ghStart) return;
+          _ghParams.push({
+            ghDay0:   Math.round((_ghStart - firstDate) / 86400000),
+            maxSupp:  gh.interactions.shbg.maxSuppression,
+            halfTime: gh.interactions.shbg.halfTimeDays
+          });
+        });
+        if (_ghParams.length > 0) {
+          // Back-calculate single shared SHBG baseline from combined suppression at bloodwork date.
+          // SHBG_bw = SHBG_base × ∏_i (1 − supp_i(t_bw))  →  SHBG_base = SHBG_bw / product
+          var _shbgBase = _shbgBw;
+          var _bwDate = _tcBwEntries && _tcBwEntries[0] ? _tcBwEntries[0].date : null;
+          if (_bwDate) {
+            var _bwDay = Math.round((new Date(_bwDate + 'T12:00:00') - firstDate) / 86400000);
+            var _prodBw = 1;
+            _ghParams.forEach(function(gp) {
+              var _tBw = Math.max(0, _bwDay - gp.ghDay0);
+              if (_tBw > 0) _prodBw *= (1 - gp.maxSupp * (1 - Math.exp(-_tBw / gp.halfTime)));
+            });
+            if (_prodBw > 0.05) _shbgBase = _shbgBw / _prodBw;
+          }
+
+          // Build per-day calFT: combined multiplicative SHBG(t) → Vermeulen → scale ratio
+          calFT_arr = new Float64Array(totalDays + 1);
+          var _nowDay = Math.round((Date.now() - firstDate.getTime()) / 86400000);
+          for (var _ct = 0; _ct <= totalDays; _ct++) {
+            var _prod = 1;
+            _ghParams.forEach(function(gp) {
+              var _tOn = Math.max(0, _ct - gp.ghDay0);
+              _prod *= (1 - gp.maxSupp * (1 - Math.exp(-_tOn / gp.halfTime)));
+            });
+            var _shbgT = Math.max(1, _shbgBase * _prod);
+            var _vermT = _tcVermeulenFT(_ttNum, _shbgT);
+            calFT_arr[_ct] = _vermT ? calFT * (_vermT / _vermBw) : calFT;
+          }
+
+          // Combined suppression at "now" for chart annotation
+          var _prodNow = 1;
+          _ghParams.forEach(function(gp) {
+            var _tNow = Math.max(0, _nowDay - gp.ghDay0);
+            _prodNow *= (1 - gp.maxSupp * (1 - Math.exp(-_tNow / gp.halfTime)));
+          });
+          var _combSuppNow = 1 - _prodNow;
+          if (_combSuppNow > 0.01) _ghAnnot = 'SHBG −' + Math.round(_combSuppNow * 100) + '%';
+        }
+      }
+    }
+  }
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -1029,7 +1346,10 @@ function _tcDrawManualChart(canvasId, log) {
   var cH  = cssH - PAD.top  - PAD.bottom;
 
   var maxV = 0;
-  for (var i = 0; i <= totalDays; i++) if (total[i] * scale > maxV) maxV = total[i] * scale;
+  for (var i = 0; i <= totalDays; i++) {
+    var _sv = total[i] * (calFT_arr ? calFT_arr[i] : scale);
+    if (_sv > maxV) maxV = _sv;
+  }
   if (_mftNum && calFT && _mftNum > maxV) maxV = _mftNum * 1.1;
   if (!maxV) { ctx.fillStyle = '#555'; ctx.font = '11px DM Sans,sans-serif'; ctx.fillText('No data', 10, 40); return; }
   var vMax = maxV * 1.1;
@@ -1038,23 +1358,34 @@ function _tcDrawManualChart(canvasId, log) {
   var xDays = totalDays;
   if (_mftNum && calFT) {
     for (var _xi = totalDays; _xi > 0; _xi--) {
-      if (total[_xi] * scale >= _mftNum) { xDays = _xi; break; }
+      if (total[_xi] * (calFT_arr ? calFT_arr[_xi] : scale) >= _mftNum) { xDays = _xi; break; }
     }
   }
 
+  // Zoom window
+  var _zoom = zoom3 || _tcChartZoom || 'whole';
+  var nowDay = Math.round((Date.now() - firstDate.getTime()) / 86400000);
+  var panDays = _zoom !== 'whole' ? Math.round(_tcChartPanOffset || 0) : 0;
+  var xStart = 0, xEnd = xDays;
+  if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(xDays, nowDay + 2 + panDays); }
+  else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(xDays, nowDay + 4 + panDays); }
+  else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(xDays, nowDay + 15 + panDays); }
+  if (xEnd <= xStart) xEnd = Math.min(xDays, xStart + 7);
+
   // Find peak within visible window
   var peakV = 0, peakT = 0;
-  for (var _pi = 0; _pi <= xDays; _pi++) {
-    var _pv = total[_pi] * scale;
+  for (var _pi = xStart; _pi <= xEnd; _pi++) {
+    var _pv = total[_pi] * (calFT_arr ? calFT_arr[_pi] : scale);
     if (_pv > peakV) { peakV = _pv; peakT = _pi; }
   }
 
-  function xOf(t){ return PAD.left + (t / xDays) * cW; }
+  function xOf(t){ return PAD.left + ((t - xStart) / (xEnd - xStart)) * cW; }
   function yOf(v){ return PAD.top  + cH - (v / vMax) * cH; }
 
-  var gridStep = xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
+  var winDays = xEnd - xStart;
+  var gridStep = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
   ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 0.5;
-  for (var dg = 0; dg <= xDays; dg += gridStep) {
+  for (var dg = xStart; dg <= xEnd; dg += gridStep) {
     var gx = xOf(dg);
     ctx.beginPath(); ctx.moveTo(gx, PAD.top); ctx.lineTo(gx, PAD.top + cH); ctx.stroke();
   }
@@ -1081,6 +1412,13 @@ function _tcDrawManualChart(canvasId, log) {
   ctx.textAlign = 'center'; ctx.fillStyle = '#444'; ctx.font = '8px DM Sans,sans-serif';
   ctx.fillText(unitLabel, 0, 0); ctx.restore();
 
+  // GH SHBG suppression annotation (top-right of chart)
+  if (_ghAnnot) {
+    ctx.font = '8px DM Sans,sans-serif'; ctx.textAlign = 'right';
+    ctx.fillStyle = '#3cffa077';
+    ctx.fillText(_ghAnnot, PAD.left + cW, PAD.top + 9);
+  }
+
   var lineColor = _tcCompInfo(sorted[0].compId).dot || '#e8a020';
 
   // Peak highlight line + y-axis label
@@ -1095,33 +1433,63 @@ function _tcDrawManualChart(canvasId, log) {
 
   var grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
   grad.addColorStop(0, lineColor + '55'); grad.addColorStop(1, lineColor + '00');
-  ctx.beginPath(); ctx.moveTo(xOf(0), PAD.top + cH);
-  for (var t2 = 0; t2 <= xDays; t2++) ctx.lineTo(xOf(t2), yOf(total[t2] * scale || 0));
-  ctx.lineTo(xOf(xDays), PAD.top + cH);
+  ctx.beginPath(); ctx.moveTo(xOf(xStart), PAD.top + cH);
+  for (var t2 = xStart; t2 <= xEnd; t2++) {
+    ctx.lineTo(xOf(t2), yOf(total[t2] * (calFT_arr ? calFT_arr[t2] : scale) || 0));
+  }
+  ctx.lineTo(xOf(xEnd), PAD.top + cH);
   ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
 
-  ctx.beginPath(); ctx.moveTo(xOf(0), yOf(total[0] * scale || 0));
-  for (var t3 = 1; t3 <= xDays; t3++) ctx.lineTo(xOf(t3), yOf(total[t3] * scale || 0));
+  ctx.beginPath(); ctx.moveTo(xOf(xStart), yOf(total[xStart] * (calFT_arr ? calFT_arr[xStart] : scale) || 0));
+  for (var t3 = xStart + 1; t3 <= xEnd; t3++) {
+    ctx.lineTo(xOf(t3), yOf(total[t3] * (calFT_arr ? calFT_arr[t3] : scale) || 0));
+  }
   ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+
+  // "Now" vertical line for zoomed views
+  if (_zoom !== 'whole' && nowDay >= xStart && nowDay <= xEnd) {
+    var nowX = xOf(nowDay);
+    ctx.strokeStyle = '#ffffff22'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(nowX, PAD.top); ctx.lineTo(nowX, PAD.top + cH); ctx.stroke();
+  }
 
   sorted.forEach(function(e) {
     var injectDay = Math.round((new Date(e.date) - firstDate) / 86400000);
+    if (injectDay < xStart || injectDay > xEnd) return;
     var dot = _tcCompInfo(e.compId).dot || lineColor;
     var ix = xOf(injectDay);
     ctx.strokeStyle = dot + '99'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(ix, PAD.top + cH); ctx.lineTo(ix, PAD.top + cH + 5); ctx.stroke();
   });
 
+  // Bloodwork dots — one per entry that has a free_t value, plotted at their calendar date
+  if (_tcBwEntries && calFT) {
+    _tcBwEntries.forEach(function(bwE) {
+      if (bwE.free_t == null) return;
+      var bwDay = Math.round((new Date(bwE.date + 'T12:00:00') - firstDate) / 86400000);
+      if (bwDay < xStart || bwDay > xEnd) return;
+      var bwX = xOf(bwDay);
+      var bwY = yOf(bwE.free_t);
+      ctx.beginPath();
+      ctx.arc(bwX, bwY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#e8a020cc';
+      ctx.fill();
+      ctx.strokeStyle = '#e8a020';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+  }
+
   ctx.fillStyle = '#555'; ctx.font = '9px DM Sans,sans-serif'; ctx.textAlign = 'center';
-  var labelEvery = xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
-  for (var dl = 0; dl <= xDays; dl += labelEvery) {
+  var labelEvery = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
+  for (var dl = xStart; dl <= xEnd; dl += labelEvery) {
     var lx = xOf(dl);
-    if (lx > PAD.left + cW + 8) break;
     var labelDate = new Date(firstDate.getTime() + dl * 86400000);
     var _MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     var lbl = labelDate.getDate() + ' ' + _MONTHS[labelDate.getMonth()];
     ctx.fillText(lbl, lx, PAD.top + cH + 18);
   }
+  canvas._tcPanState = {xStart: xStart, xEnd: xEnd, cW: cW, zoom: _zoom};
 }
 
 // ── OPTIMIZER ─────────────────────────────────────────────────────────────────
@@ -1635,7 +2003,15 @@ function buildTCalc() {
   html += '<span style="font-size:11px;color:var(--muted2)">' + (mftNum > 0 ? 'calibrated · pmol/L' : 'add bloodwork to calibrate') + '</span>';
   html += '</div>';
   if (validLog.length > 0) {
-    html += '<div style="padding:2px 16px 10px"><canvas id="tc-main-chart" style="width:100%;display:block;"></canvas></div>';
+    html += '<div style="padding:2px 16px 10px">';
+    html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
+    ['today','week','month','whole'].forEach(function(z) {
+      var isA = _tcChartZoom === z;
+      html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
+    });
+    html += '</div>';
+    html += '<canvas id="tc-main-chart" style="width:100%;display:block;"></canvas>';
+    html += '</div>';
   } else {
     html += '<div style="padding:28px 16px;text-align:center;color:var(--muted2);font-size:13px">';
     html += 'No injections logged yet.<br><span style="font-size:12px;opacity:0.6">Add injections below to plot your plasma curve.</span>';
@@ -1694,15 +2070,15 @@ function buildTCalc() {
         var editBtnStyle = 'background:none;border:1px solid #6688cc66;border-radius:6px;color:#6688cc;font-size:10px;font-weight:700;letter-spacing:0.5px;cursor:pointer;padding:4px 8px;font-family:inherit;flex-shrink:0';
         var deleteBtnStyle = 'background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:2px 4px;line-height:1;flex-shrink:0';
         // Stack visual: box-shadow creates two "cards" peeking behind the top card
-        html += '<div style="background:rgba(102,136,204,0.10);border:1px dashed #6688cc66;border-radius:12px;padding:12px;box-shadow:3px 3px 0 0 rgba(102,136,204,0.18),6px 6px 0 0 rgba(102,136,204,0.09);">';
+        html += '<div onclick="_tcShowSeriesDetail(\'' + _esc(sid) + '\')" style="background:rgba(102,136,204,0.10);border:1px dashed #6688cc66;border-radius:12px;padding:12px;box-shadow:3px 3px 0 0 rgba(102,136,204,0.18),6px 6px 0 0 rgba(102,136,204,0.09);cursor:pointer;">';
         html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
         html += '<div style="display:flex;align-items:center;gap:8px;">';
         html += '<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:#6688cc;text-transform:uppercase">⛓ SERIES</span>';
         html += '<span style="font-size:10px;color:var(--muted2)">' + total + ' injections' + ivLabel + '</span>';
         html += '</div>';
         html += '<div style="display:flex;align-items:center;gap:6px;">';
-        html += '<button onclick="_tcOpenEditSeriesSheet(\'' + _esc(sid) + '\')" style="' + editBtnStyle + '">EDIT</button>';
-        html += '<button onclick="_tcConfirmRemoveSeries(\'' + _esc(sid) + '\')" style="' + deleteBtnStyle + '">✕</button>';
+        html += '<button onclick="event.stopPropagation();_tcOpenEditSeriesSheet(\'' + _esc(sid) + '\')" style="' + editBtnStyle + '">EDIT</button>';
+        html += '<button onclick="event.stopPropagation();_tcConfirmRemoveSeries(\'' + _esc(sid) + '\')" style="' + deleteBtnStyle + '">✕</button>';
         html += '</div>';
         html += '</div>';
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">';
@@ -1868,6 +2244,6 @@ function buildTCalc() {
   el.innerHTML = html;
 
   if (validLog.length > 0) {
-    requestAnimationFrame(function() { _tcDrawManualChart('tc-main-chart', validLog); });
+    requestAnimationFrame(function() { _tcDrawManualChart('tc-main-chart', validLog, _tcChartZoom); _tcAttachPanListeners(document.getElementById('tc-main-chart')); });
   }
 }
