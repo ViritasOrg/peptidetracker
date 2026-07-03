@@ -3330,6 +3330,451 @@ console.log('\n── _getDynamicEnhancedDoses ───────────
   G._activeStackIndices = _dea;
 }
 
+// Regression: adding future injections must not lower the pre-bw peak.
+// Root cause: warm-start (_curDose > 0 path) computed compound fractions from ALL
+// injections. Adding post-bw Nebido shifted the Testoviron/Nebido fraction mix,
+// changing total[anchorDay], which changed calFT and pulled the whole curve down.
+// Fix: warm-start uses only pre-bw injections for compound fractions, so
+// total[anchorDay] (and therefore calFT) is immune to post-bw log extensions.
+//
+// Test strategy: the chart draws ctx.fillText(Math.round(peakV), ...) for the peak
+// concentration label. This encodes the ABSOLUTE pmol/L peak — unlike canvas Y
+// coordinates which autoscale and are identical regardless of calFT shifts.
+// The second-largest positive number in all fillText calls is Math.round(peakV).
+console.log('\n── calFT anchor: adding post-bw injections must not lower existing peak (PR #444/#448) ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _cfSavedFT    = G._tcp.measuredFT;
+  var _cfSavedDose  = G._tcp.currentDoseMgWk;
+  var _cfSavedBwE   = G._tcBwEntries;
+  var _cfSavedGetEl = G.document.getElementById;
+
+  G._tcp.measuredFT      = '217';
+  G._tcp.currentDoseMgWk = '250';   // _curDose > 0: the code path that had the bug
+  G._tcBwEntries = [{date:'2026-06-27', free_t:217, total_t:600, shbg:40}];
+
+  // Instrument canvas: capture calFT directly via canvas._testCalFTHook.
+  // The chart sets canvas._testCalFTHook(calFT) after computing the final calFT scalar.
+  // This avoids canvas-autoscale issues (minY, fillText, etc. all change with vMax).
+  var _cfMockCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:noop, closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  function _cfRunChart(log) {
+    var capturedCalFT = null;
+    G.document.getElementById = function(id) {
+      if (id==='tc-manual-chart') return {
+        style:{}, classList:{add:noop,remove:noop,contains:()=>false},
+        offsetWidth:350, offsetHeight:250,
+        _testCalFTHook: function(v){ capturedCalFT = v; },
+        getContext: function(){ return _cfMockCtx; }
+      };
+      return _cfSavedGetEl(id);
+    };
+    G._tcDrawManualChart('tc-manual-chart', log);
+    G.document.getElementById = _cfSavedGetEl;
+    return capturedCalFT;
+  }
+
+  // Short log: Henrik's exact scenario — 2 Testoviron + 10 Nebido every 2 days
+  var _cfLog1 = [
+    {compId:'testoviron', doseMg:'100', date:'2026-06-27'},
+    {compId:'testoviron', doseMg:'150', date:'2026-06-28'},
+    {compId:'nebido', doseMg:'102', date:'2026-06-29'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-01'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-03'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-05'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-07'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-09'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-11'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-13'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-15'},
+    {compId:'nebido', doseMg:'102', date:'2026-07-17'}
+  ];
+  // Extended: same + 10 more Nebido every 4 days (all after bw date Jun 27)
+  var _cfLog2 = _cfLog1.concat([
+    {compId:'nebido', doseMg:'100', date:'2026-07-21'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-25'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-29'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-02'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-06'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-10'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-14'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-18'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-22'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-26'}
+  ]);
+
+  var _cfThrew = false, _cfCalFT1 = null, _cfCalFT2 = null;
+  try {
+    _cfCalFT1 = _cfRunChart(_cfLog1);
+    _cfCalFT2 = _cfRunChart(_cfLog2);
+  } catch(e) {
+    _cfThrew = true;
+    console.error('  calFT anchor test threw:', e.message);
+  }
+  check('calFT anchor: no crash', !_cfThrew);
+  check('calFT anchor: calFT captured for short log', !_cfThrew && _cfCalFT1 !== null);
+  check('calFT anchor: calFT captured for extended log', !_cfThrew && _cfCalFT2 !== null);
+  if (!_cfThrew && _cfCalFT1 !== null && _cfCalFT2 !== null) {
+    // calFT must be identical between short and extended log — it is anchored at the
+    // bloodwork date and must not shift when post-bw injections are added.
+    check(
+      'calFT anchor: calFT must not change when post-bw injections are added (PR #448 regression)',
+      Math.abs(_cfCalFT2 - _cfCalFT1) < 1e-9,
+      'short-log calFT='+_cfCalFT1.toFixed(8)+' extended-log calFT='+_cfCalFT2.toFixed(8)
+    );
+  }
+
+  G._tcp.measuredFT          = _cfSavedFT;
+  G._tcp.currentDoseMgWk     = _cfSavedDose;
+  G._tcBwEntries             = _cfSavedBwE;
+  G.document.getElementById  = _cfSavedGetEl;
+}
+
+// Regression: path 2 (curDose=0) calFT anchor must also be immune to post-BW injections.
+// Root cause: flat baseline added in the else branch used _logMean computed from the
+// full log.  Post-BW injections increased _logMean, which inflated total[anchorDay],
+// which lowered calFT and pulled the whole curve down — same symptom as PR #448 but
+// on the curDose=0 code path.
+console.log('\n── calFT anchor path-2 (curDose=0): post-bw injections must not shift calFT ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _cf2SavedFT   = G._tcp.measuredFT;
+  var _cf2SavedDose = G._tcp.currentDoseMgWk;
+  var _cf2SavedBwE  = G._tcBwEntries;
+  var _cf2SavedGetEl = G.document.getElementById;
+
+  G._tcp.measuredFT      = '217';
+  G._tcp.currentDoseMgWk = '';    // _curDose === 0 → path 2 (no prior-dose warm-start)
+  G._tcBwEntries = [{date:'2026-06-27', free_t:217, total_t:600, shbg:40}];
+
+  var _cf2MockCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:noop, closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  function _cf2RunChart(log) {
+    var captured = null;
+    G.document.getElementById = function(id) {
+      if (id === 'tc-manual-chart') return {
+        style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+        offsetWidth:350, offsetHeight:250,
+        _testCalFTHook: function(v){ captured = v; },
+        getContext: function(){ return _cf2MockCtx; }
+      };
+      return _cf2SavedGetEl(id);
+    };
+    G._tcDrawManualChart('tc-manual-chart', log);
+    G.document.getElementById = _cf2SavedGetEl;
+    return captured;
+  }
+
+  // Short log: injections starting 3 days before BW (anchorDay=3 > 0 — fixes are active)
+  var _cf2Log1 = [
+    {compId:'testoviron', doseMg:'125', date:'2026-06-24'},
+    {compId:'testoviron', doseMg:'125', date:'2026-06-26'},
+    {compId:'testoviron', doseMg:'125', date:'2026-06-28'}
+  ];
+  // Extended: same + 10 Nebido injections after BW date (Jun 27)
+  var _cf2Log2 = _cf2Log1.concat([
+    {compId:'nebido', doseMg:'100', date:'2026-07-01'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-05'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-09'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-13'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-17'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-21'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-25'},
+    {compId:'nebido', doseMg:'100', date:'2026-07-29'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-02'},
+    {compId:'nebido', doseMg:'100', date:'2026-08-06'}
+  ]);
+
+  var _cf2Threw = false, _cf2CalFT1 = null, _cf2CalFT2 = null;
+  try {
+    _cf2CalFT1 = _cf2RunChart(_cf2Log1);
+    _cf2CalFT2 = _cf2RunChart(_cf2Log2);
+  } catch(e) {
+    _cf2Threw = true;
+    console.error('  calFT path-2 anchor test threw:', e.message);
+  }
+  check('calFT path-2 anchor: no crash', !_cf2Threw);
+  check('calFT path-2 anchor: calFT captured for short log',    !_cf2Threw && _cf2CalFT1 !== null);
+  check('calFT path-2 anchor: calFT captured for extended log', !_cf2Threw && _cf2CalFT2 !== null);
+  if (!_cf2Threw && _cf2CalFT1 !== null && _cf2CalFT2 !== null) {
+    check(
+      'calFT path-2 anchor: calFT must not change when post-bw injections added (curDose=0 regression)',
+      Math.abs(_cf2CalFT2 - _cf2CalFT1) < 1e-9,
+      'short calFT='+_cf2CalFT1.toFixed(8)+' extended calFT='+_cf2CalFT2.toFixed(8)
+    );
+  }
+
+  G._tcp.measuredFT         = _cf2SavedFT;
+  G._tcp.currentDoseMgWk    = _cf2SavedDose;
+  G._tcBwEntries            = _cf2SavedBwE;
+  G.document.getElementById = _cf2SavedGetEl;
+}
+
+// Regression: path 2 (curDose=0) calFT anchor with anchorDay=0 (BW same day as first injection).
+// Root cause: when _p2BwDay=0, total[0]=0 for all injections (tcPkConc(dt=0)=0), so the
+// pre-BW scan yielded _p2Pk=0 and fell back to _logMean (full-log mean, unstable).
+// Post-BW injections increased _logMean → inflated _p2Baseline → shifted total[0] → changed calFT.
+// Fix: when _p2Pk=0, compute _p2Baseline from BW-date injections' own settled PK.
+console.log('\n── calFT anchor path-2 anchorDay=0 (BW=first injection day): post-bw injections must not shift calFT ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _cf3SavedFT   = G._tcp.measuredFT;
+  var _cf3SavedDose = G._tcp.currentDoseMgWk;
+  var _cf3SavedBwE  = G._tcBwEntries;
+  var _cf3SavedGetEl = G.document.getElementById;
+
+  G._tcp.measuredFT       = '217';
+  G._tcp.currentDoseMgWk  = '';   // _curDose === 0 → path 2
+  G._tcBwEntries = [{date:'2026-06-27', free_t:217, total_t:600, shbg:40}];
+
+  var _cf3MockCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:noop, closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  var _cf3Captured = null;
+  G.document.getElementById = function(id) {
+    if (id === 'tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testCalFTHook: function(v){ _cf3Captured = v; },
+      getContext: function(){ return _cf3MockCtx; }
+    };
+    return _cf3SavedGetEl(id);
+  };
+
+  function _cf3RunChart(lg) { _cf3Captured = null; G._tcDrawManualChart('tc-manual-chart', lg, false); return _cf3Captured; }
+
+  // Short log: BW date = first injection date (anchorDay=0)
+  var _cf3Log1 = [
+    {compId:'testoviron', doseMg:'100', date:'2026-06-27'}
+  ];
+  // Extended log: add post-BW injections — must not change calFT
+  var _cf3Log2 = [
+    {compId:'testoviron', doseMg:'100', date:'2026-06-27'},
+    {compId:'testoviron', doseMg:'100', date:'2026-07-04'},
+    {compId:'testoviron', doseMg:'100', date:'2026-07-18'},
+    {compId:'testoviron', doseMg:'100', date:'2026-08-01'}
+  ];
+
+  var _cf3CalFT1 = null, _cf3CalFT2 = null, _cf3Threw = false;
+  try {
+    _cf3CalFT1 = _cf3RunChart(_cf3Log1);
+    _cf3CalFT2 = _cf3RunChart(_cf3Log2);
+  } catch(e) {
+    _cf3Threw = true;
+    console.error('  calFT path-2 anchorDay=0 test threw:', e.message);
+  }
+  check('calFT path-2 anchorDay=0: no crash', !_cf3Threw);
+  check('calFT path-2 anchorDay=0: calFT captured for short log',    !_cf3Threw && _cf3CalFT1 !== null);
+  check('calFT path-2 anchorDay=0: calFT captured for extended log', !_cf3Threw && _cf3CalFT2 !== null);
+  if (!_cf3Threw && _cf3CalFT1 !== null && _cf3CalFT2 !== null) {
+    check(
+      'calFT path-2 anchorDay=0: calFT must not change when post-bw injections added',
+      Math.abs(_cf3CalFT2 - _cf3CalFT1) < 1e-9,
+      'short calFT='+_cf3CalFT1.toFixed(8)+' extended calFT='+_cf3CalFT2.toFixed(8)
+    );
+  }
+
+  G._tcp.measuredFT         = _cf3SavedFT;
+  G._tcp.currentDoseMgWk    = _cf3SavedDose;
+  G._tcBwEntries            = _cf3SavedBwE;
+  G.document.getElementById = _cf3SavedGetEl;
+}
+
+// Regression: NO bloodwork entry — appending future injections must not lower the peak.
+// Root cause (reported by Henrik): with measuredFT set but no _tcBwEntries entry, calFT
+// fell back to _mftNum / _logMean over a window that grew as injections were appended, so
+// adding injections shrank calFT and pulled the whole curve — including the peak — DOWN.
+// Fix: anchor calFT at "today" when there is no bloodwork draw date, mirroring the
+// bloodwork-anchored path so calFT is immune to injections added after the anchor.
+console.log('\n── no-bloodwork anchor: appending future injections must not lower peak (Henrik report) ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _nbSavedFT   = G._tcp.measuredFT;
+  var _nbSavedDose = G._tcp.currentDoseMgWk;
+  var _nbSavedBwE  = G._tcBwEntries;
+  var _nbSavedGh   = G._tcGhStack;
+  var _nbSavedGetEl = G.document.getElementById;
+
+  G._tcp.measuredFT      = '223';
+  G._tcp.currentDoseMgWk = '';     // path 2 (curDose === 0)
+  G._tcBwEntries = null;           // the buggy scenario: measured FT but NO bloodwork entry
+  G._tcGhStack   = [];
+
+  var _nbCalFT = null, _nbFillNums = [];
+  var _nbMockCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:function(t){ if(/^\d+$/.test(String(t))) _nbFillNums.push(Number(t)); },
+    closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  G.document.getElementById = function(id) {
+    if (id === 'tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testCalFTHook: function(v){ _nbCalFT = v; },
+      getContext: function(){ return _nbMockCtx; }
+    };
+    return _nbSavedGetEl(id);
+  };
+
+  // Dates anchored to the real "today" so the implicit anchor (today) lands mid-schedule
+  // in both logs and captures the same pre-anchor injections regardless of run date.
+  var _nbBase = new Date(); _nbBase.setHours(12,0,0,0);
+  function _nbDate(off){ var d=new Date(_nbBase.getTime()+off*86400000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function _nbSeries(offsets){ return offsets.map(function(o){ return {compId:'nebido', doseMg:'102', date:_nbDate(o)}; }); }
+
+  // Short: 12 injections (starting 6 days before today). Extended: +10 more into the future.
+  var _nbOff1 = [-6,-4,-2,0,2,4,6,8,10,12,14,16];
+  var _nbOff2 = _nbOff1.concat([18,20,22,24,26,28,30,32,34,36]);
+
+  function _nbRun(offsets){ _nbCalFT = null; _nbFillNums = []; G._tcDrawManualChart('tc-manual-chart', _nbSeries(offsets)); return {calFT:_nbCalFT, peak:Math.max.apply(null, _nbFillNums.concat([0]))}; }
+
+  var _nbThrew = false, _nbR1 = null, _nbR2 = null;
+  try {
+    _nbR1 = _nbRun(_nbOff1);
+    _nbR2 = _nbRun(_nbOff2);
+  } catch(e) {
+    _nbThrew = true;
+    console.error('  no-bloodwork anchor test threw:', e.message);
+  }
+  check('no-bloodwork anchor: no crash', !_nbThrew);
+  check('no-bloodwork anchor: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
+  if (!_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null) {
+    check(
+      'no-bloodwork anchor: calFT must not change when future injections are appended',
+      Math.abs(_nbR2.calFT - _nbR1.calFT) < 1e-9,
+      'short calFT='+_nbR1.calFT.toFixed(8)+' extended calFT='+_nbR2.calFT.toFixed(8)
+    );
+    check(
+      'no-bloodwork anchor: peak must not drop when future injections are appended',
+      _nbR2.peak >= _nbR1.peak,
+      'short peak='+_nbR1.peak+' extended peak='+_nbR2.peak
+    );
+  }
+
+  // All-past edge case: a fully washed-out cycle logged entirely in the past (today falls
+  // outside the injection span).  Appending more past injections must still not lower the
+  // peak — the anchor falls back to day 0, whose value is immune to every later injection.
+  function _nbPastSeries(n){
+    var a = [];
+    var _start = new Date(_nbBase.getTime() - 200*86400000);
+    for (var i=0;i<n;i++){ var d=new Date(_start.getTime()+i*2*86400000); a.push({compId:'nebido', doseMg:'102', date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}); }
+    return a;
+  }
+  var _nbPastThrew = false, _nbP1 = null, _nbP2 = null;
+  try {
+    _nbCalFT = null; _nbFillNums = []; G._tcDrawManualChart('tc-manual-chart', _nbPastSeries(10)); _nbP1 = {calFT:_nbCalFT, peak:Math.max.apply(null,_nbFillNums.concat([0]))};
+    _nbCalFT = null; _nbFillNums = []; G._tcDrawManualChart('tc-manual-chart', _nbPastSeries(20)); _nbP2 = {calFT:_nbCalFT, peak:Math.max.apply(null,_nbFillNums.concat([0]))};
+  } catch(e) { _nbPastThrew = true; console.error('  no-bloodwork all-past test threw:', e.message); }
+  check('no-bloodwork anchor (all-past): no crash', !_nbPastThrew);
+  if (!_nbPastThrew && _nbP1 && _nbP2 && _nbP1.calFT != null && _nbP2.calFT != null) {
+    check(
+      'no-bloodwork anchor (all-past): calFT must not change when more past injections are appended',
+      Math.abs(_nbP2.calFT - _nbP1.calFT) < 1e-9,
+      'short calFT='+_nbP1.calFT.toFixed(8)+' extended calFT='+_nbP2.calFT.toFixed(8)
+    );
+    check(
+      'no-bloodwork anchor (all-past): peak must not drop when more past injections are appended',
+      _nbP2.peak >= _nbP1.peak,
+      'short peak='+_nbP1.peak+' extended peak='+_nbP2.peak
+    );
+  }
+
+  G._tcp.measuredFT         = _nbSavedFT;
+  G._tcp.currentDoseMgWk    = _nbSavedDose;
+  G._tcBwEntries            = _nbSavedBwE;
+  G._tcGhStack              = _nbSavedGh;
+  G.document.getElementById = _nbSavedGetEl;
+}
+
+// Regression: PRE-CYCLE baseline bloodwork (draw dated BEFORE the first injection).
+// This is the normal workflow — you get baseline bloodwork before starting a cycle — and
+// it was the real peak-drop Henrik reported.  A pre-cycle draw made the anchor day negative,
+// which skipped the calFT anchor entirely and fell back to calFT = _mftNum / _logMean over a
+// window that grew as injections were added, so more injections lowered the peak.  Fix:
+// clamp a pre-cycle (out-of-span) draw to an in-span anchor, whose value is immune to later
+// injections, so the peak can only rise.
+console.log('\n── pre-cycle baseline bloodwork: appending injections must not lower peak (Henrik report) ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _pbSavedFT   = G._tcp.measuredFT;
+  var _pbSavedDose = G._tcp.currentDoseMgWk;
+  var _pbSavedBwE  = G._tcBwEntries;
+  var _pbSavedGh   = G._tcGhStack;
+  var _pbSavedGetEl = G.document.getElementById;
+
+  G._tcp.measuredFT      = '217';
+  G._tcp.currentDoseMgWk = '';
+  // Baseline draw dated well before the first injection (2026-06-27).
+  G._tcBwEntries = [{date:'2026-02-15', free_t:217, total_t:600, shbg:40}];
+  G._tcGhStack   = [];
+
+  var _pbCalFT = null, _pbFillNums = [];
+  var _pbMockCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:function(t){ if(/^\d+$/.test(String(t))) _pbFillNums.push(Number(t)); },
+    closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  G.document.getElementById = function(id) {
+    if (id === 'tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testCalFTHook: function(v){ _pbCalFT = v; },
+      getContext: function(){ return _pbMockCtx; }
+    };
+    return _pbSavedGetEl(id);
+  };
+
+  // Henrik's exact schedule: 2 Testoviron loaders + 10 Nebido, then +10 more Nebido.
+  var _pbLog1 = [
+    {compId:'testoviron', doseMg:'100', date:'2026-06-27'},
+    {compId:'testoviron', doseMg:'150', date:'2026-06-28'}
+  ];
+  for (var _pbi=0; _pbi<10; _pbi++){ var _pd=new Date(new Date('2026-06-29').getTime()+_pbi*2*86400000); _pbLog1.push({compId:'nebido', doseMg:'102', date:_pd.getFullYear()+'-'+String(_pd.getMonth()+1).padStart(2,'0')+'-'+String(_pd.getDate()).padStart(2,'0')}); }
+  var _pbLog2 = _pbLog1.slice();
+  for (var _pbj=0; _pbj<10; _pbj++){ var _pd2=new Date(new Date('2026-07-21').getTime()+_pbj*4*86400000); _pbLog2.push({compId:'nebido', doseMg:'100', date:_pd2.getFullYear()+'-'+String(_pd2.getMonth()+1).padStart(2,'0')+'-'+String(_pd2.getDate()).padStart(2,'0')}); }
+
+  function _pbRun(lg){ _pbCalFT=null; _pbFillNums=[]; G._tcDrawManualChart('tc-manual-chart', lg); return {calFT:_pbCalFT, peak:Math.max.apply(null,_pbFillNums.concat([0]))}; }
+
+  var _pbThrew=false, _pbR1=null, _pbR2=null;
+  try { _pbR1 = _pbRun(_pbLog1); _pbR2 = _pbRun(_pbLog2); }
+  catch(e){ _pbThrew=true; console.error('  pre-cycle baseline test threw:', e.message); }
+  check('pre-cycle baseline: no crash', !_pbThrew);
+  check('pre-cycle baseline: calFT captured (short & extended)', !_pbThrew && _pbR1 && _pbR2 && _pbR1.calFT != null && _pbR2.calFT != null);
+  if (!_pbThrew && _pbR1 && _pbR2 && _pbR1.calFT != null && _pbR2.calFT != null) {
+    check(
+      'pre-cycle baseline: calFT must not change when injections are appended',
+      Math.abs(_pbR2.calFT - _pbR1.calFT) < 1e-9,
+      'short calFT='+_pbR1.calFT.toFixed(8)+' extended calFT='+_pbR2.calFT.toFixed(8)
+    );
+    check(
+      'pre-cycle baseline: peak must not drop when injections are appended',
+      _pbR2.peak >= _pbR1.peak,
+      'short peak='+_pbR1.peak+' extended peak='+_pbR2.peak
+    );
+  }
+
+  G._tcp.measuredFT         = _pbSavedFT;
+  G._tcp.currentDoseMgWk    = _pbSavedDose;
+  G._tcBwEntries            = _pbSavedBwE;
+  G._tcGhStack              = _pbSavedGh;
+  G.document.getElementById = _pbSavedGetEl;
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
