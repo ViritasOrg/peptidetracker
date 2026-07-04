@@ -3802,6 +3802,39 @@ if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
   check('catalogue ids are unique',
     new Set(G.SUPPLEMENT_CAT.map(function(c){return c.id;})).size === G.SUPPLEMENT_CAT.length);
 
+  // Units: metric (µg/mg/g) is the default — µg (not "mcg"), and no dose may lead with IU.
+  var _allDoses = [];
+  G.SUPPLEMENT_CAT.forEach(function(c){ c.doses.forEach(function(d){ _allDoses.push({id:c.id, d:d}); }); });
+  check('units: every dose leads with a metric unit (µg/mg/g), never a bare IU',
+    _allDoses.every(function(x){ return /^\s*[\d.]+\s*(µg|mg|g)\b/.test(x.d) || /^\s*[\d.]+\s*(capsule|scoop|serving|FU)\b/.test(x.d); }),
+    _allDoses.filter(function(x){ return !/^\s*[\d.]+\s*(µg|mg|g|capsule|scoop|serving|FU)\b/.test(x.d); }).map(function(x){return x.id+':'+x.d;}).join(', '));
+  check('units: micrograms written "µg", never "mcg"',
+    _allDoses.every(function(x){ return x.d.indexOf('mcg') === -1; }),
+    _allDoses.filter(function(x){ return x.d.indexOf('mcg') !== -1; }).map(function(x){return x.id+':'+x.d;}).join(', '));
+  check('units: no dose starts with an IU value',
+    _allDoses.every(function(x){ return !/^\s*[\d.]+\s*IU\b/.test(x.d); }));
+  // IU-dosed fat-soluble vitamins show BOTH units (metric + IU in parentheses)
+  ['vitd3','vita','vite'].forEach(function(id){
+    var c = G.SUPPLEMENT_CAT.find(function(e){ return e.id===id; });
+    check('units: '+id+' present and shows metric + IU',
+      !!c && c.doses.every(function(d){ return /(µg|mg)\b/.test(d) && /\(\s*[\d.]+\s*IU\s*\)/.test(d); }));
+  });
+
+  // Display formatter: supplements saved before the µg change keep their old stored dose,
+  // but must render correctly — the reported "Vitamin D3 shows 5000 IU only" bug.
+  if (typeof G._suppFmtDose === 'function') {
+    check('display: legacy Vitamin D3 "5000 IU" renders as metric + IU',
+      G._suppFmtDose('vitd3','5000 IU') === '125 µg (5000 IU)', G._suppFmtDose('vitd3','5000 IU'));
+    check('display: legacy "100 mcg" renders as "100 µg"',
+      G._suppFmtDose('vitk2','100 mcg') === '100 µg');
+    check('display: mg doses are untouched',
+      G._suppFmtDose('boron','10 mg') === '10 mg');
+    check('display: already-metric dose passes through unchanged',
+      G._suppFmtDose('vitd3','125 µg (5000 IU)') === '125 µg (5000 IU)');
+    check('display: never shows "mcg" after formatting',
+      ['100 mcg','250 mcg','5000 IU'].every(function(x){ return G._suppFmtDose('selenium',x).indexOf('mcg') === -1; }));
+  }
+
   // cadence: daily always active
   check('daily supplement active on any day',
     G._suppActiveOn({freq:'daily'}, new Date('2026-07-03')) === true);
@@ -3851,8 +3884,161 @@ if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
   check('syncSupplementsFromAgent is defined', typeof G.syncSupplementsFromAgent === 'function');
   check('pushSupplementToAgent / deleteSupplementFromAgent defined',
     typeof G.pushSupplementToAgent === 'function' && typeof G.deleteSupplementFromAgent === 'function');
+
+  // ── checkboxes: slots + taken-state rendering ──
+  check('_suppSlots: AM & PM expands to two slots',
+    JSON.stringify(G._suppSlots('AMPM')) === '["AM","PM"]');
+  check('_suppSlots: AM / PM single slot',
+    JSON.stringify(G._suppSlots('AM')) === '["AM"]' && JSON.stringify(G._suppSlots('PM')) === '["PM"]');
+  check('toggleSupplementDose + syncSupplementLogFromAgent defined',
+    typeof G.toggleSupplementDose === 'function' && typeof G.syncSupplementLogFromAgent === 'function');
+
+  if (typeof G.renderTodaySupplements === 'function') {
+    var _cbHTML = null;
+    var _savedGE2 = G.document.getElementById;
+    var _capEl2 = { set innerHTML(v){ _cbHTML = v; }, get innerHTML(){ return _cbHTML; } };
+    G.document.getElementById = function(id){ return id==='today-supplements' ? _capEl2 : _savedGE2(id); };
+    // an AM&PM daily supplement → two checkbox slots; mark the AM slot taken
+    G._supplements = [{id:'x', supp_id:'vitd3', name:'Vitamin D3', dose:'5000 IU', freq:'daily', timing:'AMPM'}];
+    G._suppLog = {};
+    G._suppLog[G._suppLogKey('vitd3','2026-07-01','AM')] = true;
+    G.renderTodaySupplements(new Date('2026-07-01T09:00:00'));
+    check('checkbox row: renders a check-box element', typeof _cbHTML==='string' && /check-box/.test(_cbHTML));
+    check('checkbox row: AM slot shows as checked', typeof _cbHTML==='string' && /check-box checked/.test(_cbHTML));
+    check('checkbox row: badge counts done / total slots', typeof _cbHTML==='string' && /1 \/ 2/.test(_cbHTML));
+    check('checkbox row: onclick wires toggleSupplementDose', typeof _cbHTML==='string' && /toggleSupplementDose\(/.test(_cbHTML));
+    G.document.getElementById = _savedGE2;
+    G._supplements = []; G._suppLog = {};
+  }
+
+  // ── SHBG: supplements feed the free-T (systemic-interaction) model ──
+  if (typeof G._tcComputeGhStack === 'function') {
+    var _savedSys = G._tcSysInter, _savedStacks = G._tcActiveStacks, _savedSupp = G._supplements, _savedGh = G._tcGhStack;
+    G._tcSysInter = { boron: { shbg: { direction:'suppress', maxSuppression:0.25, halfTimeDays:14 } } };
+    G._tcActiveStacks = null;
+    G._supplements = [{id:'b', supp_id:'boron', name:'Boron', dose:'6 mg', freq:'daily', timing:'AM', start_date:'2026-06-01'}];
+    G._tcGhStack = [];
+    G._tcComputeGhStack();
+    check('SHBG model includes an active Boron supplement',
+      Array.isArray(G._tcGhStack) && G._tcGhStack.some(function(e){ return e.pepId==='supp_boron' && e.interactions && e.interactions.shbg; }));
+    // a supplement with no systemic interaction is NOT added
+    G._supplements = [{id:'c', supp_id:'vitc', name:'Vitamin C', dose:'1000 mg', freq:'daily', timing:'AM'}];
+    G._tcComputeGhStack();
+    check('SHBG model ignores supplements with no interaction',
+      G._tcGhStack.every(function(e){ return e.pepId !== 'supp_vitc'; }));
+    G._tcSysInter = _savedSys; G._tcActiveStacks = _savedStacks; G._supplements = _savedSupp || []; G._tcGhStack = _savedGh || [];
+  }
 } else {
   check('SUPPLEMENT_CAT defined (tab-supplements.js loaded)', false);
+}
+
+// ── Testosterone → SHBG dose-dependent free-T model (+ uncertainty band) ──
+console.log('\n── T-calc: testosterone→SHBG dose-dependent model + β band ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _shSavedTp   = G._tcp;
+  var _shSavedBw   = G._tcBwEntries;
+  var _shSavedGh   = G._tcGhStack;
+  var _shSavedGE   = G.document.getElementById;
+
+  var _shCap = null;
+  var _shCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop, fillText:noop,
+    closePath:noop, save:noop, restore:noop, fillRect:noop, setLineDash:noop,
+    strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    measureText:function(){ return {width:0}; }, createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  G.document.getElementById = function(id){
+    if (id==='tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testShbgHook: function(v){ _shCap = v; },
+      getContext: function(){ return _shCtx; }
+    };
+    return _shSavedGE(id);
+  };
+
+  // Testosterone-ester schedule, bloodwork with total T + SHBG (activates the model).
+  var _shLog = [
+    {compId:'testoviron', doseMg:'100', date:'2026-06-27'},
+    {compId:'testoviron', doseMg:'150', date:'2026-06-28'}
+  ];
+  for (var _shi=0; _shi<10; _shi++){ var _shd=new Date(new Date('2026-06-29').getTime()+_shi*2*86400000); _shLog.push({compId:'nebido', doseMg:'102', date:_shd.getFullYear()+'-'+String(_shd.getMonth()+1).padStart(2,'0')+'-'+String(_shd.getDate()).padStart(2,'0')}); }
+
+  G._tcp = {measuredFT:'217', currentDoseMgWk:'0', totalT:'16.2', shbg:'45', birthYear:'1980', manualLog:_shLog};
+  G._tcBwEntries = [{date:'2026-06-27', free_t:217, total_t:16.2, shbg:45}];
+  G._tcGhStack = [];  // no compound suppressors — testosterone alone must drive the model
+
+  var _shThrew = false;
+  try { _shCap = null; G._tcDrawManualChart('tc-manual-chart', _shLog); }
+  catch(e){ _shThrew = true; console.error('  T→SHBG test threw:', e.message); }
+  check('T→SHBG: no crash', !_shThrew);
+  check('T→SHBG: model activates from total T + SHBG alone (no GH/Boron needed)', !_shThrew && _shCap !== null);
+
+  if (_shCap) {
+    var _arr=_shCap.arr, _lo=_shCap.lo, _hi=_shCap.hi, _cal=_shCap.calFT, _ref=_shCap.refDay, _tot=_shCap.total;
+    // peak index by central curve
+    var _pk=0,_pv=0; for (var _t=0; _t<_tot.length; _t++){ var _v=_tot[_t]*_arr[_t]; if(_v>_pv){_pv=_v;_pk=_t;} }
+    check('T→SHBG: curve stays anchored at the draw (factor = 1 there)',
+      Math.abs(_arr[_ref]/_cal - 1) < 1e-6, 'arr[ref]/calFT='+(_arr[_ref]/_cal).toFixed(8));
+    check('T→SHBG: band pinches to zero width at the draw',
+      Math.abs(_lo[_ref]-_hi[_ref]) < 1e-6);
+    check('T→SHBG: free-T fraction rises above the draw dose (SHBG suppressed)',
+      _arr[_pk] > _cal * 1.02, 'arr[peak]/calFT='+(_arr[_pk]/_cal).toFixed(4));
+    check('T→SHBG: β band brackets the central curve at the peak',
+      _lo[_pk] <= _arr[_pk] + 1e-9 && _arr[_pk] <= _hi[_pk] + 1e-9);
+    check('T→SHBG: band has real width away from the draw (hi > lo at peak)',
+      _hi[_pk] > _lo[_pk] * 1.01);
+    // model raises the peak vs a flat (linear) calibration
+    check('T→SHBG: modelled peak exceeds the naive linear peak',
+      _tot[_pk]*_arr[_pk] > _tot[_pk]*_cal * 1.02);
+  }
+
+  G._tcp = _shSavedTp; G._tcBwEntries = _shSavedBw; G._tcGhStack = _shSavedGh;
+  G.document.getElementById = _shSavedGE;
+}
+
+// ── Per-user β calibration (SHBG ∝ totalT^−β fitted from the user's own labs) ──
+console.log('\n── T-calc: β personalised from the user\'s own bloodwork (no hardcoding) ──');
+if (typeof G._tcFitBeta === 'function') {
+  function _synth(tt, b){ return {total_t: tt, shbg: 60 * Math.pow(tt, -b)}; }
+  // clean data generated with a known exponent must be recovered
+  var _fit2 = G._tcFitBeta([_synth(15,0.30), _synth(45,0.30)]);
+  check('β fit: recovers exponent from 2 clean labs', _fit2 && Math.abs(_fit2.beta - 0.30) < 0.02, _fit2 && ('β='+_fit2.beta.toFixed(4)));
+  var _fit4 = G._tcFitBeta([_synth(15,0.30), _synth(25,0.30), _synth(40,0.30), _synth(60,0.30)]);
+  check('β fit: recovers exponent from 4 clean labs', _fit4 && Math.abs(_fit4.beta - 0.30) < 0.02);
+  check('β fit: 4 labs report n and a band', _fit4 && _fit4.n === 4 && _fit4.hi > _fit4.lo && _fit4.lo < _fit4.beta && _fit4.beta < _fit4.hi);
+  check('β fit: more consistent labs → tighter band than the 2-lab default (±0.10)',
+    _fit4 && (_fit4.hi - _fit4.lo) < 0.20);
+  // not enough / unusable data → null (caller uses population fallback)
+  check('β fit: null with a single lab', G._tcFitBeta([_synth(20,0.3)]) === null);
+  check('β fit: null when all labs are at the same T level', G._tcFitBeta([{total_t:20,shbg:40},{total_t:20,shbg:42}]) === null);
+  check('β fit: null when SHBG is missing', G._tcFitBeta([{total_t:15},{total_t:45}]) === null);
+  check('β fit: null on empty/undefined', G._tcFitBeta([]) === null && G._tcFitBeta(null) === null);
+  // physiological clamp — a nonsense steep drop is capped
+  var _fitSteep = G._tcFitBeta([{total_t:15,shbg:200},{total_t:60,shbg:1}]);
+  check('β fit: clamps β to a physiological ceiling (≤0.60)', _fitSteep && _fitSteep.beta <= 0.60 + 1e-9);
+
+  // integration: with ≥2 labs at different T, the SHBG model reports personalised β
+  if (typeof G._tcDrawManualChart === 'function') {
+    var _pbSaveTp = G._tcp, _pbSaveBw = G._tcBwEntries, _pbSaveGh = G._tcGhStack, _pbSaveGE = G.document.getElementById;
+    var _pbCap = null;
+    var _pbCtx = { scale:noop,beginPath:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,moveTo:noop,lineTo:noop,measureText:function(){return{width:0};},createLinearGradient:function(){return{addColorStop:noop};} };
+    G.document.getElementById = function(id){ return id==='tc-manual-chart' ? { style:{},classList:{add:noop,remove:noop,contains:function(){return false;}},offsetWidth:350,offsetHeight:250,_testShbgHook:function(v){_pbCap=v;},getContext:function(){return _pbCtx;} } : _pbSaveGE(id); };
+    var _pbLog = [{compId:'testoviron',doseMg:'100',date:'2026-06-27'}];
+    for (var _pi2=0;_pi2<10;_pi2++){ var _pd3=new Date(new Date('2026-06-29').getTime()+_pi2*3*86400000); _pbLog.push({compId:'nebido',doseMg:'100',date:_pd3.getFullYear()+'-'+String(_pd3.getMonth()+1).padStart(2,'0')+'-'+String(_pd3.getDate()).padStart(2,'0')}); }
+    G._tcp = {measuredFT:'400', currentDoseMgWk:'0', totalT:'30', shbg:'30', birthYear:'1980', manualLog:_pbLog};
+    // two blood tests at different T levels → personalised fit
+    G._tcBwEntries = [{date:'2026-06-27', total_t:30, shbg:30, free_t:400},{date:'2026-06-20', total_t:15, shbg:45, free_t:220}];
+    G._tcGhStack = [];
+    _pbCap = null; var _pbThrew=false;
+    try { G._tcDrawManualChart('tc-manual-chart', _pbLog); } catch(e){ _pbThrew=true; }
+    check('β fit integration: SHBG model runs with multi-lab data', !_pbThrew && _pbCap !== null);
+    check('β fit integration: model reports personalised β (not the population default)',
+      _pbCap && _pbCap.personalized === true);
+    G._tcp = _pbSaveTp; G._tcBwEntries = _pbSaveBw; G._tcGhStack = _pbSaveGh; G.document.getElementById = _pbSaveGE;
+  }
+} else {
+  check('_tcFitBeta defined', false);
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
