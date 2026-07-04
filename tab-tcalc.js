@@ -35,6 +35,52 @@ var _tcGhStack = [];          // [{pepId, startDateStr, interactions}] — GH co
 var _tcSysInter = null;       // compounds map from /systemic-interactions
 var _tcActiveStacks = null;   // raw response from /protocol/stacks
 
+// Testosterone → SHBG dose-response model. Exogenous androgens suppress hepatic
+// SHBG dose-dependently (SHBG ∝ T^(−β)); this is the dominant driver of free-T
+// drift away from a single bloodwork calibration. β is fitted PER USER from their
+// own blood tests at runtime (see _tcFitBeta) — the values below are only the
+// POPULATION FALLBACK used until a user has ≥2 SHBG labs at different T levels.
+// Not tailored to any individual.
+var TCALC_TSHBG_BETA    = 0.25;
+var TCALC_TSHBG_BETA_LO = 0.15;
+var TCALC_TSHBG_BETA_HI = 0.40;
+var TCALC_TSHBG_LAG_DAYS = 25;   // SHBG responds over weeks — lag the T level by this τ
+
+// Fit the user's personal SHBG→T dose-response exponent β from their own bloodwork.
+// Model: SHBG ∝ totalT^(−β)  ⇒  ln(SHBG) = a − β·ln(totalT). β is the negated slope of a
+// least-squares line through the user's (total T, SHBG) blood-test points. The band comes
+// from the fit's own scatter (standard error), so it tightens as more labs are logged.
+// Returns null when there isn't enough spread/data — the caller then uses the population
+// fallback above. This keeps calibration inside the app and adapts to ANY user; nothing
+// is hardcoded to a specific person.
+function _tcFitBeta(entries) {
+  if (!entries || !entries.length) return null;
+  var pts = [];
+  entries.forEach(function(e) {
+    var tt = parseFloat(e && e.total_t), sh = parseFloat(e && e.shbg);
+    if (tt > 0 && sh > 0) pts.push({ x: Math.log(tt), y: Math.log(sh) });
+  });
+  if (pts.length < 2) return null;
+  var xs = pts.map(function(p){ return p.x; });
+  if (Math.max.apply(null, xs) - Math.min.apply(null, xs) < 0.05) return null; // T levels too similar
+  var n = pts.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  pts.forEach(function(p){ sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; });
+  var denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-9) return null;
+  var slope = (n * sxy - sx * sy) / denom;
+  var beta = Math.max(0.05, Math.min(0.60, -slope));   // clamp to a physiological range
+  var half;
+  if (n >= 3) {
+    var intercept = (sy - slope * sx) / n, ssr = 0;
+    pts.forEach(function(p){ var pred = intercept + slope * p.x; ssr += (p.y - pred) * (p.y - pred); });
+    var seSlope = Math.sqrt((ssr / (n - 2)) / (sxx - sx * sx / n));
+    half = Math.max(0.04, Math.min(0.25, seSlope));    // ~1 SE band, clamped
+  } else {
+    half = 0.10;                                        // two points: no scatter estimate yet
+  }
+  return { beta: beta, lo: Math.max(0.02, beta - half), hi: Math.min(0.70, beta + half), n: n };
+}
+
 // ── Blood test catalogue ───────────────────────────────────────────────────────
 var _TC_BW_TESTS = [
   {name:'Estradiol',          units:['pmol/L','pg/mL']},
@@ -180,8 +226,9 @@ function _tcSaveProfile() {
 }
 
 function _tcComputeGhStack() {
-  if (!_tcActiveStacks || !_tcSysInter) return;
+  if (!_tcSysInter) return;
   _tcGhStack = [];
+  if (_tcActiveStacks) {
   var idxs = _tcActiveStacks.active_indices ||
     (_tcActiveStacks.active_index != null ? [_tcActiveStacks.active_index] : []);
   idxs.forEach(function(idx) {
@@ -216,6 +263,17 @@ function _tcComputeGhStack() {
         _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter});
       });
     }
+  });
+  }
+  // Over-the-counter supplements that affect SHBG (e.g. Boron). Uses the same
+  // systemic-interaction model as compounds — each active supplement whose id has
+  // an SHBG interaction is added to the free-T model at its own start date.
+  var _supps = (typeof _supplements !== 'undefined' && _supplements) ? _supplements : [];
+  _supps.forEach(function(s) {
+    if (!s || !s.supp_id) return;
+    var inter = _tcSysInter[s.supp_id];
+    if (!inter || !inter.shbg || inter.shbg.direction !== 'suppress') return;
+    _tcGhStack.push({pepId: 'supp_' + s.supp_id, startDateStr: s.start_date || '', interactions: inter});
   });
 }
 
@@ -1284,69 +1342,90 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   var scale     = calFT || 1;
   var unitLabel = calFT ? 'pmol/L' : 'mg';
 
-  // Time-varying SHBG → free-T model when SHBG-suppressing compounds are active in protocol.
-  // Combines multiple compounds multiplicatively:
-  //   SHBG(t) = SHBG_baseline × ∏_i (1 − maxSupp_i × (1 − e^(−t_i/halfTime_i)))
-  // SHBG_baseline is back-calculated from the bloodwork SHBG using the same product at bw date,
-  // so the model is exactly anchored at the measured value.
-  var calFT_arr = null;
+  // Time-varying SHBG → free-T model.  Two drivers, both anchored at the bloodwork draw so the
+  // curve passes exactly through the measured free T / SHBG (no double-counting):
+  //   1. SHBG-suppressing compounds & supplements (GH peptides, Boron): fixed-asymptote ramp
+  //      SHBG ×= ∏_i (1 − maxSupp_i × (1 − e^(−t/halfTime_i))).
+  //   2. Testosterone's OWN dose-dependent SHBG suppression: SHBG scales as a power law of the
+  //      modelled (lagged) T level relative to the draw — SHBG(t)/SHBG_draw = (T_lag(t)/T_lag_draw)^(−β).
+  //      This is the dominant driver on a TRT/enhanced schedule and the main source of drift
+  //      between blood tests. A β-uncertainty band (0.15–0.40 around 0.25) is drawn: it pinches
+  //      to zero width at the draw (calibrated there) and widens away from it.
+  var calFT_arr = null, _calFTlo = null, _calFThi = null;
   var _ghAnnot  = '';
-  if (calFT && _tcGhStack.length > 0) {
-    var _ttNum  = parseFloat(_tcp.totalT) || 0;
-    var _shbgBw = parseFloat(_tcp.shbg)   || 0;
-    if (_ttNum > 0 && _shbgBw > 0) {
-      var _vermBw = _tcVermeulenFT(_ttNum, _shbgBw);
-      if (_vermBw) {
-        // Precompute per-compound parameters (day offsets relative to firstDate)
-        var _ghParams = [];
-        _tcGhStack.forEach(function(gh) {
-          var _ghStart = gh.startDateStr ? new Date(gh.startDateStr + 'T12:00:00') : null;
-          if (!_ghStart) return;
-          _ghParams.push({
-            ghDay0:   Math.round((_ghStart - firstDate) / 86400000),
-            maxSupp:  gh.interactions.shbg.maxSuppression,
-            halfTime: gh.interactions.shbg.halfTimeDays
-          });
+  var _betaAnnot = '';
+  var _ttNum  = parseFloat(_tcp.totalT) || 0;
+  var _shbgBw = parseFloat(_tcp.shbg)   || 0;
+  if (calFT && _ttNum > 0 && _shbgBw > 0) {
+    var _vermBw = _tcVermeulenFT(_ttNum, _shbgBw);
+    if (_vermBw) {
+      // Compound SHBG suppressors (may be empty — testosterone alone still drives the model).
+      var _ghParams = [];
+      _tcGhStack.forEach(function(gh) {
+        var _ghStart = gh.startDateStr ? new Date(gh.startDateStr + 'T12:00:00') : null;
+        if (!_ghStart) return;
+        _ghParams.push({
+          ghDay0:   Math.round((_ghStart - firstDate) / 86400000),
+          maxSupp:  gh.interactions.shbg.maxSuppression,
+          halfTime: gh.interactions.shbg.halfTimeDays
         });
-        if (_ghParams.length > 0) {
-          // Back-calculate single shared SHBG baseline from combined suppression at bloodwork date.
-          // SHBG_bw = SHBG_base × ∏_i (1 − supp_i(t_bw))  →  SHBG_base = SHBG_bw / product
-          var _shbgBase = _shbgBw;
-          var _bwDate = _tcBwEntries && _tcBwEntries[0] ? _tcBwEntries[0].date : null;
-          if (_bwDate) {
-            var _bwDay = Math.round((new Date(_bwDate + 'T12:00:00') - firstDate) / 86400000);
-            var _prodBw = 1;
-            _ghParams.forEach(function(gp) {
-              var _tBw = Math.max(0, _bwDay - gp.ghDay0);
-              if (_tBw > 0) _prodBw *= (1 - gp.maxSupp * (1 - Math.exp(-_tBw / gp.halfTime)));
-            });
-            if (_prodBw > 0.05) _shbgBase = _shbgBw / _prodBw;
-          }
-
-          // Build per-day calFT: combined multiplicative SHBG(t) → Vermeulen → scale ratio
-          calFT_arr = new Float64Array(totalDays + 1);
-          var _nowDay = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-          for (var _ct = 0; _ct <= totalDays; _ct++) {
-            var _prod = 1;
-            _ghParams.forEach(function(gp) {
-              var _tOn = Math.max(0, _ct - gp.ghDay0);
-              _prod *= (1 - gp.maxSupp * (1 - Math.exp(-_tOn / gp.halfTime)));
-            });
-            var _shbgT = Math.max(1, _shbgBase * _prod);
-            var _vermT = _tcVermeulenFT(_ttNum, _shbgT);
-            calFT_arr[_ct] = _vermT ? calFT * (_vermT / _vermBw) : calFT;
-          }
-
-          // Combined suppression at "now" for chart annotation
-          var _prodNow = 1;
-          _ghParams.forEach(function(gp) {
-            var _tNow = Math.max(0, _nowDay - gp.ghDay0);
-            _prodNow *= (1 - gp.maxSupp * (1 - Math.exp(-_tNow / gp.halfTime)));
-          });
-          var _combSuppNow = 1 - _prodNow;
-          if (_combSuppNow > 0.01) _ghAnnot = 'SHBG −' + Math.round(_combSuppNow * 100) + '%';
+      });
+      var _ghProd = function(day) {
+        var p = 1;
+        _ghParams.forEach(function(gp) {
+          var t = Math.max(0, day - gp.ghDay0);
+          if (t > 0) p *= (1 - gp.maxSupp * (1 - Math.exp(-t / gp.halfTime)));
+        });
+        return p;
+      };
+      // SHBG anchor day: the bloodwork draw if entered, else the free-T calibration anchor.
+      var _bwDate = _tcBwEntries && _tcBwEntries[0] ? _tcBwEntries[0].date : null;
+      var _shbgRefDay = _bwDate
+        ? Math.round((new Date(_bwDate + 'T12:00:00') - firstDate) / 86400000)
+        : _anchorDay;
+      _shbgRefDay = Math.max(0, Math.min(totalDays, _shbgRefDay || 0));
+      // Back-calculate the unsuppressed SHBG base from the compound product at the anchor.
+      var _prodRef = _ghProd(_shbgRefDay);
+      var _shbgBase = (_prodRef > 0.05) ? _shbgBw / _prodRef : _shbgBw;
+      // Lagged testosterone level: EMA of the modelled accumulation (SHBG responds over weeks).
+      var _tlag = new Float64Array(totalDays + 1);
+      var _alpha = 1 - Math.exp(-1 / TCALC_TSHBG_LAG_DAYS);
+      _tlag[0] = total[0];
+      for (var _li = 1; _li <= totalDays; _li++) _tlag[_li] = _tlag[_li - 1] + (total[_li] - _tlag[_li - 1]) * _alpha;
+      var _tlagRef = _tlag[_shbgRefDay] || _tlag[0] || 1;
+      var _tFactor = function(day, beta) {
+        var r = (_tlag[day] || _tlagRef) / _tlagRef;
+        if (r <= 0) return 1;
+        var f = Math.pow(r, -beta);
+        return Math.max(0.35, Math.min(1.30, f));  // physiological clamp: ≤65% drop, ≤30% rise
+      };
+      var _mkArr = function(beta) {
+        var arr = new Float64Array(totalDays + 1);
+        for (var t = 0; t <= totalDays; t++) {
+          var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tFactor(t, beta));
+          var _vermT = _tcVermeulenFT(_ttNum, _shbgT);
+          arr[t] = _vermT ? calFT * (_vermT / _vermBw) : calFT;
         }
-      }
+        return arr;
+      };
+      // Personalise β from the user's own blood tests; fall back to the population default.
+      var _betaFit = _tcFitBeta(_tcBwEntries);
+      var _betaC  = _betaFit ? _betaFit.beta : TCALC_TSHBG_BETA;
+      var _betaLo = _betaFit ? _betaFit.lo   : TCALC_TSHBG_BETA_LO;
+      var _betaHi = _betaFit ? _betaFit.hi   : TCALC_TSHBG_BETA_HI;
+      _betaAnnot = _betaFit ? ('β ' + _betaC.toFixed(2) + ' · ' + _betaFit.n + ' labs')
+                            : ('β ' + TCALC_TSHBG_BETA.toFixed(2) + ' · population');
+
+      calFT_arr = _mkArr(_betaC);
+      _calFTlo  = _mkArr(_betaLo);
+      _calFThi  = _mkArr(_betaHi);
+      if (canvas._testShbgHook) canvas._testShbgHook({ calFT: calFT, arr: calFT_arr, lo: _calFTlo, hi: _calFThi, refDay: _shbgRefDay, total: total, beta: _betaC, personalized: !!_betaFit });
+
+      // Modelled SHBG change at "now" vs the bloodwork value, for the chart annotation.
+      var _nowDay = Math.max(0, Math.min(totalDays, Math.round((Date.now() - firstDate.getTime()) / 86400000)));
+      var _shbgNow = _shbgBase * _ghProd(_nowDay) * _tFactor(_nowDay, _betaC);
+      var _shbgDelta = _shbgBw > 0 ? (_shbgNow / _shbgBw - 1) : 0;
+      if (Math.abs(_shbgDelta) > 0.01) _ghAnnot = 'SHBG ' + (_shbgDelta < 0 ? '−' : '+') + Math.round(Math.abs(_shbgDelta) * 100) + '%';
     }
   }
 
@@ -1369,7 +1448,8 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   var maxV = 0;
   for (var i = 0; i <= totalDays; i++) {
-    var _sv = total[i] * (calFT_arr ? calFT_arr[i] : scale);
+    var _svc = total[i] * (calFT_arr ? calFT_arr[i] : scale);
+    var _sv  = _calFThi ? Math.max(_svc, total[i] * _calFThi[i]) : _svc;  // include band top
     if (_sv > maxV) maxV = _sv;
   }
   if (_mftNum && calFT && _mftNum > maxV) maxV = _mftNum * 1.1;
@@ -1434,14 +1514,33 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   ctx.textAlign = 'center'; ctx.fillStyle = '#444'; ctx.font = '8px DM Sans,sans-serif';
   ctx.fillText(unitLabel, 0, 0); ctx.restore();
 
-  // GH SHBG suppression annotation (top-right of chart)
+  // SHBG suppression + β-source annotation (top-right of chart)
   if (_ghAnnot) {
     ctx.font = '8px DM Sans,sans-serif'; ctx.textAlign = 'right';
     ctx.fillStyle = '#3cffa077';
     ctx.fillText(_ghAnnot, PAD.left + cW, PAD.top + 9);
   }
+  if (_betaAnnot) {
+    ctx.font = '8px DM Sans,sans-serif'; ctx.textAlign = 'right';
+    ctx.fillStyle = '#8891a5aa';   // muted: shows whether β is personalised or population default
+    ctx.fillText(_betaAnnot, PAD.left + cW, PAD.top + (_ghAnnot ? 19 : 9));
+  }
 
   var lineColor = _tcCompInfo(sorted[0].compId).dot || '#e8a020';
+
+  // SHBG β-uncertainty band: shaded region between the β=0.15 and β=0.40 free-T curves.
+  // Pinches to zero width at the bloodwork draw (calibrated) and widens away from it.
+  if (calFT_arr && _calFTlo && _calFThi) {
+    var _bandTop = function(t){ return Math.max(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
+    var _bandBot = function(t){ return Math.min(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_bandTop(xStart)));
+    for (var _bt = xStart + 1; _bt <= xEnd; _bt++) ctx.lineTo(xOf(_bt), yOf(_bandTop(_bt)));
+    for (var _bb = xEnd; _bb >= xStart; _bb--) ctx.lineTo(xOf(_bb), yOf(_bandBot(_bb)));
+    ctx.closePath();
+    ctx.fillStyle = lineColor + '26';
+    ctx.fill();
+  }
 
   // Peak highlight line + y-axis label
   if (calFT && peakV > 0 && peakV > (_mftNum || 0) * 1.05) {
@@ -1992,6 +2091,7 @@ async function _tcPushLogToSchedule() {
 // ── Main build ────────────────────────────────────────────────────────────────
 
 function buildTCalc() {
+  _tcComputeGhStack();  // refresh SHBG stack (compounds + supplements like Boron)
   var el = document.getElementById('tcalc-body');
   if (!el) return;
 
