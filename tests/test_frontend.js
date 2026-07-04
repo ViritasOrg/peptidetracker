@@ -1093,6 +1093,21 @@ const rowMcgSmall = G.reconDoseRow('AM','200','mcg',5,2,'mg');
 check('reconDoseRow mcg<1mg: shows 8 IU',      rowMcgSmall.includes('8 IU'),  `snippet: ${rowMcgSmall.slice(0,150)}`);
 check('reconDoseRow mcg<1mg: no mcg text',     !rowMcgSmall.includes('mcg'), `snippet: ${rowMcgSmall.slice(0,150)}`);
 
+// ── µg unit display: never show incorrect "mcg" to the user ──────────────────
+// Internal unit key stays 'mcg' (calc logic unchanged); only the DISPLAYED label is µg.
+console.log('\n── µg unit display (mcg → µg) ──────────────────────────────');
+// _doseLabel: mcg-unit dose renders as µg, never mcg
+const dlMcg = G._doseLabel('ipamorelin','200','mcg');
+check('_doseLabel mcg: displays µg',           dlMcg.includes('µg'),  `got: ${dlMcg}`);
+check('_doseLabel mcg: never shows mcg',        !dlMcg.includes('mcg'), `got: ${dlMcg}`);
+check('_doseLabel mg: unchanged (no µg)',      !G._doseLabel('ipamorelin','2','mg').includes('µg'), 'mg dose leaked µg');
+// reconDoseRow: mcg input ≥1mg shows the dose with µg label, not mcg
+const rowMcgBig = G.reconDoseRow('AM','2000','mcg',5,2,'mg');
+check('reconDoseRow mcg≥1mg: shows µg',        rowMcgBig.includes('2000 µg'), `snippet: ${rowMcgBig.slice(0,150)}`);
+check('reconDoseRow mcg≥1mg: never shows mcg',  !rowMcgBig.includes('mcg'),    `snippet: ${rowMcgBig.slice(0,150)}`);
+// UNIT_LABELS drives the Today/day views' raw-unit rendering
+check('UNIT_LABELS maps mcg→µg',               G.UNIT_LABELS && G.UNIT_LABELS.mcg==='µg', `got: ${G.UNIT_LABELS&&G.UNIT_LABELS.mcg}`);
+
 // ── buildReconCard HTML rendering ─────────────────────────────────────────────
 console.log('\n── buildReconCard HTML rendering ───────────────────────────');
 G._reconStackIdx=0; G._reconState={};
@@ -2830,6 +2845,32 @@ console.log('\n── _dosePersonalization: sex / age / weight modifiers ──�
     check('_dosePersonalization(epitalon): no personalization mods (epitalon has none)',
       modsEpitalon.length===0);
 
+    // ── IGF-1 → GH-axis direction ──
+    if(typeof G._igf1Recommendation==='function'){
+      setProfile('male',45,80);
+      check('_igf1ToNgml: nmol/L → ng/mL (×7.649)', Math.abs(G._igf1ToNgml(30,'nmol/L')-229.47)<1);
+      check('_igf1ToNgml: ng/mL passes through',     G._igf1ToNgml(150,'ng/mL')===150);
+      check('_igf1RefRange(45) = 90–260 ng/mL', (function(){var r=G._igf1RefRange(45);return r.lo===90&&r.hi===260;})());
+      check('_igf1Rec: below upper-third → increase', (function(){var r=G._igf1Recommendation(120,'ng/mL',45);return r.status==='Below target'&&r.direction==='increase';})());
+      check('_igf1Rec: upper-normal → hold',           (function(){var r=G._igf1Recommendation(250,'ng/mL',45);return r.status==='At target'&&r.direction==='hold';})());
+      check('_igf1Rec: above range → reduce',          (function(){var r=G._igf1Recommendation(300,'ng/mL',45);return r.status==='Above range'&&r.direction==='reduce';})());
+      check('_igf1Rec: never emits a mg number',       (function(){var r=G._igf1Recommendation(120,'ng/mL',45);return !/\bmg\b/.test(r.text);})());
+      check('_igf1Rec: lab range override used',        (function(){var r=G._igf1Recommendation(150,'ng/mL',45,100,200);return r.src==='lab'&&r.hi===200;})());
+      check('_igf1Rec: override converts with value unit',(function(){var r=G._igf1Recommendation(26,'nmol/L',45,13,34);return r.src==='lab'&&Math.abs(r.hi-260)<2;})());
+      // surfaces in _dosePersonalization for GH-axis when IGF-1 is in bloodwork
+      var _savedBw2=G._tcBwEntries;
+      G._tcBwEntries=[{date:'2026-07-01',extra:[{name:'IGF-1',value:120,unit:'ng/mL'}]}];
+      var _ghMods=G._dosePersonalization('ipamorelin',G._userProfile());
+      check('_dosePersonalization(ipamorelin): IGF-1 mod present when logged',
+        _ghMods.some(function(m){return m.text&&m.text.indexOf('IGF-1')!==-1&&m.text.indexOf('increasing')!==-1;}));
+      var _nonGh=G._dosePersonalization('retatrutide',G._userProfile());
+      check('_dosePersonalization(retatrutide): no IGF-1 mod (not GH-axis)',
+        !_nonGh.some(function(m){return m.text&&m.text.indexOf('IGF-1')!==-1;}));
+      G._tcBwEntries=null;
+      check('_latestBwMarker: null when no bloodwork', G._latestBwMarker('IGF-1')===null);
+      G._tcBwEntries=_savedBw2;
+    }
+
     clearProfile();
   }
 }
@@ -3878,6 +3919,86 @@ if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
     check('renderTodaySupplements: empty when no supplements active', _rtsHTML === '');
     G.document.getElementById = _savedGE;
     G._supplements = [];
+  }
+
+  // ── Vitamin D (25-OH-D) → D3 dose recommendation ──
+  if (typeof G._vitDRecommendation === 'function') {
+    // unit conversion: ng/mL → nmol/L (× 2.496)
+    check('_vitDToNmol: ng/mL converts (20 → ~49.9)', Math.abs(G._vitDToNmol(20,'ng/mL') - 49.92) < 0.1);
+    check('_vitDToNmol: nmol/L passes through',        G._vitDToNmol(60,'nmol/L') === 60);
+    check('_vitDToNmol: rejects non-positive',         G._vitDToNmol(0,'nmol/L') === null);
+    // classification bands
+    check('_vitDRec: <50 = Deficient',        G._vitDRecommendation(40).status === 'Deficient');
+    check('_vitDRec: Deficient has loading',   /5000 IU/.test(G._vitDRecommendation(40).loading||''));
+    check('_vitDRec: 50–75 = Insufficient',    G._vitDRecommendation(60).status === 'Insufficient');
+    check('_vitDRec: 75–125 = Sufficient',     /Sufficient/.test(G._vitDRecommendation(90).status));
+    check('_vitDRec: 125–250 = Above target',  G._vitDRecommendation(150).status === 'Above target');
+    check('_vitDRec: >250 = Excess',           G._vitDRecommendation(300).status === 'Excess');
+    // weight-based loading total (van Groningen): 40×(75−40)×90 = 126000 IU
+    check('_vitDRec: weight-based loading total', /126,000 IU/.test(G._vitDRecommendation(40,90).totalNote||''));
+    check('_vitDRec: no weight → no total note',   !G._vitDRecommendation(40,0).totalNote);
+    // marker lookup from bloodwork extras (newest-first)
+    var _savedBw = G._tcBwEntries;
+    G._tcBwEntries = [{date:'2026-07-01', extra:[{name:'Vitamin D', value:42, unit:'nmol/L'}]}];
+    var _mk = G._suppLatestBwMarker('Vitamin D');
+    check('_suppLatestBwMarker: finds Vitamin D in extras', _mk && Number(_mk.value) === 42 && _mk.unit === 'nmol/L');
+    check('_suppLatestBwMarker: null for missing marker',   G._suppLatestBwMarker('IGF-1') === null);
+    check('_renderVitDCard: renders card when level present',
+      typeof G._renderVitDCard()==='string' && /Deficient/.test(G._renderVitDCard()) && /nmol\/L/.test(G._renderVitDCard()));
+    G._tcBwEntries = null;
+    check('_renderVitDCard: empty when no bloodwork', G._renderVitDCard() === '');
+    G._tcBwEntries = _savedBw;
+  }
+
+  // ── custom dose via two dropdowns (no free text) ──
+  if (typeof G._suppParseDose === 'function') {
+    check('_suppParseDose: "125 µg (5000 IU)" → 125 µg',
+      (function(){var p=G._suppParseDose('125 µg (5000 IU)');return p&&p.amount===125&&p.unit==='µg';})());
+    check('_suppParseDose: "5 g" → 5 g',
+      (function(){var p=G._suppParseDose('5 g');return p&&p.amount===5&&p.unit==='g';})());
+    check('_suppParseDose: legacy "100 mcg" → 100 µg',
+      (function(){var p=G._suppParseDose('100 mcg');return p&&p.amount===100&&p.unit==='µg';})());
+    check('_suppParseDose: "2000 mg" → 2000 mg',
+      (function(){var p=G._suppParseDose('2000 mg');return p&&p.amount===2000&&p.unit==='mg';})());
+    check('_suppParseDose: count-based "1 capsule" → null (no dropdown unit)',
+      G._suppParseDose('1 capsule') === null);
+    check('_suppParseDose: empty → null', G._suppParseDose('') === null);
+    // unit dropdown maps to a fixed unit set; amount options are per-unit
+    check('_SUPP_UNITS is [µg,mg,g,IU]', JSON.stringify(G._SUPP_UNITS) === JSON.stringify(['µg','mg','g','IU']));
+    check('_suppAmountOptions(µg): starts 5, ends 1000', (function(){var o=G._suppAmountOptions('µg');return o[0]===5&&o[o.length-1]===1000;})());
+    check('_suppAmountOptions(g): includes fractional 0.5', G._suppAmountOptions('g').indexOf(0.5)!==-1);
+    check('_suppAmountOptions(IU): ends 10000', (function(){var o=G._suppAmountOptions('IU');return o[o.length-1]===10000;})());
+    check('_suppAmountOptions(mg default): ends 2000', (function(){var o=G._suppAmountOptions('mg');return o[o.length-1]===2000;})());
+    check('_suppDefaultAmount: µg=50, mg=100, g=5, IU=1000',
+      G._suppDefaultAmount('µg')===50 && G._suppDefaultAmount('mg')===100 && G._suppDefaultAmount('g')===5 && G._suppDefaultAmount('IU')===1000);
+
+    // DOM wiring: drive the two-dropdown flow end-to-end with select mocks that
+    // mimic a browser <select> (setting innerHTML with a `selected` option updates value).
+    (function(){
+      function mkSel(){ var _html='',_val='';
+        return {
+          set innerHTML(h){ _html=h; var m=/value="([^"]*)"\s+selected/.exec(h); _val = m ? m[1] : ((/value="([^"]*)"/.exec(h)||[])[1]||''); },
+          get innerHTML(){ return _html; },
+          get value(){ return _val; }, set value(v){ _val=String(v); },
+          style:{display:''}, getAttribute:function(){return null;}, setAttribute:function(){}, removeAttribute:function(){} }; }
+      var els={'supp-as-comp':mkSel(),'supp-as-dose':mkSel(),'supp-as-dose-custom':mkSel(),
+        'supp-as-amount':mkSel(),'supp-as-unit':mkSel()};
+      els['supp-as-comp'].value='vitd3';
+      var savedGE=G.document.getElementById;
+      G.document.getElementById=function(id){ return els[id]||savedGE(id); };
+      try {
+        G._suppInitDoseControls(500,'mg');
+        check('dropdown wiring: unit select = mg',            els['supp-as-unit'].value==='mg');
+        check('dropdown wiring: amount select = 500',         els['supp-as-amount'].value==='500');
+        check('dropdown wiring: _suppCurrentDropdownDose = "500 mg"', G._suppCurrentDropdownDose()==='500 mg');
+        els['supp-as-unit'].value='µg'; // user changes unit
+        G._suppUnitSel();
+        check('dropdown wiring: unit switch resets amount to default (50 µg)', G._suppCurrentDropdownDose()==='50 µg');
+        // editing preserves a non-standard amount by injecting it as an option
+        G._suppInitDoseControls(437,'mg');
+        check('dropdown wiring: non-standard amount preserved (437 mg)', G._suppCurrentDropdownDose()==='437 mg');
+      } finally { G.document.getElementById=savedGE; }
+    })();
   }
 
   check('buildSupplements is defined', typeof G.buildSupplements === 'function');
