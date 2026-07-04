@@ -214,6 +214,68 @@ check('initWizard: cycle_length set',      G._wiz.cycle_length>0,               
 check('initWizard: stackIndex=-1',         G._wiz.stackIndex===-1);
 check('initWizard: stackName is string',   typeof G._wiz.stackName==='string'&&G._wiz.stackName.length>0);
 
+// ── _nextStackName: new stacks bump Cycle N (not always "Cycle 1") ──
+if(typeof G._nextStackName==='function'){
+  var _nsSaved=G._userStacks;
+  G._userStacks=[];                       check('_nextStackName: first stack = Cycle 1', G._nextStackName()==='Cycle 1');
+  G._userStacks=[{name:'Cycle 1'}];       check('_nextStackName: after Cycle 1 = Cycle 2', G._nextStackName()==='Cycle 2');
+  G._userStacks=[{name:'Cycle 1'},{name:'Cycle 2'},{name:'Cycle 3'}]; check('_nextStackName: bumps to Cycle 4', G._nextStackName()==='Cycle 4');
+  G._userStacks=[{name:'Cycle 1'},{name:'Cycle 3'}]; check('_nextStackName: past highest Cycle N (no collision)', G._nextStackName()==='Cycle 4');
+  G._userStacks=[{name:'Cutting Stack'},{name:'Bulking'}]; check('_nextStackName: non-cycle names → next slot', G._nextStackName()==='Cycle 3');
+  G._userStacks=_nsSaved;
+  // initWizard uses it for a fresh (non-edit) stack
+  G._userStacks=[{name:'Cycle 1'}]; G.initWizard();
+  check('initWizard: default name bumps (Cycle 2)', G._wiz.stackName==='Cycle 2');
+  G._userStacks=_nsSaved;
+}
+
+// ── TRT tab: surface T-Calc-planned testosterone (the "two ways to plan TRT") ──
+if(typeof G._tcalcTrtSummary==='function'){
+  var _ttSaved=G._injectionsCache;
+  // no tcalc injections → no summary, no card
+  G._injectionsCache={};
+  check('_tcalcTrtSummary: null when no tcalc injections', G._tcalcTrtSummary()===null);
+  check('_renderTcalcTrtCard: empty when nothing planned', G._renderTcalcTrtCard()==='');
+  // seed a tcalc TRT injection + an unrelated stack injection
+  G._injectionsCache={
+    '2026-07-10':[{cycle_id:'tcalc',tier:'trt',compound_id:'test-e',compound_name:'Testosterone Enanthate',dose:'50',unit:'mg',dot:'#e8a020',date:'2026-07-10',source:'tcalc'}],
+    '2026-07-13':[{cycle_id:'tcalc',tier:'trt',compound_id:'test-e',compound_name:'Testosterone Enanthate',dose:'50',unit:'mg',dot:'#e8a020',date:'2026-07-13',source:'tcalc'},
+                  {cycle_id:'stack_x',tier:'peptide',compound_id:'ipamorelin',compound_name:'Ipamorelin',date:'2026-07-13'}]
+  };
+  var _ttSum=G._tcalcTrtSummary();
+  check('_tcalcTrtSummary: finds the tcalc testosterone compound', !!_ttSum && _ttSum.length===1 && _ttSum[0].name==='Testosterone Enanthate');
+  check('_tcalcTrtSummary: counts only tcalc entries (ignores stack peptide)', _ttSum[0].count===2);
+  var _ttCard=G._renderTcalcTrtCard();
+  check('_renderTcalcTrtCard: labels it Planned in T-Calc', /Planned in T-Calc/.test(_ttCard));
+  check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
+  check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
+  // _renderTRTViewTab shows the card and suppresses "No TRT configured"
+  if(typeof G._renderTRTViewTab==='function'){
+    var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
+    check('_renderTRTViewTab: shows T-Calc card when planned there', /Planned in T-Calc/.test(_ttView));
+    check('_renderTRTViewTab: suppresses "No TRT configured" when T-Calc card shows', !/No TRT configured/.test(_ttView));
+    // with no tcalc plan, the empty message returns
+    G._injectionsCache={};
+    var _ttViewEmpty=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
+    check('_renderTRTViewTab: "No TRT configured" when nothing planned', /No TRT configured/.test(_ttViewEmpty));
+  }
+  // edit view (_renderEditTRT) shows the card above the compound list, regardless of toggle
+  if(typeof G._renderEditTRT==='function'){
+    G._injectionsCache={
+      '2026-07-10':[{cycle_id:'tcalc',tier:'trt',compound_id:'test-e',compound_name:'Testosterone Enanthate',dose:'50',unit:'mg',dot:'#e8a020',date:'2026-07-10',source:'tcalc'}]
+    };
+    var _ttEditOff=G._renderEditTRT({enabled:false,compounds:[]});
+    check('_renderEditTRT: shows T-Calc card when toggle OFF', /Planned in T-Calc/.test(_ttEditOff));
+    var _ttEditOn=G._renderEditTRT({enabled:true,compounds:[]});
+    var _cardIdx=_ttEditOn.indexOf('Planned in T-Calc');
+    var _protoIdx=_ttEditOn.indexOf('TRT Protocol');
+    check('_renderEditTRT: card sits above the compound list', _cardIdx>-1 && _cardIdx>_protoIdx);
+    G._injectionsCache={};
+    check('_renderEditTRT: no card when nothing planned', !/Planned in T-Calc/.test(G._renderEditTRT({enabled:true,compounds:[]})));
+  }
+  G._injectionsCache=_ttSaved;
+}
+
 if(typeof G.createNewStack==='function') G.createNewStack();
 check('createNewStack: editMode=false',    G._wiz.editMode===false);
 check('createNewStack: step=0',            G._wiz.step===0);
@@ -4160,6 +4222,83 @@ if (typeof G._tcFitBeta === 'function') {
   }
 } else {
   check('_tcFitBeta defined', false);
+}
+
+// ── Blood Levels: combined multi-line chart (compounds + supplements) ─────────
+console.log('\n── Blood Levels: combined chart (compounds + supplements) ──');
+if (typeof G._blBuildLines === 'function') {
+  var _blSaveStacks = G._userStacks, _blSaveIdx = G._activeStackIndices, _blSaveSupp = G._supplements, _blSaveLines = G._blLines;
+  G._userStacks = [{
+    name:'Test', cycle_length:12, cycle_start:'2026-06-01',
+    peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg',active:true}],
+    trt:{enabled:true, compounds:[{id:'testoviron',name:'Testoviron',dose:'250',unit:'mg',days:[0,3]}]},
+    enhanced:{enabled:false, compounds:[]}
+  }];
+  G._activeStackIndices = [0];
+  G._supplements = [{id:'s1',supp_id:'vitd3',name:'Vitamin D3',dose:'5000 IU',freq:'daily',timing:'AM',start_date:'2026-06-01'}];
+
+  var _blLines = G._blBuildLines();
+  G._blLines = _blLines;
+  check('_blBuildLines: includes a peptide line',    _blLines.some(function(l){return l.kind==='peptide';}));
+  check('_blBuildLines: includes a TRT line',        _blLines.some(function(l){return l.kind==='trt';}));
+  check('_blBuildLines: includes a supplement line', _blLines.some(function(l){return l.kind==='supplement';}));
+  check('_blBuildLines: sets a timeline',            G._blTimeline && G._blTimeline.totalDays > 0);
+
+  // normalisation: each line's peak maps to exactly 1.0
+  var _blTrt = _blLines.filter(function(l){return l.kind==='trt';})[0];
+  var _blArgmax = 0; for (var _bi=1;_bi<_blTrt.curve.length;_bi++) if (_blTrt.curve[_bi] > _blTrt.curve[_blArgmax]) _blArgmax = _bi;
+  check('_blValueAt: peak normalises to 1.0', G._blValueAt(_blTrt, _blTrt.offset + _blArgmax) === 1);
+  check('_blValueAt: null before a line starts', G._blValueAt(_blTrt, _blTrt.offset - 1) === null);
+  check('_blValueAt: null after a line ends',    G._blValueAt(_blTrt, _blTrt.offset + _blTrt.curve.length) === null);
+
+  // supplement half-life map (evidence-based plasma half-lives, in days)
+  check('_blSuppHalfLife: vitd3 = 15d (25-OH-D biomarker)', G._blSuppHalfLife('vitd3') === 15);
+  check('_blSuppHalfLife: vitc ~30min (0.02d)',   G._blSuppHalfLife('vitc') === 0.02);
+  check('_blSuppHalfLife: creatine ~2-3h (0.1d)', G._blSuppHalfLife('creatine') === 0.1);
+  check('_blSuppHalfLife: betaalanine ~20min',    G._blSuppHalfLife('betaalanine') === 0.015);
+  check('_blSuppHalfLife: omega3 ~2.5d',          G._blSuppHalfLife('omega3') === 2.5);
+  check('_blSuppHalfLife: b6 long terminal 17.5d',G._blSuppHalfLife('b6') === 17.5);
+  check('_blSuppHalfLife: coq10 ~33h (1.375d)',   G._blSuppHalfLife('coq10') === 1.375);
+  // trace minerals + adaptogens (evidence-based)
+  check('_blSuppHalfLife: boron ~21h (0.875d)',        G._blSuppHalfLife('boron') === 0.875);
+  check('_blSuppHalfLife: selenium selenomethionine 10.5d', G._blSuppHalfLife('selenium') === 10.5);
+  check('_blSuppHalfLife: iodine plasma clearance ~2h', G._blSuppHalfLife('iodine') === 0.073);
+  check('_blSuppHalfLife: rhodiola ~45min',            G._blSuppHalfLife('rhodiola') === 0.031);
+  check('_blSuppHalfLife: ginseng Rb1 ~16h (0.68d)',   G._blSuppHalfLife('ginseng') === 0.68);
+  check('_blSuppHalfLife: tongkat ~1h (0.052d)',       G._blSuppHalfLife('tongkat') === 0.052);
+  check('_blSuppHalfLife: ashwagandha ~3.75h (0.156d)',G._blSuppHalfLife('ashwagandha') === 0.156);
+  check('_blSuppHalfLife: curcumin ~6.5h (0.271d)',    G._blSuppHalfLife('curcumin') === 0.271);
+  check('_blSuppHalfLife: unknown falls back to 0.5d', G._blSuppHalfLife('nope') === 0.5);
+  // new adaptogens are in the catalogue
+  if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
+    ['rhodiola','ginseng','ginkgo','bacopa','tongkat'].forEach(function(id){
+      check('SUPPLEMENT_CAT includes '+id, G.SUPPLEMENT_CAT.some(function(s){ return s.id===id && s.doses && s.doses.length; }));
+    });
+  }
+  // every catalogued supplement has an explicit half-life (no silent fallback)
+  if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
+    var _blMissing = G.SUPPLEMENT_CAT.filter(function(s){ return G._SUPP_HALFLIFE[s.id] === undefined; }).map(function(s){ return s.id; });
+    check('_SUPP_HALFLIFE: covers every catalogue supplement', _blMissing.length === 0, 'missing: '+_blMissing.join(', '));
+    check('_SUPP_HALFLIFE: all values positive', G.SUPPLEMENT_CAT.every(function(s){ var h=G._SUPP_HALFLIFE[s.id]; return h===undefined || h>0; }));
+  }
+
+  // _blDrawChart must not throw with a headless canvas mock
+  (function(){
+    var n=function(){};
+    var fctx={scale:n,beginPath:n,moveTo:n,lineTo:n,stroke:n,fill:n,fillText:n,closePath:n,save:n,restore:n,
+      setLineDash:n,translate:n,rotate:n,fillRect:n,createLinearGradient:function(){return{addColorStop:n};},measureText:function(){return{width:0};}};
+    var fcanvas={offsetWidth:320,width:0,height:0,style:{},getContext:function(){return fctx;}};
+    var _blThrew=false;
+    try { G._blZoom='whole'; G._blDrawChart(fcanvas);
+          G._blZoom='week';  G._blDrawChart(fcanvas); } catch(e){ _blThrew=true; console.error('  _blDrawChart threw:', e.message); }
+    check('_blDrawChart: no throw (whole + week zoom)', !_blThrew);
+    check('_blDrawChart: records a pan window', fcanvas._blWin && fcanvas._blWin.xEnd > fcanvas._blWin.xStart);
+    G._blZoom='whole';
+  })();
+
+  G._userStacks = _blSaveStacks; G._activeStackIndices = _blSaveIdx; G._supplements = _blSaveSupp; G._blLines = _blSaveLines;
+} else {
+  check('_blBuildLines defined', false);
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
