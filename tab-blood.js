@@ -46,13 +46,114 @@ function _pkCurve(injDays, dosePerInj, halfLifeDays, cycleDays) {
   return curve;
 }
 
+// Samples-per-day for the blood chart. Daily sampling aliases daily-dosed
+// compounds into a flat line (each sample lands at the same post-dose phase);
+// sampling several times per day reveals their real intra-day sawtooth so a
+// frequently-injected compound looks frequent, not smooth.
+var _BL_SPD = 6;
+// Sub-day PK curve: index = step (day × _BL_SPD), so it captures the peak/trough
+// within each dosing interval. Injections occur at the start of their day.
+function _pkCurveFine(injDays, dosePerInj, halfLifeDays, cycleDays) {
+  var spd = _BL_SPD, N = cycleDays * spd;
+  var curve = new Float64Array(N + 1);
+  var kStep = Math.LN2 / (halfLifeDays * spd);
+  var injSteps = injDays.map(function(d){ return d * spd; });
+  for (var t = 0; t <= N; t++) {
+    var c = 0;
+    for (var j = 0; j < injSteps.length; j++) {
+      if (injSteps[j] <= t) c += dosePerInj * Math.exp(-kStep * (t - injSteps[j]));
+    }
+    curve[t] = c;
+  }
+  return curve;
+}
+
+// Absorption rate (1/day) for a given half-life — the T-Calc _tcKa heuristic
+// (absorption speed scaled by ester half-life), clamped so absorption is always
+// faster than elimination. The clamp only bites for ultra-short-half-life orals
+// (e.g. some supplements) where raw _tcKa would fall below ke and invert the
+// rise/fall; for injectables ka already exceeds ke so it is unaffected.
+function _blKa(halfLifeDays, ke) {
+  var ka = (typeof _tcKa === 'function') ? _tcKa(halfLifeDays) : ke * 4;
+  return ka <= ke ? ke * 2.5 : ka;
+}
+// Sub-day PK curve using the SAME first-order ABSORPTION model as the T-Calc
+// chart (_tcPkConc: rise to a Tmax peak, then fall) — used for every compound
+// and supplement line so none uses the older, unphysical instantaneous-input
+// decay. Each injection shares one per-dose amount.
+function _pkCurveFineAbs(injDays, dosePerInj, halfLifeDays, cycleDays) {
+  var spd = _BL_SPD, N = cycleDays * spd;
+  var curve = new Float64Array(N + 1);
+  var ke = Math.LN2 / halfLifeDays;
+  var ka = _blKa(halfLifeDays, ke);
+  var useAbs = (typeof _tcPkConc === 'function');
+  for (var j = 0; j < injDays.length; j++) {
+    var s0 = Math.round(injDays[j] * spd);
+    for (var t = s0; t <= N; t++) {
+      var dt = (t - s0) / spd;
+      curve[t] += useAbs ? _tcPkConc(dosePerInj, ka, ke, dt) : dosePerInj * Math.exp(-ke * dt);
+    }
+  }
+  return curve;
+}
+
+// Sub-day PK curve for T-Calc-planned testosterone. Uses the SAME 1-compartment
+// first-order ABSORPTION model as the T-Calc chart (_tcPkConc: rise to a Tmax
+// peak, then fall) rather than an instantaneous-input decay, so the Blood Levels
+// red line matches the T-Calc plasma curve. Each injection carries its own
+// (titrated) dose. doseSteps: [{step, dose}] (step = day × _BL_SPD, dose in mg).
+function _blTcalcCurve(doseSteps, halfLifeDays, bioav, cycleDays) {
+  var spd = _BL_SPD, N = cycleDays * spd;
+  var curve = new Float64Array(N + 1);
+  var ke = Math.LN2 / halfLifeDays;
+  var ka = _blKa(halfLifeDays, ke);
+  var useAbs = (typeof _tcPkConc === 'function');
+  for (var j = 0; j < doseSteps.length; j++) {
+    var dose = doseSteps[j].dose * (bioav || 1), s0 = doseSteps[j].step;
+    for (var t = s0; t <= N; t++) {
+      var dt = (t - s0) / spd;
+      curve[t] += useAbs ? _tcPkConc(dose, ka, ke, dt) : dose * Math.exp(-ke * dt);
+    }
+  }
+  return curve;
+}
+// Tmax (days to peak) for the absorption model — used to extend the drawn range
+// just past the last injection so its hump peaks before the line ends.
+function _blTmax(halfLifeDays) {
+  var ke = Math.LN2 / halfLifeDays;
+  var ka = _blKa(halfLifeDays, ke);
+  return (ka > ke) ? Math.log(ka / ke) / (ka - ke) : 1;
+}
+
+// T-Calc-planned testosterone (injections with cycle_id 'tcalc') — planned via
+// the T-Calc planner rather than configured as a stack TRT compound, so it is
+// otherwise absent from the chart. Gather its dated injections per compound.
+function _blTcalcTestosterone() {
+  if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
+  var byComp = {};
+  Object.keys(_injectionsCache).forEach(function(dk){
+    (_injectionsCache[dk]||[]).forEach(function(e){
+      if (!e || e.cycle_id !== 'tcalc') return;
+      if (e.tier && e.tier !== 'trt') return;
+      if (e.active === false) return;
+      var cid = e.compound_id || e.compound_name || 'testosterone';
+      var c = byComp[cid] || (byComp[cid] = { id:cid, name:e.compound_name||cid, unit:e.unit||'mg', doses:[] });
+      var dose = parseFloat(e.dose) || 0;
+      var d = (typeof parseLocalDate === 'function') ? parseLocalDate(e.date) : new Date(e.date);
+      if (d && dose > 0) c.doses.push({ date:d, dose:dose });
+    });
+  });
+  return Object.keys(byComp).map(function(k){ return byComp[k]; }).filter(function(c){ return c.doses.length; });
+}
+
 
 // ── Combined blood-levels chart (all active compounds + supplements) ─────────
 // One normalised multi-line overlay: each line is drawn as a % of its own peak
 // so compounds in different units (mg / µg / IU) are comparable. Lines can be
-// toggled on/off, and the today/week/month/whole zoom + drag-pan mirrors the
-// T-Calc free-T chart.
-var _blZoom = 'whole';
+// toggled on/off, and the today/week/month zoom + drag-pan mirrors the
+// T-Calc free-T chart. Defaults to 'week' (the fully-zoomed-out 'whole' view
+// was an unreadable dense sawtooth mass at typical cycle lengths).
+var _blZoom = 'week';
 var _blPanOffset = 0;      // days
 var _blHidden = null;      // {lineId:true} hidden lines (lazy-loaded cache)
 var _blLines = [];         // built line objects for the current render
@@ -133,7 +234,7 @@ function _blBuildLines(){
       if(!injDays.length) return;
       lines.push({ id:'pep_'+si+'_'+p.id, name:p.name||p.id, color:(cat&&cat.dot)||p.dot||'#3cffa0',
         kind:'peptide', unit:(p.unit_am||p.unit_pm||'mcg'), startDate:startDate, cycleLen:cycleLen, sub:stackLabel,
-        curve:_pkCurve(injDays, dose, hl, cycleLen) });
+        lastInjDay:injDays[injDays.length-1], tmaxPad:_blTmax(hl), curve:_pkCurveFineAbs(injDays, dose, hl, cycleLen) });
     });
 
     // TRT (testosterone esters)
@@ -146,7 +247,7 @@ function _blBuildLines(){
         var trtEntry = TRT_CAT.find(function(x){ return x.id===c.id; });
         lines.push({ id:'trt_'+si+'_'+c.id, name:c.name, color:(trtEntry&&trtEntry.dot)||'#e8a020',
           kind:'trt', unit:(c.unit||'mg'), startDate:startDate, cycleLen:cycleLen, sub:stackLabel, isTestosterone:true,
-          curve:_pkCurve(injDays, doseNum, hl, cycleLen) });
+          lastInjDay:injDays[injDays.length-1], tmaxPad:_blTmax(hl), curve:_pkCurveFineAbs(injDays, doseNum, hl, cycleLen) });
       });
     }
 
@@ -164,7 +265,7 @@ function _blBuildLines(){
         lines.push({ id:'enh_'+si+'_'+c.id, name:c.name, color:c.dot||ec.dot||'#a855f7',
           kind:'enhanced', unit:((unit||'mg/week').split('/')[0]||'mg'), startDate:startDate, cycleLen:cycleLen, sub:stackLabel,
           isTestosterone:(c.name||'').toLowerCase().indexOf('testosterone')!==-1,
-          curve:_pkCurve(injDays, dpi, hl, cycleLen) });
+          lastInjDay:injDays[injDays.length-1], tmaxPad:_blTmax(hl), curve:_pkCurveFineAbs(injDays, dpi, hl, cycleLen) });
       });
     }
   });
@@ -172,10 +273,14 @@ function _blBuildLines(){
   // Global timeline: span from the earliest start to the latest compound end,
   // extended to ~6 weeks past today so ongoing supplements have somewhere to live.
   var supps = (typeof _supplements!=='undefined' && _supplements) ? _supplements.filter(function(s){ return s && s.supp_id; }) : [];
+  var tcalcTest = _blTcalcTestosterone();
   var firstDate = starts.length ? new Date(Math.min.apply(null, starts.map(function(d){ return d.getTime(); }))) : new Date(NOW);
   supps.forEach(function(s){ if(s.start_date){ var d=parseLocalDate(s.start_date); if(d<firstDate) firstDate=d; } });
+  tcalcTest.forEach(function(c){ c.doses.forEach(function(d){ if(d.date<firstDate) firstDate=d.date; }); });
+  var tcalcMax = 0;
+  tcalcTest.forEach(function(c){ c.doses.forEach(function(d){ if(d.date.getTime()>tcalcMax) tcalcMax=d.date.getTime(); }); });
   var maxCompoundEnd = compoundEnds.length ? Math.max.apply(null, compoundEnds) : 0;
-  var lastMs = Math.max(maxCompoundEnd, supps.length ? (NOW.getTime()+42*86400000) : 0, firstDate.getTime()+7*86400000);
+  var lastMs = Math.max(maxCompoundEnd, tcalcMax, supps.length ? (NOW.getTime()+42*86400000) : 0, firstDate.getTime()+7*86400000);
   var totalDays = Math.max(1, Math.round((lastMs - firstDate.getTime())/86400000));
 
   // Supplement lines across the whole timeline from their start date.
@@ -195,7 +300,24 @@ function _blBuildLines(){
     if(!injDays.length) return;
     lines.push({ id:'supp_'+(s.id||s.supp_id), name:s.name||s.supp_id, color:_BL_SUPP_COLORS[i%_BL_SUPP_COLORS.length],
       kind:'supplement', unit:sUnit, startDate:sStart, cycleLen:span, sub:'supplement',
-      curve:_pkCurve(injDays, dose, hl, span) });
+      lastInjDay:injDays[injDays.length-1], tmaxPad:_blTmax(hl), curve:_pkCurveFineAbs(injDays, dose, hl, span) });
+  });
+
+  // T-Calc-planned testosterone — drawn in red, spanning the whole timeline with
+  // each planned injection's own (titrated) dose. Half-life comes from the ester.
+  tcalcTest.forEach(function(c){
+    var hl = null, bioav = 1;
+    if (typeof _tcCompInfo === 'function') { var ci = _tcCompInfo(c.id); if (ci) { if (ci.halfLifeDays) hl = ci.halfLifeDays; if (ci.bioavailability) bioav = ci.bioavailability; } }
+    if (!hl && typeof TRT_GUIDE !== 'undefined' && TRT_GUIDE[c.id]) hl = _parseHalfLifeDays(TRT_GUIDE[c.id].halfLife);
+    if (!hl) hl = 7; // testosterone ester fallback
+    var doseSteps = c.doses.map(function(d){
+      return { step: Math.round((d.date.getTime()-firstDate.getTime())/86400000) * _BL_SPD, dose:d.dose };
+    }).filter(function(s){ return s.step >= 0 && s.dose > 0; });
+    if (!doseSteps.length) return;
+    var lastDay = 0; doseSteps.forEach(function(s){ var dd=s.step/_BL_SPD; if(dd>lastDay) lastDay=dd; });
+    lines.push({ id:'tcalc_'+c.id, name:c.name, color:'#ff3b30', kind:'trt',
+      unit:c.unit||'mg', startDate:firstDate, cycleLen:totalDays, sub:'T-Calc', isTestosterone:true,
+      lastInjDay:lastDay, tmaxPad:_blTmax(hl), curve:_blTcalcCurve(doseSteps, hl, bioav, totalDays) });
   });
 
   // Record each line's peak, its mg-equivalent scale, and its offset in global days.
@@ -204,6 +326,11 @@ function _blBuildLines(){
     ln.peak = peak || 1;
     ln.mgScale = _blToMg(1, ln.unit);   // mg per dose-unit
     ln.peakMg  = ln.peak * ln.mgScale;  // peak amount in mg-equivalent
+    ln.spd = _BL_SPD;
+    // Step of the last scheduled injection plus its absorption Tmax — the curve
+    // is not drawn past this, so the final dose's hump peaks (absorption model)
+    // but the long post-schedule washout tail doesn't drop the line toward zero.
+    ln.lastStep = Math.round(((ln.lastInjDay != null ? ln.lastInjDay : ln.cycleLen) + (ln.tmaxPad||0)) * _BL_SPD);
     ln.offset = Math.round((ln.startDate.getTime() - firstDate.getTime())/86400000);
   });
   _blTimeline = { firstDate:firstDate, totalDays:totalDays, nowDay:Math.round((NOW.getTime()-firstDate.getTime())/86400000) };
@@ -231,42 +358,42 @@ function _blFmtMg(v){
   if(v>=0.001) return Math.round(v*1000)+' µg';
   return Math.round(v*1e6)+' ng';
 }
-// Assign visible lines to one or two Y-axes by mg-equivalent magnitude. Lines
-// whose peaks span < 8× share one axis; a wider spread splits at the largest
-// magnitude gap so big compounds (left) and small ones (right) each read well.
-var _blAxes = null;
-function _blComputeAxes(visible){
+// Single LOGARITHMIC Y-axis. The mg-equivalent amounts span µg → g (a
+// million-fold range), so a linear axis buries the small curves at zero. A log
+// axis makes every line visible at once regardless of how many magnitude tiers
+// are present, on one clean scale — no left/right split, no dashing.
+var _blAxis = null;
+function _blNiceCeil(v){ var e=Math.floor(Math.log10(v)), base=Math.pow(10,e), m=v/base; return (m<=1?1:m<=2?2:m<=5?5:10)*base; }
+function _blNiceFloor(v){ var e=Math.floor(Math.log10(v)), base=Math.pow(10,e), m=v/base; return (m>=5?5:m>=2?2:1)*base; }
+function _blLogBounds(visible){
   var peaks=[]; visible.forEach(function(ln){ if(ln.peakMg>0) peaks.push(ln.peakMg); });
-  var assign={};
-  if(!peaks.length){ visible.forEach(function(ln){ assign[ln.id]='L'; }); return {mode:'single',leftMax:1,rightMax:0,assign:assign}; }
+  if(!peaks.length) return {bottom:0.001, top:1};
   var maxP=Math.max.apply(null,peaks), minP=Math.min.apply(null,peaks);
-  if(peaks.length<2 || maxP/minP < 8){
-    visible.forEach(function(ln){ assign[ln.id]='L'; });
-    return {mode:'single',leftMax:(maxP*1.1)||1,rightMax:0,assign:assign};
-  }
-  var sorted=peaks.slice().sort(function(a,b){ return a-b; });
-  var gi=0,gmax=0;
-  for(var i=0;i<sorted.length-1;i++){ var gg=Math.log(sorted[i+1])-Math.log(sorted[i]); if(gg>gmax){ gmax=gg; gi=i; } }
-  var threshold=Math.sqrt(sorted[gi]*sorted[gi+1]);
-  var leftMax=0,rightMax=0;
-  visible.forEach(function(ln){
-    var p=ln.peakMg||0;
-    if(p>=threshold){ assign[ln.id]='L'; if(p>leftMax)leftMax=p; }
-    else { assign[ln.id]='R'; if(p>rightMax)rightMax=p; }
-  });
-  return {mode:'dual',leftMax:(leftMax*1.1)||1,rightMax:(rightMax*1.1)||1,assign:assign};
+  var top=_blNiceCeil(maxP);
+  // Put the floor a full DECADE below the smallest line's peak, so that line has
+  // real vertical room to show its shape instead of being pinned to the bottom
+  // edge (otherwise a small compound like Vitamin D3 reads as a flat zero line).
+  var bottom=_blNiceFloor(minP)/10;
+  // Keep the axis between 2 and 6 decades tall: never so short it wastes space,
+  // never so tall the curves shrink to threads.
+  var dec=Math.log10(top/bottom);
+  if(dec<2) bottom=top/100;
+  if(dec>6) bottom=top/1e6;
+  return {bottom:bottom, top:top};
 }
-// mg-equivalent value of a line at global day g, or null outside its span.
+// mg-equivalent value of a line at global day g (g may be fractional), or null
+// outside its span or after the last scheduled dose (hides the washout tail).
 function _blRawMgAt(ln, g){
-  var t = g - ln.offset;
-  if(t < 0 || t >= ln.curve.length) return null;
-  return ln.curve[t] * (ln.mgScale||1);
+  var step = Math.round((g - ln.offset) * (ln.spd||1));
+  if(step < 0 || step >= ln.curve.length) return null;
+  if(ln.lastStep != null && step > ln.lastStep) return null;
+  return ln.curve[step] * (ln.mgScale||1);
 }
 // Kept for back-compat: normalised value (0..1) of a line at day g.
 function _blValueAt(ln, g){
-  var t = g - ln.offset;
-  if(t < 0 || t >= ln.curve.length) return null;
-  return ln.curve[t] / ln.peak;
+  var step = Math.round((g - ln.offset) * (ln.spd||1));
+  if(step < 0 || step >= ln.curve.length) return null;
+  return ln.curve[step] / ln.peak;
 }
 
 function _blDrawChart(canvas){
@@ -279,9 +406,10 @@ function _blDrawChart(canvas){
 
   _blLoadHidden();
   var visible = _blLines.filter(function(ln){ return !_blHidden[ln.id]; });
-  var axes = _blComputeAxes(visible); _blAxes = axes;
+  var axis = _blLogBounds(visible); _blAxis = axis;
+  var lgB = Math.log10(axis.bottom), lgT = Math.log10(axis.top), lgSpan = (lgT-lgB)||1;
 
-  var PAD = {top:10, right:(axes.mode==='dual'?46:14), bottom:22, left:44};
+  var PAD = {top:10, right:14, bottom:22, left:44};
   var cW = cssW-PAD.left-PAD.right, cH = cssH-PAD.top-PAD.bottom;
   var totalDays = _blTimeline.totalDays, nowDay = _blTimeline.nowDay;
   var pan = _blZoom!=='whole' ? Math.round(_blPanOffset||0) : 0;
@@ -292,20 +420,18 @@ function _blDrawChart(canvas){
   if(xEnd <= xStart) xEnd = Math.min(totalDays, xStart+7);
   canvas._blWin = {xStart:xStart, xEnd:xEnd, cW:cW};
   function xOf(g){ return PAD.left + ((g-xStart)/((xEnd-xStart)||1))*cW; }
-  function yOfL(v){ return PAD.top + cH - (v/axes.leftMax)*cH; }
-  function yOfR(v){ return PAD.top + cH - (v/(axes.rightMax||1))*cH; }
+  // Log Y: values at/below the axis floor ride the bottom; above the top clamp in.
+  function yOf(v){ var vv = v>axis.bottom ? (v<axis.top?v:axis.top) : axis.bottom;
+    return PAD.top + cH - ((Math.log10(vv)-lgB)/lgSpan)*cH; }
 
-  // Horizontal grid + left-axis (and optional right-axis) value labels
+  // Horizontal grid + value labels at each power of ten within the axis range.
   ctx.font = '9px DM Sans,sans-serif';
-  [0,0.5,1].forEach(function(f){
-    var y = PAD.top + cH - f*cH;
+  for(var _e=Math.ceil(lgB); _e<=Math.floor(lgT+1e-9); _e++){
+    var _val = Math.pow(10,_e), y = yOf(_val);
     ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 0.5;
     ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left+cW, y); ctx.stroke();
-    ctx.fillStyle = '#666'; ctx.textAlign = 'right'; ctx.fillText(_blFmtMg(axes.leftMax*f), PAD.left-4, y+3);
-    if(axes.mode==='dual'){
-      ctx.fillStyle = '#8a8a8a'; ctx.textAlign = 'left'; ctx.fillText(_blFmtMg(axes.rightMax*f), PAD.left+cW+4, y+3);
-    }
-  });
+    ctx.fillStyle = '#666'; ctx.textAlign = 'right'; ctx.fillText(_blFmtMg(_val), PAD.left-4, y+3);
+  }
 
   // Vertical date grid + labels
   var winDays = xEnd - xStart;
@@ -326,20 +452,29 @@ function _blDrawChart(canvas){
     ctx.beginPath(); ctx.moveTo(nx, PAD.top); ctx.lineTo(nx, PAD.top+cH); ctx.stroke(); ctx.setLineDash([]);
   }
 
-  // Lines — right-axis lines are dashed so the axis they use is obvious
-  visible.forEach(function(ln){
-    var side = axes.assign[ln.id]||'L';
-    var yFn = side==='R' ? yOfR : yOfL;
+  // Lines — all on the single log axis. Everything is a model projection; to
+  // make that obvious the segment from today forward is drawn dimmed (past =
+  // solid, today→future = faded).
+  var dg = 1/_BL_SPD;
+  function _blStrokeSeg(ln, a, b, alpha){
+    if(b <= a) return;
     ctx.beginPath(); var started = false;
-    for(var g=Math.floor(xStart); g<=Math.ceil(xEnd); g++){
+    for(var g=a; g<=b+1e-9; g+=dg){
       var v = _blRawMgAt(ln, g);
       if(v===null){ started = false; continue; }
-      var X = xOf(g), Y = yFn(v);
+      var X = xOf(g), Y = yOf(v);
       if(!started){ ctx.moveTo(X, Y); started = true; } else ctx.lineTo(X, Y);
     }
     ctx.strokeStyle = ln.color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
-    if(axes.mode==='dual' && side==='R') ctx.setLineDash([4,2]);
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.globalAlpha = alpha;
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  var splitAt = Math.max(xStart, Math.min(xEnd, nowDay));
+  visible.forEach(function(ln){
+    // Past (solid) up to today, then future (dimmed). Overlap one step so the
+    // two segments join without a visible gap at the boundary.
+    _blStrokeSeg(ln, xStart, splitAt, 1);
+    _blStrokeSeg(ln, Math.max(xStart, splitAt-dg), xEnd, 0.3);
   });
   if(!visible.length){
     ctx.fillStyle = '#555'; ctx.font = '11px DM Sans,sans-serif'; ctx.textAlign = 'center';
@@ -351,7 +486,7 @@ function _blRenderChart(){ var c = document.getElementById('bl-chart'); if(c) _b
 
 function _blRenderZoomBar(){
   var bar = document.getElementById('bl-zoom-bar'); if(!bar) return;
-  bar.innerHTML = ['today','week','month','whole'].map(function(z){
+  bar.innerHTML = ['today','week','month'].map(function(z){
     var a = _blZoom===z;
     return '<button onclick="_blSetZoom(\''+z+'\')" style="flex:1;background:'+(a?'rgba(102,136,204,0.25)':'none')+
       ';border:1px solid '+(a?'#6688cc66':'var(--border)')+';border-radius:6px;color:'+(a?'#6688cc':'var(--muted2)')+
@@ -362,18 +497,15 @@ function _blRenderZoomBar(){
 function _blRenderLegend(){
   var leg = document.getElementById('bl-legend'); if(!leg) return;
   _blLoadHidden();
-  var dual = _blAxes && _blAxes.mode==='dual';
   leg.innerHTML = _blLines.map(function(ln){
     var off = !!_blHidden[ln.id];
-    var side = (dual && _blAxes.assign[ln.id]) ? _blAxes.assign[ln.id] : '';
-    var tag = side ? '<span style="font-size:8px;font-weight:800;color:var(--muted2);border:1px solid var(--border);border-radius:4px;padding:0 3px;margin-left:1px">'+side+'</span>' : '';
     var unitTxt = ln.unit ? '<span style="font-size:9px;color:var(--muted2);margin-left:1px">'+_esc(ln.unit)+'</span>' : '';
     return '<button onclick="_blToggleLine(\''+_esc(ln.id)+'\')" style="display:flex;align-items:center;gap:6px;'+
       'background:var(--surface2);border:1px solid var(--border);border-radius:16px;padding:5px 11px;cursor:pointer;'+
       'font-family:inherit;opacity:'+(off?'0.4':'1')+'">'+
       '<span style="width:9px;height:9px;border-radius:50%;background:'+ln.color+';flex-shrink:0'+(off?';filter:grayscale(1)':'')+'"></span>'+
       '<span style="font-size:11px;font-weight:600;color:var(--text)'+(off?';text-decoration:line-through':'')+'">'+_esc(ln.name)+'</span>'+
-      unitTxt + tag +
+      unitTxt +
       '</button>';
   }).join('');
 }
@@ -438,12 +570,12 @@ function buildBloodLevels(){
     return;
   }
   var html = '<div style="padding:12px 16px 6px;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:1px">'+
-    'Estimated plasma levels · real amounts (mg-eq.), auto-scaled</div>';
+    'Estimated plasma levels · real amounts (mg-eq.), log scale</div>';
   html += '<div style="padding:0 16px 16px">';
   html += '<div id="bl-zoom-bar" style="display:flex;gap:4px;margin-bottom:8px"></div>';
   html += '<canvas id="bl-chart" style="width:100%;display:block"></canvas>';
   html += '<div id="bl-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>';
-  html += '<div style="margin-top:10px;font-size:10px;color:var(--muted2);line-height:1.5">Amounts are mg-equivalent (relative amount in body, not a lab concentration). When magnitudes differ a lot, lines split across two Y-scales — right-axis lines are dashed and tagged <b>R</b>. Tap a chip to hide/show; zoom then drag to pan. Supplement curves use approximate half-lives.</div>';
+  html += '<div style="margin-top:10px;font-size:10px;color:var(--muted2);line-height:1.5">Amounts are mg-equivalent (relative amount in body, not a lab concentration). The Y-axis is <b>logarithmic</b> (each gridline = 10×) so compounds from µg to g are all visible on one scale. Solid = to date, dimmed = projected from today forward. Tap a chip to hide/show; zoom then drag to pan. Supplement curves use approximate half-lives.</div>';
   html += '</div>';
   el.innerHTML = html;
   _blRenderZoomBar();
