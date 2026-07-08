@@ -4247,9 +4247,30 @@ if (typeof G._blBuildLines === 'function') {
   // normalisation: each line's peak maps to exactly 1.0
   var _blTrt = _blLines.filter(function(l){return l.kind==='trt';})[0];
   var _blArgmax = 0; for (var _bi=1;_bi<_blTrt.curve.length;_bi++) if (_blTrt.curve[_bi] > _blTrt.curve[_blArgmax]) _blArgmax = _bi;
-  check('_blValueAt: peak normalises to 1.0', G._blValueAt(_blTrt, _blTrt.offset + _blArgmax) === 1);
+  // curves are sub-day sampled (_BL_SPD steps/day); convert the argmax step → day
+  var _blPeakDay = _blTrt.offset + _blArgmax / _blTrt.spd;
+  check('_blBuildLines: sub-day sampling (spd>1)', _blTrt.spd > 1);
+  check('_blValueAt: peak normalises to 1.0', G._blValueAt(_blTrt, _blPeakDay) === 1);
   check('_blValueAt: null before a line starts', G._blValueAt(_blTrt, _blTrt.offset - 1) === null);
   check('_blValueAt: null after a line ends',    G._blValueAt(_blTrt, _blTrt.offset + _blTrt.curve.length) === null);
+  // end-of-cycle washout tail is truncated (no drop toward zero past the last dose)
+  check('_blRawMgAt: null past the last dose (no washout tail)',
+    G._blRawMgAt(_blTrt, _blTrt.offset + _blTrt.lastStep/_blTrt.spd + 2) === null);
+  check('_blRawMgAt: non-null at the last dose',
+    G._blRawMgAt(_blTrt, _blTrt.offset + _blTrt.lastStep/_blTrt.spd) !== null);
+
+  // absorption model for EVERY line kind: a dose at day 0 gives curve[0] ~ 0
+  // (nothing absorbed yet) and a peak strictly later — not an instant jump.
+  ['peptide','trt','supplement'].forEach(function(kind){
+    var _ln = _blLines.filter(function(l){ return l.kind===kind; })[0];
+    if (!_ln) { check('_blBuildLines: '+kind+' line present for absorption check', false); return; }
+    var _am = 0; for (var _k=1;_k<_ln.curve.length;_k++) if (_ln.curve[_k] > _ln.curve[_am]) _am = _k;
+    check('_blBuildLines: '+kind+' uses absorption (curve[0] ~ 0, not an instant jump)', _ln.curve[0] < _ln.curve[_am] * 0.2);
+    check('_blBuildLines: '+kind+' peak is delayed after the dose (absorption)', _am > 0);
+  });
+  // _blKa keeps absorption faster than elimination even for ultra-short halves
+  check('_blKa: clamps ka above ke for ultra-short half-life', G._blKa(0.02, Math.LN2/0.02) > Math.LN2/0.02);
+  check('_blKa: leaves ester ka unclamped (ka>ke already)', G._blKa(4.5, Math.LN2/4.5) === G._tcKa(4.5));
 
   // mg-equivalent conversion + dual-axis scaling
   check('_blToMg: mg passes through',      G._blToMg(50,'mg') === 50);
@@ -4263,15 +4284,23 @@ if (typeof G._blBuildLines === 'function') {
   // lines now carry unit + mg-equivalent peak
   check('_blBuildLines: TRT line carries a unit',  !!_blTrt.unit);
   check('_blBuildLines: TRT line has peakMg > 0',  _blTrt.peakMg > 0);
-  // _blComputeAxes: single when peaks are close, dual when far apart
-  var _axSingle = G._blComputeAxes([{id:'a',peakMg:100},{id:'b',peakMg:120}]);
-  check('_blComputeAxes: single axis when spread < 8×', _axSingle.mode==='single' && _axSingle.assign.a==='L' && _axSingle.assign.b==='L');
-  var _axDual = G._blComputeAxes([{id:'big',peakMg:150},{id:'small',peakMg:0.2}]);
-  check('_blComputeAxes: dual axis on wide spread',     _axDual.mode==='dual');
-  check('_blComputeAxes: big→left, small→right',        _axDual.assign.big==='L' && _axDual.assign.small==='R');
-  check('_blComputeAxes: axis maxes bracket the peaks', _axDual.leftMax >= 150 && _axDual.rightMax >= 0.2 && _axDual.rightMax < 150);
+  // _blLogBounds: single log axis brackets every peak, µg → g on one scale
+  var _axWide = G._blLogBounds([{id:'big',peakMg:1400},{id:'mid',peakMg:5},{id:'small',peakMg:0.1}]);
+  check('_blLogBounds: top ≥ largest peak',   _axWide.top >= 1400);
+  check('_blLogBounds: bottom ≤ smallest peak', _axWide.bottom <= 0.1 && _axWide.bottom > 0);
+  check('_blLogBounds: spans the full µg→g range on one axis', _axWide.top/_axWide.bottom >= 1400/0.1);
+  check('_blLogBounds: smallest line gets ≥ a decade of headroom (not pinned to floor)', _axWide.bottom <= 0.1/5);
+  // regression: with Nebido (grams) + a small supplement (few mg), the small line
+  // must sit well above the floor, not read as a flat zero (Vitamin D3 bug).
+  var _axNebD3 = G._blLogBounds([{id:'neb',peakMg:852},{id:'d3',peakMg:2.7}]);
+  var _d3h = (Math.log10(2.7)-Math.log10(_axNebD3.bottom))/(Math.log10(_axNebD3.top)-Math.log10(_axNebD3.bottom));
+  check('_blLogBounds: mg-scale supplement sits >15% up the axis (not pinned)', _d3h > 0.15);
+  var _axNarrow = G._blLogBounds([{id:'a',peakMg:100},{id:'b',peakMg:120}]);
+  check('_blLogBounds: close peaks still get ≥2 decades of headroom', _axNarrow.top/_axNarrow.bottom >= 100);
+  check('_blNiceCeil: rounds 1400 → 2000 (1-2-5)', G._blNiceCeil(1400) === 2000);
+  check('_blNiceFloor: rounds 0.1 → 0.1',          G._blNiceFloor(0.1) === 0.1);
   // _blRawMgAt returns real mg-equivalent (not normalised)
-  var _rawPeak = G._blRawMgAt(_blTrt, _blTrt.offset + _blArgmax);
+  var _rawPeak = G._blRawMgAt(_blTrt, _blPeakDay);
   check('_blRawMgAt: returns mg-equivalent at peak', Math.abs(_rawPeak - _blTrt.peakMg) < 1e-9);
 
   // supplement half-life map (evidence-based plasma half-lives, in days)
@@ -4312,11 +4341,46 @@ if (typeof G._blBuildLines === 'function') {
       setLineDash:n,translate:n,rotate:n,fillRect:n,createLinearGradient:function(){return{addColorStop:n};},measureText:function(){return{width:0};}};
     var fcanvas={offsetWidth:320,width:0,height:0,style:{},getContext:function(){return fctx;}};
     var _blThrew=false;
-    try { G._blZoom='whole'; G._blDrawChart(fcanvas);
+    try { G._blZoom='month'; G._blDrawChart(fcanvas);
           G._blZoom='week';  G._blDrawChart(fcanvas); } catch(e){ _blThrew=true; console.error('  _blDrawChart threw:', e.message); }
-    check('_blDrawChart: no throw (whole + week zoom)', !_blThrew);
+    check('_blDrawChart: no throw (month + week zoom)', !_blThrew);
     check('_blDrawChart: records a pan window', fcanvas._blWin && fcanvas._blWin.xEnd > fcanvas._blWin.xStart);
-    G._blZoom='whole';
+    G._blZoom='week';
+  })();
+
+  // T-Calc-planned testosterone becomes its own red line even with no stack TRT
+  (function(){
+    var _saveInj = G._injectionsCache, _saveStacks2 = G._userStacks, _saveIdx2 = G._activeStackIndices, _saveSupp2 = G._supplements;
+    G._userStacks = [{ name:'T', cycle_length:12, cycle_start:'2026-06-01',
+      peptides:[], trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]} }];
+    G._activeStackIndices = [0]; G._supplements = [];
+    G._injectionsCache = {
+      '2026-06-05':[{cycle_id:'tcalc',compound_id:'enanthate',compound_name:'Testosterone Enanthate',tier:'trt',date:'2026-06-05',dose:'100',unit:'mg',active:true}],
+      '2026-06-12':[{cycle_id:'tcalc',compound_id:'enanthate',compound_name:'Testosterone Enanthate',tier:'trt',date:'2026-06-12',dose:'125',unit:'mg',active:true}]
+    };
+    var _tl = G._blBuildLines();
+    var _tline = _tl.filter(function(l){ return typeof l.id==='string' && l.id.indexOf('tcalc_')===0; })[0];
+    check('_blBuildLines: T-Calc testosterone becomes a line', !!_tline);
+    check('_blBuildLines: T-Calc line is red',          _tline && _tline.color === '#ff3b30');
+    check('_blBuildLines: T-Calc line flagged testosterone', _tline && _tline.isTestosterone === true);
+    check('_blBuildLines: T-Calc line has a peak > 0',  _tline && _tline.peak > 0);
+    check('_blBuildLines: T-Calc line uses mg unit',    _tline && _tline.unit === 'mg');
+    // titrated per-injection dosing: 2nd dose (125) stacks on the decaying 1st (100)
+    check('_blBuildLines: T-Calc line carries a curve', _tline && _tline.curve && _tline.curve.length > 1);
+    // absorption model (matches T-Calc): a single injection peaks AFTER the shot,
+    // not at the instant — value ~0 at the injection step, argmax strictly later.
+    G._injectionsCache = {
+      '2026-06-05':[{cycle_id:'tcalc',compound_id:'enanthate',compound_name:'Testosterone Enanthate',tier:'trt',date:'2026-06-05',dose:'100',unit:'mg',active:true}]
+    };
+    var _tl1 = G._blBuildLines();
+    var _t1 = _tl1.filter(function(l){ return typeof l.id==='string' && l.id.indexOf('tcalc_')===0; })[0];
+    if (_t1) {
+      var _injStep = Math.round((new Date('2026-06-05T00:00:00').getTime() - G._blTimeline.firstDate.getTime())/86400000) * _t1.spd;
+      var _am = 0; for (var _q=1;_q<_t1.curve.length;_q++) if (_t1.curve[_q] > _t1.curve[_am]) _am = _q;
+      check('_blBuildLines: T-Calc peak is delayed (absorption, not instant jump)', _am > _injStep);
+      check('_blBuildLines: T-Calc curve ~0 at the injection instant', _t1.curve[_injStep] < _t1.curve[_am] * 0.2);
+    } else { check('_blBuildLines: single T-Calc injection builds a line', false); }
+    G._injectionsCache = _saveInj; G._userStacks = _saveStacks2; G._activeStackIndices = _saveIdx2; G._supplements = _saveSupp2;
   })();
 
   G._userStacks = _blSaveStacks; G._activeStackIndices = _blSaveIdx; G._supplements = _blSaveSupp; G._blLines = _blSaveLines;
