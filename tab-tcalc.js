@@ -27,12 +27,13 @@ var _tcAgeMissing     = false; // true when user-settings returned but no user_a
 var _tcBwOpen         = false; // whether the bloodwork panel is expanded
 var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] = loaded
 var _tcBwLoading      = false;
-var _tcBwAddExtras    = [];   // custom extra-test rows while add sheet is open
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
 var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
 var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
-var _tcGhStack = [];          // [{pepId, startDateStr, interactions}] — GH compounds from active stacks
+var _tcGhStack = [];          // [{pepId, startDateStr, interactions, dailyDose}] — SHBG suppressors from active stacks (dailyDose in the compound's doseResponse unit)
 var _tcSysInter = null;       // compounds map from /systemic-interactions
+var _tcFtBaseline = null;      // age→free-T population baseline (pmol/L) from /systemic-interactions
+var _tcShbgBaseline = null;    // age→SHBG population baseline (nmol/L) from /systemic-interactions
 var _tcActiveStacks = null;   // raw response from /protocol/stacks
 
 // Testosterone → SHBG dose-response model. Exogenous androgens suppress hepatic
@@ -82,44 +83,6 @@ function _tcFitBeta(entries) {
 }
 
 // ── Blood test catalogue ───────────────────────────────────────────────────────
-var _TC_BW_TESTS = [
-  {name:'Estradiol',          units:['pmol/L','pg/mL']},
-  {name:'LH',                 units:['IU/L']},
-  {name:'FSH',                units:['IU/L']},
-  {name:'Prolactin',          units:['mIU/L','ng/mL']},
-  {name:'Progesterone',       units:['nmol/L','ng/mL']},
-  {name:'DHT',                units:['nmol/L','pg/mL']},
-  {name:'Cortisol',           units:['nmol/L','µg/dL']},
-  {name:'IGF-1',              units:['nmol/L','ng/mL']},
-  {name:'TSH',                units:['mIU/L']},
-  {name:'Free T4',            units:['pmol/L','ng/dL']},
-  {name:'Free T3',            units:['pmol/L','pg/mL']},
-  {name:'Hematocrit',         units:['%']},
-  {name:'Hemoglobin',         units:['g/dL','g/L']},
-  {name:'RBC',                units:['10¹²/L']},
-  {name:'WBC',                units:['10⁹/L']},
-  {name:'Platelets',          units:['10⁹/L']},
-  {name:'ALT',                units:['U/L']},
-  {name:'AST',                units:['U/L']},
-  {name:'GGT',                units:['U/L']},
-  {name:'ALP',                units:['U/L']},
-  {name:'Bilirubin',          units:['µmol/L','mg/dL']},
-  {name:'Creatinine',         units:['µmol/L','mg/dL']},
-  {name:'eGFR',               units:['mL/min/1.73m²']},
-  {name:'Urea',               units:['mmol/L','mg/dL']},
-  {name:'Total Cholesterol',  units:['mmol/L','mg/dL']},
-  {name:'LDL',                units:['mmol/L','mg/dL']},
-  {name:'HDL',                units:['mmol/L','mg/dL']},
-  {name:'Triglycerides',      units:['mmol/L','mg/dL']},
-  {name:'Glucose',            units:['mmol/L','mg/dL']},
-  {name:'HbA1c',              units:['mmol/mol','%']},
-  {name:'Insulin',            units:['pmol/L','µIU/mL']},
-  {name:'Vitamin D',          units:['nmol/L','ng/mL']},
-  {name:'Ferritin',           units:['µg/L','ng/mL']},
-  {name:'Iron',               units:['µmol/L','µg/dL']},
-  {name:'Zinc',               units:['µmol/L']},
-  {name:'PSA',                units:['µg/L','ng/mL']},
-];
 
 // ── Frequency options ─────────────────────────────────────────────────────────
 
@@ -198,6 +161,8 @@ function _tcLoadProfile() {
     .then(function(d) {
       if (!d || !d.compounds) return;
       _tcSysInter = d.compounds;
+      if (d.ftBaseline) _tcFtBaseline = d.ftBaseline;
+      if (d.shbgBaseline) _tcShbgBaseline = d.shbgBaseline;
       _tcComputeGhStack();
       buildTCalc();
     })
@@ -225,6 +190,61 @@ function _tcSaveProfile() {
   }).catch(function(){});
 }
 
+// Saturating Emax dose-response for SHBG suppression: effMaxSupp(dose) = emax·dose/(dose+ed50).
+// ed50/emax are calibrated backend-side so effMaxSupp(typicalDose) == the legacy fixed
+// maxSuppression, so a user dosed at the reference sees no change; only off-reference doses scale.
+function _tcEffMaxSupp(dr, dose) {
+  if (!dr || !(dose > 0) || !(dr.ed50 > 0) || !(dr.emax > 0)) return null;
+  return dr.emax * dose / (dose + dr.ed50);
+}
+
+// Convert an amount between dosing units (mass only; IU is not mass-convertible).
+// Units may carry a "/period" suffix (e.g. "mg/week") which is ignored here.
+function _tcConvDose(amt, fromU, toU) {
+  fromU = String(fromU || '').toLowerCase().split('/')[0].trim();
+  toU   = String(toU   || '').toLowerCase().split('/')[0].trim();
+  if (fromU === 'µg') fromU = 'mcg';
+  if (toU   === 'µg') toU   = 'mcg';
+  if (!(amt > 0) || !fromU || !toU) return null;
+  if (fromU === toU) return amt;
+  if (fromU === 'iu' || toU === 'iu') return null;   // IU ↔ mass is compound-specific — refuse
+  var toMg = { mg: 1, mcg: 0.001, g: 1000 };
+  if (toMg[fromU] == null || toMg[toU] == null) return null;
+  return amt * toMg[fromU] / toMg[toU];
+}
+
+// Average daily dose for an SHBG suppressor, expressed in its backend doseResponse unit.
+// Chronic SHBG suppression tracks average exposure, so sub-daily schedules are averaged
+// over the week (days-per-week / 7). Returns null when the dose can't be resolved or
+// converted — the caller then falls back to the fixed maxSuppression.
+function _tcSuppDailyDose(inter, kind, obj) {
+  var dr = inter && inter.shbg && inter.shbg.doseResponse;
+  if (!dr || !dr.unit || !obj) return null;
+  var nativeDaily = 0, nativeUnit = '';
+  if (kind === 'peptide') {
+    var times = obj.times || ['AM'];
+    var per = (times.indexOf('AM') >= 0 ? (parseDec(obj.dose_am) || 0) : 0) +
+              (times.indexOf('PM') >= 0 ? (parseDec(obj.dose_pm) || 0) : 0);
+    var dpw = (obj.days || [0, 1, 2, 3, 4, 5, 6]).length;
+    nativeDaily = per * dpw / 7;
+    nativeUnit = obj.unit_am || obj.unit_pm || 'mcg';
+  } else if (kind === 'compound') {
+    var raw = parseDec(obj.dose) || 0;
+    var parts = String(obj.unit || 'mg/week').split('/');
+    var period = (parts[1] || 'week').toLowerCase();
+    var factor = (period === 'day') ? 1 : (period === 'eod' || period === '2day') ? 0.5 : 1 / 7;
+    nativeDaily = raw * factor;
+    nativeUnit = parts[0] || 'mg';
+  } else if (kind === 'supp') {
+    var rawS = parseDec(obj.dose) || 0;
+    var m = String(obj.dose || '').match(/(mcg|µg|mg|iu|g)/i);
+    nativeUnit = m ? m[1] : 'mg';
+    var f = (obj.freq === 'weekly') ? 1 / 7 : (obj.freq === 'eod') ? 0.5 : 1;
+    nativeDaily = rawS * f;
+  }
+  return _tcConvDose(nativeDaily, nativeUnit, dr.unit);
+}
+
 function _tcComputeGhStack() {
   if (!_tcSysInter) return;
   _tcGhStack = [];
@@ -241,7 +261,7 @@ function _tcComputeGhStack() {
       if (!pepId || !_tcSysInter[pepId]) return;
       var inter = _tcSysInter[pepId];
       if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
-      _tcGhStack.push({pepId: pepId, startDateStr: pep.start_date || cycleStart, interactions: inter});
+      _tcGhStack.push({pepId: pepId, startDateStr: pep.start_date || cycleStart, interactions: inter, dailyDose: _tcSuppDailyDose(inter, 'peptide', pep)});
     });
     // Enhanced compounds — no per-compound start_date, fall back to cycle_start
     if (stack.enhanced && stack.enhanced.compounds) {
@@ -250,7 +270,7 @@ function _tcComputeGhStack() {
         if (!cId || !_tcSysInter[cId]) return;
         var inter = _tcSysInter[cId];
         if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
-        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter});
+        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter, dailyDose: _tcSuppDailyDose(inter, 'compound', c)});
       });
     }
     // TRT compounds — same fallback
@@ -260,21 +280,38 @@ function _tcComputeGhStack() {
         if (!cId || !_tcSysInter[cId]) return;
         var inter = _tcSysInter[cId];
         if (!inter.shbg || inter.shbg.direction !== 'suppress') return;
-        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter});
+        _tcGhStack.push({pepId: cId, startDateStr: c.start_date || cycleStart, interactions: inter, dailyDose: _tcSuppDailyDose(inter, 'compound', c)});
       });
     }
   });
   }
   // Over-the-counter supplements that affect SHBG (e.g. Boron). Uses the same
-  // systemic-interaction model as compounds — each active supplement whose id has
-  // an SHBG interaction is added to the free-T model at its own start date.
+  // systemic-interaction model as compounds. The SHBG-model start date is the day the
+  // supplement was FIRST CHECKED in the today view (from the supplement log), so it
+  // counts from when you actually started taking it — falling back to any explicit
+  // start_date. No manual start date needed for a supplement to move the free-T curve.
   var _supps = (typeof _supplements !== 'undefined' && _supplements) ? _supplements : [];
   _supps.forEach(function(s) {
     if (!s || !s.supp_id) return;
     var inter = _tcSysInter[s.supp_id];
     if (!inter || !inter.shbg || inter.shbg.direction !== 'suppress') return;
-    _tcGhStack.push({pepId: 'supp_' + s.supp_id, startDateStr: s.start_date || '', interactions: inter});
+    var _start = _tcSuppFirstTaken(s.supp_id) || s.start_date || '';
+    _tcGhStack.push({pepId: 'supp_' + s.supp_id, startDateStr: _start, interactions: inter, dailyDose: _tcSuppDailyDose(inter, 'supp', s)});
   });
+}
+
+// Earliest date a supplement was checked ("taken") in the today view, read from the
+// supplement log (_suppLog keys are "suppId|YYYY-MM-DD|slot"). '' if never taken.
+function _tcSuppFirstTaken(suppId) {
+  if (typeof _suppLog === 'undefined' || !_suppLog) return '';
+  var best = '';
+  Object.keys(_suppLog).forEach(function(k) {
+    if (!_suppLog[k]) return;
+    var p = k.split('|');
+    if (p[0] !== suppId || !p[1]) return;
+    if (!best || p[1] < best) best = p[1];
+  });
+  return best;
 }
 
 // ── Compound helpers ──────────────────────────────────────────────────────────
@@ -317,6 +354,48 @@ function _tcVermeulenFT(totalT, shbg) {
   var alb    = 4.3 / 66500 * 10;
   var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
   return (totalT * 1e-9 / denom) * 1e12;
+}
+
+// Inverse of the (linear-in-TT) Vermeulen equation: given free T (pmol/L) and SHBG
+// (nmol/L), return the total T (nmol/L) that produces it. Used to infer a plausible
+// total T for users without a measured value, so the SHBG model can still run.
+function _tcInvVermeulenTT(freeFT, shbg) {
+  if (!(freeFT > 0) || !(shbg > 0)) return 0;
+  var K_SHBG = 5.97e8, K_ALB = 3.6e4;
+  var alb    = 4.3 / 66500 * 10;
+  var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
+  return freeFT * denom / 1000;
+}
+
+// Population SHBG baseline (nmol/L) for an age, from the backend age→SHBG table.
+// 0 when the table isn't loaded or the age is unknown (model then can't run).
+function _tcShbgBaselineForAge(age) {
+  var b = _tcShbgBaseline;
+  if (!b || !b.bands || !(age > 0)) return 0;
+  for (var i = 0; i < b.bands.length; i++) {
+    if (age <= b.bands[i].max_age) return b.bands[i].value;
+  }
+  return b.bands[b.bands.length - 1].value;
+}
+
+// Nudge a chart label's y so it stays at least `gap` px clear of any already-placed
+// label y, moving away from the collision and clamping to [lo,hi]. Keeps the peak /
+// today / average axis labels readable when the curve is flat (tight zooms) and their
+// values land on top of each other. Pure + testable.
+function _tcNudgeLabelY(y, used, gap, lo, hi) {
+  y = Math.max(lo, Math.min(hi, y));
+  var moved = true, guard = 0;
+  while (moved && guard++ < 50) {
+    moved = false;
+    for (var i = 0; i < (used || []).length; i++) {
+      if (Math.abs(y - used[i]) < gap) {
+        y = (y <= used[i]) ? (used[i] - gap) : (used[i] + gap);
+        y = Math.max(lo, Math.min(hi, y));
+        moved = true;
+      }
+    }
+  }
+  return y;
 }
 
 // ── PK helpers ────────────────────────────────────────────────────────────────
@@ -834,6 +913,20 @@ function _tcSetChartZoom(z) {
   });
 }
 
+// Steady-state average reference line — shown by default, hideable via the chart
+// checkbox. Read the raw flag (getData's `|| default` would turn a stored false
+// back into true, so check the string directly). Default = shown.
+function _tcShowAvg() {
+  try { return localStorage.getItem('tc-avg-line') !== 'false'; } catch (e) { return true; }
+}
+function _tcToggleAvgLine(el) {
+  var v = el ? !!el.checked : !_tcShowAvg();
+  setData('tc-avg-line', v);
+  if (typeof pushPepSettingsToAgent === 'function') pushPepSettingsToAgent({ 'tc-avg-line': v });
+  var validLog = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; }) : [];
+  _tcDrawManualChart('tc-main-chart', validLog, _tcChartZoom);
+}
+
 function _tcAttachPanListeners(canvas) {
   if (!canvas) return;
   if (canvas._tcTouchStart) {
@@ -969,165 +1062,20 @@ async function _tcFetchBwEntries() {
   if (typeof buildSupplements === 'function' && typeof _currentTab !== 'undefined' && _currentTab === 'supplements') buildSupplements();
 }
 
-function _tcBwOpenAddSheet() {
-  _tcBwAddExtras = [];
-  var todayStr = new Date().toISOString().slice(0, 10);
-  var latest = (_tcBwEntries && _tcBwEntries.length) ? _tcBwEntries[0] : null;
-  var defTT   = latest && latest.total_t    != null ? String(latest.total_t)    : '';
-  var defSHBG = latest && latest.shbg       != null ? String(latest.shbg)       : '';
-  var defFT   = latest && latest.free_t     != null ? String(latest.free_t)     : '';
-  var defDose = latest && latest.dose_at_bw != null ? String(latest.dose_at_bw) : '';
-  var iSty = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:15px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
-  var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;display:block';
-  var ol = document.createElement('div');
-  ol.id = 'tc-bw-add-overlay';
-  ol.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
-  ol.onclick = function(e){ if(e.target===ol) _tcBwCloseAddSheet(); };
-  ol.innerHTML =
-    '<div id="tc-bw-add-sheet" style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:85vh;overflow-y:auto">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-    '<div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--text)">ADD BLOOD TEST</div>' +
-    '<button onclick="_tcBwCloseAddSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
-    '</div>' +
-    '<div style="margin-bottom:14px"><label style="'+lSty+'">DATE</label>' +
-    '<input id="tc-bw-date" type="date" value="'+_esc(todayStr)+'" max="'+todayStr+'" style="'+iSty+'"></div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">' +
-    '<div><label style="'+lSty+'">TOTAL T (nmol/L)</label>' +
-    '<input id="tc-bw-tt" type="text" inputmode="decimal" placeholder="e.g. 16.2" value="'+_esc(defTT)+'" style="'+iSty+'"></div>' +
-    '<div><label style="'+lSty+'">SHBG (nmol/L)</label>' +
-    '<input id="tc-bw-shbg" type="text" inputmode="decimal" placeholder="e.g. 45" value="'+_esc(defSHBG)+'" style="'+iSty+'"></div>' +
-    '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">' +
-    '<div><label style="'+lSty+'">FREE T (pmol/L)</label>' +
-    '<input id="tc-bw-ft" type="text" inputmode="decimal" placeholder="e.g. 217" value="'+_esc(defFT)+'" style="'+iSty+'"></div>' +
-    '<div><label style="'+lSty+'">DOSE AT BW (mg/wk)</label>' +
-    '<input id="tc-bw-dose" type="text" inputmode="decimal" placeholder="e.g. 150" value="'+_esc(defDose)+'" style="'+iSty+'"></div>' +
-    '</div>' +
-    '<div id="tc-bw-extras-container" style="margin-bottom:8px"></div>' +
-    '<button onclick="_tcBwAddExtraRow()" style="width:100%;background:none;border:1px dashed var(--border);border-radius:8px;color:var(--muted2);font-size:12px;font-weight:700;letter-spacing:0.5px;cursor:pointer;padding:10px;font-family:inherit;margin-bottom:14px">+ ADD TEST</button>' +
-    '<button onclick="_tcBwConfirmAdd()" style="width:100%;background:linear-gradient(135deg,#cc8844,#aa6622);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">SAVE</button>' +
-    '</div>';
-  document.body.appendChild(ol);
-}
 
-function _tcBwCloseAddSheet() {
-  var ol = document.getElementById('tc-bw-add-overlay');
-  if (ol) ol.remove();
-  _tcBwAddExtras = [];
-}
-
-function _tcBwAddExtraRow() {
-  _tcBwAddExtras.push({name: '', value: '', unit: ''});
-  _tcBwRenderExtras();
-}
-
-function _tcBwExtraTestChange(i, name) {
-  _tcBwAddExtras[i].name = name;
-  var t = _TC_BW_TESTS.find(function(x){return x.name===name;});
-  _tcBwAddExtras[i].unit = t ? t.units[0] : '';
-  _tcBwRenderExtras();
-}
-
-function _tcBwRenderExtras() {
-  var container = document.getElementById('tc-bw-extras-container');
-  if (!container) return;
-  var selSty = 'width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box';
-  var iSty   = 'flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box';
-  var html = '';
-  _tcBwAddExtras.forEach(function(row, i) {
-    var testOpts = '<option value="">Select test…</option>' +
-      _TC_BW_TESTS.map(function(t){
-        return '<option value="'+_esc(t.name)+'"'+(row.name===t.name?' selected':'')+'>'+_esc(t.name)+'</option>';
-      }).join('');
-    var curTest = _TC_BW_TESTS.find(function(t){return t.name===row.name;});
-    var unitOpts = curTest
-      ? curTest.units.map(function(u){
-          return '<option value="'+_esc(u)+'"'+(row.unit===u?' selected':'')+'>'+_esc(u)+'</option>';
-        }).join('')
-      : '<option value="">—</option>';
-    html +=
-      '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px">' +
-        '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">' +
-          '<select onchange="_tcBwExtraTestChange('+i+',this.value)" style="'+selSty+';flex:1">'+testOpts+'</select>' +
-          '<button onclick="_tcBwRemoveExtra('+i+')" style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:16px;cursor:pointer;padding:6px 10px;line-height:1;flex-shrink:0">×</button>' +
-        '</div>' +
-        '<div style="display:flex;gap:6px;align-items:center">' +
-          '<input placeholder="Value" type="text" inputmode="decimal" value="'+_esc(row.value||'')+'" oninput="_tcBwAddExtras['+i+'].value=this.value" style="'+iSty+'">' +
-          '<select onchange="_tcBwAddExtras['+i+'].unit=this.value" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box;flex-shrink:0"'+(curTest?'':' disabled')+'>'+unitOpts+'</select>' +
-        '</div>' +
-        (row.name==='IGF-1'
-          ? '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">' +
-              '<input placeholder="Lab ref low" type="text" inputmode="decimal" value="'+_esc(row.ref_lo||'')+'" oninput="_tcBwAddExtras['+i+'].ref_lo=this.value" style="'+iSty+'">' +
-              '<span style="color:var(--muted2);font-size:12px;flex-shrink:0">–</span>' +
-              '<input placeholder="Lab ref high" type="text" inputmode="decimal" value="'+_esc(row.ref_hi||'')+'" oninput="_tcBwAddExtras['+i+'].ref_hi=this.value" style="'+iSty+'">' +
-            '</div>' +
-            '<div style="font-size:10px;color:var(--muted2);margin-top:4px">Optional: your lab’s IGF-1 reference range (same unit as above) for a personalised GH-axis target.</div>'
-          : '') +
-      '</div>';
-  });
-  container.innerHTML = html;
-}
-
-function _tcBwRemoveExtra(i) {
-  _tcBwAddExtras.splice(i, 1);
-  _tcBwRenderExtras();
-}
-
-async function _tcBwConfirmAdd() {
-  var dateEl = document.getElementById('tc-bw-date');
-  var ttEl   = document.getElementById('tc-bw-tt');
-  var shbgEl = document.getElementById('tc-bw-shbg');
-  var ftEl   = document.getElementById('tc-bw-ft');
-  var doseEl = document.getElementById('tc-bw-dose');
-  var date   = dateEl ? dateEl.value : '';
-  if (!date) { alert('Date is required.'); return; }
-  if (date > new Date().toISOString().slice(0, 10)) { alert('Blood test date cannot be in the future.'); return; }
-  var entry = {
-    date:       date,
-    total_t:    ttEl   && ttEl.value   ? parseDec(ttEl.value)   : null,
-    shbg:       shbgEl && shbgEl.value ? parseDec(shbgEl.value) : null,
-    free_t:     ftEl   && ftEl.value   ? parseDec(ftEl.value)   : null,
-    dose_at_bw: doseEl && doseEl.value ? parseDec(doseEl.value) : null,
-    extra:      _tcBwAddExtras.filter(function(r){ return r.name; })
-  };
-  var h = (typeof authHeaders==='function') ? authHeaders() : null;
-  if (!h) { alert('Sign in required.'); return; }
-  try {
-    var r = await fetch(AGENT_URL + '/bloodwork', {
-      method: 'POST',
-      headers: Object.assign({'Content-Type': 'application/json'}, h),
-      body: JSON.stringify(entry)
-    });
-    if (!r.ok) { alert('Failed to save.'); return; }
-  } catch(_e) { alert('Network error.'); return; }
-  _tcBwCloseAddSheet();
-  _tcBwEntries = null;
-  _tcBwLoading = true;
-  await _tcFetchBwEntries();
-}
-
-async function _tcBwDeleteEntry(id) {
-  var h = (typeof authHeaders==='function') ? authHeaders() : null;
-  if (!h) return;
-  try {
-    await fetch(AGENT_URL + '/bloodwork/' + encodeURIComponent(id), {method: 'DELETE', headers: h});
-  } catch(_e) {}
-  _tcBwEntries = null;
-  _tcBwLoading = true;
-  await _tcFetchBwEntries();
-}
-
-// Age-stratified free T reference midpoints (pmol/L) for when no bloodwork is entered.
-// Values are approximate midpoints of published male reference ranges.
+// Age→free-T reference midpoint (pmol/L) used when no measured free T is entered.
+// The table is reference DATA and lives in the backend (/systemic-interactions →
+// ftBaseline); we only hold it here once fetched. Returns 0 (neutral) until it loads
+// so no population numbers are ever hardcoded in the frontend.
 function _tcDefaultFT(birthYear) {
-  if (!birthYear) return 350;
+  var b = _tcFtBaseline;
+  if (!b || !b.bands) return 0;
+  if (!birthYear) return b.default || 0;
   var age = new Date().getFullYear() - birthYear;
-  if (age < 25) return 450;
-  if (age < 35) return 400;
-  if (age < 45) return 340;
-  if (age < 55) return 280;
-  if (age < 65) return 220;
-  return 180;
+  for (var i = 0; i < b.bands.length; i++) {
+    if (age <= b.bands[i].max_age) return b.bands[i].value;
+  }
+  return b.bands[b.bands.length - 1].value;
 }
 
 // Pure free-T model extracted from _tcDrawManualChart so BOTH the T-Calc chart
@@ -1166,6 +1114,9 @@ function _tcFreeTSeries(sorted, hooks) {
 
   // Calibrated pmol/L scale using settled peak/trough over the log window (not washout tail)
   var _mftNum  = parseDec(_tcp.measuredFT)      || _tcDefaultFT(parseInt(_tcp.birthYear) || 0);
+  // True when the free-T level is an age-based population default rather than the
+  // user's own measured value — drives the confidence tier / warning band below.
+  var _ftIsDefault = !(parseDec(_tcp.measuredFT) > 0);
   var _curDose = parseDec(_tcp.currentDoseMgWk) || 0;
   var _logDays = totalDays - washoutDays - 1;
   var _midLog  = Math.max(0, Math.floor(_logDays / 2));
@@ -1357,8 +1308,9 @@ function _tcFreeTSeries(sorted, hooks) {
 
   // Time-varying SHBG → free-T model.  Two drivers, both anchored at the bloodwork draw so the
   // curve passes exactly through the measured free T / SHBG (no double-counting):
-  //   1. SHBG-suppressing compounds & supplements (GH peptides, Boron): fixed-asymptote ramp
-  //      SHBG ×= ∏_i (1 − maxSupp_i × (1 − e^(−t/halfTime_i))).
+  //   1. SHBG-suppressing compounds & supplements (GH peptides, Boron): dose-scaled ramp
+  //      SHBG ×= ∏_i (1 − asym_i × (1 − e^(−t/halfTime_i))), asym_i = effMaxSupp(dailyDose_i)
+  //      so lowering a dose relaxes SHBG back up over halfTime (no all-or-nothing switch).
   //   2. Testosterone's OWN dose-dependent SHBG suppression: SHBG scales as a power law of the
   //      modelled (lagged) T level relative to the draw — SHBG(t)/SHBG_draw = (T_lag(t)/T_lag_draw)^(−β).
   //      This is the dominant driver on a TRT/enhanced schedule and the main source of drift
@@ -1367,39 +1319,98 @@ function _tcFreeTSeries(sorted, hooks) {
   var calFT_arr = null, _calFTlo = null, _calFThi = null;
   var _ghAnnot  = '';
   var _betaAnnot = '';
-  var _ttNum  = parseDec(_tcp.totalT) || 0;
-  var _shbgBw = parseDec(_tcp.shbg)   || 0;
-  if (calFT && _ttNum > 0 && _shbgBw > 0) {
-    var _vermBw = _tcVermeulenFT(_ttNum, _shbgBw);
-    if (_vermBw) {
-      // Compound SHBG suppressors (may be empty — testosterone alone still drives the model).
-      var _ghParams = [];
-      _tcGhStack.forEach(function(gh) {
-        var _ghStart = gh.startDateStr ? new Date(gh.startDateStr + 'T12:00:00') : null;
-        if (!_ghStart) return;
-        _ghParams.push({
-          ghDay0:   Math.round((_ghStart - firstDate) / 86400000),
-          maxSupp:  gh.interactions.shbg.maxSuppression,
-          halfTime: gh.interactions.shbg.halfTimeDays
-        });
-      });
-      var _ghProd = function(day) {
-        var p = 1;
-        _ghParams.forEach(function(gp) {
-          var t = Math.max(0, day - gp.ghDay0);
-          if (t > 0) p *= (1 - gp.maxSupp * (1 - Math.exp(-t / gp.halfTime)));
-        });
-        return p;
-      };
+  var _shbgMeas = parseDec(_tcp.shbg)   || 0;
+  var _ttMeas   = parseDec(_tcp.totalT) || 0;
+  var _tcAge    = (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0;
+  // Confidence tier from DATA availability (not from whether the model ran):
+  //   measured : total-T + SHBG bloodwork    → full model incl. T-driven β, β-band
+  //   partial  : only a measured free T        → GH/Boron suppression on a population SHBG base
+  //   estimate : no bloodwork (age-default FT) → same, wide band
+  var _tier = (_shbgMeas > 0 && _ttMeas > 0) ? 'measured' : (_ftIsDefault ? 'estimate' : 'partial');
+  // Baseline SHBG: measured when present, else a population value for the user's age. The
+  // SHBG suppression model runs whenever we have one — so GH/Boron move the curve even with
+  // no bloodwork (population averages) or only a partial / mid-cycle test.
+  var _popShbg = (_shbgMeas > 0) ? 0 : _tcShbgBaselineForAge(_tcAge);
+  if (calFT && (_shbgMeas > 0 || _popShbg > 0)) {
       // SHBG anchor day: the bloodwork draw if entered, else the free-T calibration anchor.
-      var _bwDate = _tcBwEntries && _tcBwEntries[0] ? _tcBwEntries[0].date : null;
+      var _bwEntry = (_tcBwEntries && _tcBwEntries[0]) ? _tcBwEntries[0] : null;
+      var _bwDate = _bwEntry ? _bwEntry.date : null;
       var _shbgRefDay = _bwDate
         ? Math.round((new Date(_bwDate + 'T12:00:00') - firstDate) / 86400000)
         : _anchorDay;
       _shbgRefDay = Math.max(0, Math.min(totalDays, _shbgRefDay || 0));
-      // Back-calculate the unsuppressed SHBG base from the compound product at the anchor.
+      // Doses that were ACTIVE AT THE DRAW, snapshotted when the bloodwork was saved.
+      // Keyed by compound id → dailyDose (in its doseResponse unit). Present only for
+      // draws recorded after this feature shipped; absent → we fall back to today's dose.
+      var _snapMap = null;
+      if (_bwEntry && Array.isArray(_bwEntry.suppressors) && _bwEntry.suppressors.length) {
+        _snapMap = {};
+        _bwEntry.suppressors.forEach(function(s){ if (s && s.id != null) _snapMap[s.id] = s.dailyDose; });
+      }
+
+      // Each suppressor carries TWO asymptotes: asymSnap (dose active at the draw) and
+      // asymCur (today's dose). Suppression follows a two-segment first-order relaxation —
+      // it ramps toward asymSnap up to the draw, then relaxes toward asymCur afterwards.
+      // This keeps SHBG(draw) fixed (so the inferred baseline no longer moves when the
+      // user changes a dose today) while the forward curve still tracks the new dose.
+      var _ghParams = [];
+      _tcGhStack.forEach(function(gh) {
+        var _ghStart = gh.startDateStr ? new Date(gh.startDateStr + 'T12:00:00') : null;
+        if (!_ghStart) return;
+        var _dr      = gh.interactions.shbg.doseResponse;
+        var _fixed   = gh.interactions.shbg.maxSuppression;
+        var _asymCur = _tcEffMaxSupp(_dr, gh.dailyDose);
+        if (_asymCur == null) _asymCur = _fixed;
+        // asymSnap null → single-segment current-dose ramp (legacy behaviour) unless the
+        // compound is explicitly recorded in the draw snapshot.
+        var _asymSnap = null;
+        if (_snapMap && Object.prototype.hasOwnProperty.call(_snapMap, gh.pepId)) {
+          _asymSnap = _tcEffMaxSupp(_dr, _snapMap[gh.pepId]);
+          if (_asymSnap == null) _asymSnap = _fixed;
+        }
+        _ghParams.push({
+          ghDay0:   Math.round((_ghStart - firstDate) / 86400000),
+          drawDay:  _shbgRefDay,
+          asymCur:  _asymCur,
+          asymSnap: _asymSnap,
+          halfTime: gh.interactions.shbg.halfTimeDays
+        });
+      });
+      var _suppAt = function(gp, day) {
+        if (day <= gp.ghDay0) return 0;
+        // No draw snapshot, or compound started at/after the draw → single current-dose ramp.
+        if (gp.asymSnap == null || gp.ghDay0 >= gp.drawDay) {
+          return gp.asymCur * (1 - Math.exp(-(day - gp.ghDay0) / gp.halfTime));
+        }
+        // Snapshot segment: dose active at the draw, from start → draw.
+        if (day <= gp.drawDay) {
+          return gp.asymSnap * (1 - Math.exp(-(day - gp.ghDay0) / gp.halfTime));
+        }
+        // Post-draw: relax from the level reached at the draw toward today's asymptote.
+        var suppDraw = gp.asymSnap * (1 - Math.exp(-(gp.drawDay - gp.ghDay0) / gp.halfTime));
+        return gp.asymCur + (suppDraw - gp.asymCur) * Math.exp(-(day - gp.drawDay) / gp.halfTime);
+      };
+      var _ghProd = function(day) {
+        var p = 1;
+        _ghParams.forEach(function(gp) { p *= (1 - _suppAt(gp, day)); });
+        return p;
+      };
       var _prodRef = _ghProd(_shbgRefDay);
-      var _shbgBase = (_prodRef > 0.05) ? _shbgBw / _prodRef : _shbgBw;
+      // Unsuppressed baseline SHBG + the SHBG value at the anchor.
+      //  • measured : back it out of the measured draw (fixed by the snapshot).
+      //  • population: the age baseline IS the unsuppressed value; suppress it to get the anchor.
+      var _shbgBase, _shbgBw;
+      if (_shbgMeas > 0) {
+        _shbgBw = _shbgMeas;
+        _shbgBase = (_prodRef > 0.05) ? _shbgBw / _prodRef : _shbgBw;
+      } else {
+        _shbgBase = _popShbg;
+        _shbgBw = _shbgBase * _prodRef;
+      }
+      // Total T: measured, else inferred from the free-T anchor + baseline SHBG (Vermeulen inverse).
+      var _ttNum = _ttMeas > 0 ? _ttMeas : _tcInvVermeulenTT(_mftNum, _shbgBw);
+      var _vermBw = (_ttNum > 0 && _shbgBw > 0) ? _tcVermeulenFT(_ttNum, _shbgBw) : null;
+      if (_vermBw) {
       // Lagged testosterone level: EMA of the modelled accumulation (SHBG responds over weeks).
       var _tlag = new Float64Array(totalDays + 1);
       var _alpha = 1 - Math.exp(-1 / TCALC_TSHBG_LAG_DAYS);
@@ -1412,10 +1423,16 @@ function _tcFreeTSeries(sorted, hooks) {
         var f = Math.pow(r, -beta);
         return Math.max(0.35, Math.min(1.30, f));  // physiological clamp: ≤65% drop, ≤30% rise
       };
+      // Testosterone's OWN dose-dependent SHBG suppression (the β power-law) is only trustworthy
+      // with a MEASURED total T. In the population tiers we apply the GH/Boron (dose-driven)
+      // suppression alone — so with no suppressors the curve stays flat at the anchor, and with
+      // GH/Boron it shows their effect, without inventing a T-driven swing we can't support.
+      var _useBeta = (_tier === 'measured');
       var _mkArr = function(beta) {
         var arr = new Float64Array(totalDays + 1);
         for (var t = 0; t <= totalDays; t++) {
-          var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tFactor(t, beta));
+          var _tf = _useBeta ? _tFactor(t, beta) : 1;
+          var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tf);
           var _vermT = _tcVermeulenFT(_ttNum, _shbgT);
           arr[t] = _vermT ? calFT * (_vermT / _vermBw) : calFT;
         }
@@ -1426,19 +1443,49 @@ function _tcFreeTSeries(sorted, hooks) {
       var _betaC  = _betaFit ? _betaFit.beta : TCALC_TSHBG_BETA;
       var _betaLo = _betaFit ? _betaFit.lo   : TCALC_TSHBG_BETA_LO;
       var _betaHi = _betaFit ? _betaFit.hi   : TCALC_TSHBG_BETA_HI;
+      // β is testosterone's own SHBG-suppression exponent. Fitting it needs ≥2 (total-T,
+      // SHBG) labs at different T levels, so with one draw we show the population value and
+      // tell the user what unlocks a personal fit — it does NOT mean their bloodwork is unused.
       _betaAnnot = _betaFit ? ('β ' + _betaC.toFixed(2) + ' · ' + _betaFit.n + ' labs')
-                            : ('β ' + TCALC_TSHBG_BETA.toFixed(2) + ' · population');
+                            : ('β ' + TCALC_TSHBG_BETA.toFixed(2) + ' · population · add a 2nd lab');
 
       calFT_arr = _mkArr(_betaC);
-      _calFTlo  = _mkArr(_betaLo);
-      _calFThi  = _mkArr(_betaHi);
-      if (hooks.shbg) hooks.shbg({ calFT: calFT, arr: calFT_arr, lo: _calFTlo, hi: _calFThi, refDay: _shbgRefDay, total: total, beta: _betaC, personalized: !!_betaFit });
+      if (_tier === 'measured') {
+        _calFTlo = _mkArr(_betaLo);
+        _calFThi = _mkArr(_betaHi);
+      } else {
+        // Population tiers: a wide symmetric band reflecting the estimate's uncertainty,
+        // drawn around the (suppression-aware) central curve.
+        var _frac = (_tier === 'estimate') ? 0.35 : 0.20;
+        _calFTlo = new Float64Array(totalDays + 1);
+        _calFThi = new Float64Array(totalDays + 1);
+        for (var _bi = 0; _bi <= totalDays; _bi++) {
+          _calFTlo[_bi] = calFT_arr[_bi] * (1 - _frac);
+          _calFThi[_bi] = calFT_arr[_bi] * (1 + _frac);
+        }
+      }
+      if (hooks.shbg) hooks.shbg({ calFT: calFT, arr: calFT_arr, lo: _calFTlo, hi: _calFThi, refDay: _shbgRefDay, total: total, beta: _betaC, personalized: !!_betaFit, tier: _tier });
 
-      // Modelled SHBG change at "now" vs the bloodwork value, for the chart annotation.
+      // Modelled SHBG change at "now" vs the anchor, for the chart annotation.
       var _nowDay = Math.max(0, Math.min(totalDays, Math.round((Date.now() - firstDate.getTime()) / 86400000)));
-      var _shbgNow = _shbgBase * _ghProd(_nowDay) * _tFactor(_nowDay, _betaC);
-      var _shbgDelta = _shbgBw > 0 ? (_shbgNow / _shbgBw - 1) : 0;
+      var _shbgNow = _shbgBase * _ghProd(_nowDay) * (_useBeta ? _tFactor(_nowDay, _betaC) : 1);
+      var _shbgAnchor = _shbgBase * _ghProd(_shbgRefDay);
+      var _shbgDelta = _shbgAnchor > 0 ? (_shbgNow / _shbgAnchor - 1) : 0;
       if (Math.abs(_shbgDelta) > 0.01) _ghAnnot = 'SHBG ' + (_shbgDelta < 0 ? '−' : '+') + Math.round(Math.abs(_shbgDelta) * 100) + '%';
+      }
+  }
+
+  // If the SHBG model could not run (no measured SHBG and no population baseline — e.g. no
+  // age on file), still render the estimate with a synthetic wide band so it's never blank.
+  if (!calFT_arr && calFT) {
+    var _estFrac = (_tier === 'estimate') ? 0.35 : 0.20;
+    calFT_arr = new Float64Array(totalDays + 1);
+    _calFTlo  = new Float64Array(totalDays + 1);
+    _calFThi  = new Float64Array(totalDays + 1);
+    for (var _et = 0; _et <= totalDays; _et++) {
+      calFT_arr[_et] = scale;
+      _calFTlo[_et]  = scale * (1 - _estFrac);
+      _calFThi[_et]  = scale * (1 + _estFrac);
     }
   }
 
@@ -1448,7 +1495,7 @@ function _tcFreeTSeries(sorted, hooks) {
   if (hooks.start) hooks.start(total[0] * (calFT_arr ? calFT_arr[0] : scale));
   return { firstDate: firstDate, totalDays: totalDays, total: total, calFT: calFT, scale: scale,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
-           measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, sorted: sorted };
+           measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, tier: _tier, sorted: sorted };
 }
 
 function _tcDrawManualChart(canvasId, log, zoom3) {
@@ -1459,7 +1506,7 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   var _S = _tcFreeTSeries(sorted, { calFT: canvas._testCalFTHook, shbg: canvas._testShbgHook, start: canvas._testStartHook });
   var firstDate = _S.firstDate, totalDays = _S.totalDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
-      _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot;
+      _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _tier = _S.tier;
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -1572,14 +1619,21 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     ctx.fill();
   }
 
+  // Today's level y — computed early so the peak label (same left-axis lane) can dodge it.
+  var _tdClamp = Math.max(0, Math.min(totalDays, nowDay));
+  var _tdLvl = calFT ? (total[_tdClamp] * (calFT_arr ? calFT_arr[_tdClamp] : scale)) : 0;
+  var _todayLabelY = (calFT && _tdLvl > 0 && nowDay >= xStart && nowDay <= xEnd) ? yOf(_tdLvl) : null;
+
   // Peak highlight line + y-axis label
   if (calFT && peakV > 0 && peakV > (_mftNum || 0) * 1.05) {
     var _pkY = yOf(peakV);
     ctx.strokeStyle = lineColor + 'aa'; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
     ctx.beginPath(); ctx.moveTo(PAD.left, _pkY); ctx.lineTo(PAD.left + cW, _pkY); ctx.stroke();
     ctx.setLineDash([]);
+    // Keep the peak number clear of today's boxed number when the two sit at the same height.
+    var _pkTextY = (_todayLabelY != null) ? _tcNudgeLabelY(_pkY, [_todayLabelY], 11, PAD.top + 6, PAD.top + cH - 2) : _pkY;
     ctx.fillStyle = lineColor; ctx.font = 'bold 8px DM Sans,sans-serif'; ctx.textAlign = 'right';
-    ctx.fillText(Math.round(peakV), PAD.left - 4, _pkY + 3);
+    ctx.fillText(Math.round(peakV), PAD.left - 4, _pkTextY + 3);
   }
 
   var grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
@@ -1595,7 +1649,43 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   for (var t3 = xStart + 1; t3 <= xEnd; t3++) {
     ctx.lineTo(xOf(t3), yOf(total[t3] * (calFT_arr ? calFT_arr[t3] : scale) || 0));
   }
+  // Estimate tiers (no bloodwork, or no SHBG data) draw dashed to signal lower confidence.
+  if (_tier && _tier !== 'measured') ctx.setLineDash([5,3]);
   ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.setLineDash([]);
+
+  // AVERAGE reference line (teal, toggleable) — the mean level over the CURRENTLY
+  // VISIBLE window, so it tracks the zoom (day/week/month/whole) instead of sitting at
+  // one global value. In Whole it reads the whole-cycle average; zoom in and it reports
+  // the average of just what you're looking at. Still makes the "peak differs, average
+  // doesn't" point: an infrequent-large schedule peaks far above it, a frequent one hugs it.
+  if (calFT && _tcShowAvg()) {
+    var _avgSum = 0, _avgN = 0;
+    for (var _ai = xStart; _ai <= xEnd; _ai++) { _avgSum += total[_ai] * (calFT_arr ? calFT_arr[_ai] : scale); _avgN++; }
+    var _avgLvl = _avgN > 0 ? _avgSum / _avgN : 0;
+    if (canvas._testAvgHook) canvas._testAvgHook({ avg: _avgLvl, xStart: xStart, xEnd: xEnd });
+    if (_avgLvl > 0 && _avgLvl <= vMax) {
+      var _avY = yOf(_avgLvl);
+      ctx.strokeStyle = '#5ad1b0cc'; ctx.lineWidth = 1; ctx.setLineDash([1,3]);
+      ctx.beginPath(); ctx.moveTo(PAD.left, _avY); ctx.lineTo(PAD.left + cW, _avY); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#5ad1b0'; ctx.font = 'bold 8px DM Sans,sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText('avg ' + Math.round(_avgLvl), PAD.left + cW, _avY - 3);
+    }
+  }
+
+  // Warning badge for estimate tiers — a pill top-left of the plot so the user never
+  // mistakes an age-default / no-SHBG curve for a bloodwork-calibrated result.
+  if (_tier && _tier !== 'measured' && calFT) {
+    var _badge = (_tier === 'estimate') ? '⚠ ESTIMATE · NO BLOODWORK' : '⚠ EST · NO SHBG DATA';
+    ctx.font = 'bold 8px DM Sans,sans-serif'; ctx.textAlign = 'left';
+    var _badgeW = (ctx.measureText(_badge).width || 0) + 10;
+    var _bx = PAD.left + 2, _by = PAD.top + 2;
+    ctx.fillStyle = '#e8a020dd';
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(_bx, _by, _badgeW, 12, 3); ctx.fill(); }
+    else { ctx.fillRect(_bx, _by, _badgeW, 12); }
+    ctx.fillStyle = '#1a1205'; ctx.fillText(_badge, _bx + 5, _by + 9);
+  }
 
   // "Now" vertical line + TODAY'S free-T level (Y-axis label) — shown in EVERY
   // zoom, including Whole. The horizontal marker + left-axis number always report
@@ -2182,6 +2272,10 @@ function buildTCalc() {
       html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
     });
     html += '</div>';
+    html += '<label style="display:flex;align-items:center;gap:5px;font-size:9px;font-weight:700;letter-spacing:0.6px;color:var(--muted2);cursor:pointer;margin-bottom:8px;user-select:none">' +
+      '<input type="checkbox" ' + (_tcShowAvg() ? 'checked' : '') + ' onchange="_tcToggleAvgLine(this)" style="accent-color:#5ad1b0;width:13px;height:13px;cursor:pointer;margin:0"> ' +
+      '<span style="color:#5ad1b0">■</span> STEADY-STATE AVERAGE' +
+      '</label>';
     html += '<canvas id="tc-main-chart" style="width:100%;display:block;"></canvas>';
     html += '</div>';
   } else {
@@ -2325,16 +2419,17 @@ function buildTCalc() {
       html += '<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">⚠ Age not set — go to Body Comp → Age to enable age-stratified reference ranges.</div>';
     }
 
-    // ADD ENTRY button
+    // Bloodwork entry lives in the Labs tab now — this panel is read-only context
+    // for the free-T model. Route add/edit/delete to the single front door.
     html += '<div style="display:flex;justify-content:flex-end">';
-    html += '<button onclick="event.stopPropagation();_tcBwOpenAddSheet()" style="background:linear-gradient(135deg,#cc8844,#aa6622);border:none;border-radius:8px;color:#fff;font-size:11px;font-weight:800;letter-spacing:0.8px;cursor:pointer;padding:7px 14px;font-family:inherit">+ ADD ENTRY</button>';
+    html += '<button onclick="event.stopPropagation();switchTab(\'labs\',document.getElementById(\'tab-btn-labs\'))" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:11px;font-weight:800;letter-spacing:0.8px;cursor:pointer;padding:7px 14px;font-family:inherit">MANAGE IN LABS →</button>';
     html += '</div>';
 
     // Entry list
     if (_tcBwEntries === null) {
       html += '<div style="text-align:center;padding:16px 0;color:var(--muted2);font-size:13px">Loading…</div>';
     } else if (_tcBwEntries.length === 0) {
-      html += '<div style="text-align:center;padding:16px 0;color:var(--muted2);font-size:13px">No blood test entries yet.<br><span style="font-size:12px;opacity:0.6">Tap + ADD ENTRY to log your first result.</span></div>';
+      html += '<div style="text-align:center;padding:16px 0;color:var(--muted2);font-size:13px">No blood test entries yet.<br><span style="font-size:12px;opacity:0.6">Add your first result in the Labs tab.</span></div>';
     } else {
       var _fmtBwDate = function(iso) {
         if (!iso) return '';
@@ -2358,7 +2453,6 @@ function buildTCalc() {
         html += '</div>';
         if (parts.length) html += '<div style="font-size:12px;color:var(--muted2);line-height:1.6">' + _esc(parts.join(' · ')) + '</div>';
         html += '</div>';
-        html += '<button onclick="event.stopPropagation();_tcBwDeleteEntry(\'' + _esc(entry.id) + '\')" style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:18px;line-height:1;cursor:pointer;padding:4px 9px;flex-shrink:0">×</button>';
         html += '</div>';
       });
     }

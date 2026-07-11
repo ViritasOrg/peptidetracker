@@ -66,7 +66,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -77,6 +77,25 @@ tabFiles.forEach(f => {
   }
 });
 const G = sandbox;
+
+// Seed the age→free-T population baseline the app fetches from the backend
+// (/systemic-interactions → ftBaseline). In the real app init() sets this; the
+// test fetch stub returns nothing, so provide the same reference data here.
+G._tcFtBaseline = {
+  unit: 'pmol/L', default: 350,
+  bands: [
+    {max_age:24, value:450}, {max_age:34, value:400}, {max_age:44, value:340},
+    {max_age:54, value:280}, {max_age:64, value:220}, {max_age:200, value:180},
+  ],
+};
+// Population SHBG baseline (age→nmol/L), also served by /systemic-interactions.
+G._tcShbgBaseline = {
+  unit: 'nmol/L',
+  bands: [
+    {max_age:24, value:30}, {max_age:34, value:32}, {max_age:44, value:35},
+    {max_age:54, value:38}, {max_age:64, value:42}, {max_age:200, value:48},
+  ],
+};
 
 let passed=0, failed=0;
 function check(name, condition, detail) {
@@ -227,6 +246,34 @@ if(typeof G._nextStackName==='function'){
   G._userStacks=[{name:'Cycle 1'}]; G.initWizard();
   check('initWizard: default name bumps (Cycle 2)', G._wiz.stackName==='Cycle 2');
   G._userStacks=_nsSaved;
+}
+
+// ── Today view: de-dupe injection slots (dose-edit doubling fix) ──
+if (typeof G._dedupInjectionSlots === 'function') {
+  // A slot with both an administered (logged) shot and a newly-planned one collapses
+  // to ONE row, keeping the logged shot.
+  var _ddOut = G._dedupInjectionSlots([
+    {compound_id:'hgh', time_of_day:'AM', dose:'2', logged:true},
+    {compound_id:'hgh', time_of_day:'AM', dose:'3', logged:false},
+  ]);
+  check('dedup slots: duplicate compound+slot collapses to one', _ddOut.length === 1);
+  check('dedup slots: keeps the already-logged shot', _ddOut[0].logged === true && _ddOut[0].dose === '2');
+  // AM and PM are distinct slots — both survive.
+  check('dedup slots: AM and PM are independent',
+    G._dedupInjectionSlots([
+      {compound_id:'hgh', time_of_day:'AM', dose:'3'},
+      {compound_id:'hgh', time_of_day:'PM', dose:'3'},
+    ]).length === 2);
+  // Different compounds in the same slot both survive; original order preserved.
+  var _ddOrder = G._dedupInjectionSlots([
+    {compound_id:'glow', time_of_day:'AM', dose:'0.1'},
+    {compound_id:'hgh',  time_of_day:'AM', dose:'3'},
+    {compound_id:'glow', time_of_day:'AM', dose:'0.1'},
+  ]);
+  check('dedup slots: distinct compounds kept, order preserved',
+    _ddOrder.length === 2 && _ddOrder[0].compound_id === 'glow' && _ddOrder[1].compound_id === 'hgh');
+  check('dedup slots: tolerates empty/null input',
+    G._dedupInjectionSlots([]).length === 0 && G._dedupInjectionSlots(null).length === 0);
 }
 
 // ── TRT tab: surface T-Calc-planned testosterone (the "two ways to plan TRT") ──
@@ -3191,6 +3238,91 @@ if (typeof G._tcFreeTSeries === 'function') {
   G._tcp.measuredFT = _fsFT; G._tcp.currentDoseMgWk = _fsDose; G._tcBwEntries = _fsBw;
 }
 
+// _tcDefaultFT: age→free-T midpoint comes from the backend baseline, NOT hardcoded.
+if (typeof G._tcDefaultFT === 'function') {
+  var _dfSaved = G._tcFtBaseline;
+  check('_tcDefaultFT: unknown birth year → backend "default" midpoint', G._tcDefaultFT(0) === 350);
+  check('_tcDefaultFT: age band lookup uses backend values (age ~40 → 340)',
+    G._tcDefaultFT(new Date().getFullYear() - 40) === 340);
+  check('_tcDefaultFT: oldest band applies beyond the last max_age', G._tcDefaultFT(new Date().getFullYear() - 80) === 180);
+  // No reference data hardcoded in the frontend: with the baseline unloaded it must
+  // return a neutral 0, never a population number baked into the code.
+  G._tcFtBaseline = null;
+  check('_tcDefaultFT: neutral 0 when the backend baseline has not loaded', G._tcDefaultFT(0) === 0 && G._tcDefaultFT(1985) === 0);
+  G._tcFtBaseline = _dfSaved;
+}
+
+// Confidence tiers: the model must render an HONEST estimate — with a wide, clearly
+// wider-when-less-data uncertainty band — even when the user has no bloodwork, so people
+// who can't test regularly still get something, flagged as lower confidence.
+if (typeof G._tcFreeTSeries === 'function') {
+  var _t3p0 = G._tcp, _t3Bw0 = G._tcBwEntries, _t3Gh0 = G._tcGhStack;
+  var _t3Log = [{compId:'testoviron',doseMg:'125',date:'2026-06-24'},{compId:'testoviron',doseMg:'125',date:'2026-06-28'}].sort(function(a,b){return a.date<b.date?-1:1;});
+  G._tcGhStack = [];
+
+  // estimate: no measured FT, no SHBG/TT, no bloodwork → age-default level + wide band
+  G._tcp = {measuredFT:'', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_t3Log};
+  G._tcBwEntries = null;
+  var _t3e = G._tcFreeTSeries(_t3Log, {});
+  var _t3mid = Math.floor(_t3e.totalDays / 2);
+  check('tier: no bloodwork at all → "estimate"', _t3e.tier === 'estimate');
+  check('tier: estimate still renders a calibrated pmol/L curve', _t3e.calFT > 0 && !!_t3e.calFT_arr && _t3e.unitLabel === 'pmol/L');
+  check('tier: estimate carries a wide (~±35%) uncertainty band',
+    !!_t3e.calFThi && Math.abs(_t3e.calFThi[_t3mid]/_t3e.calFT_arr[_t3mid] - 1.35) < 0.02 && Math.abs(_t3e.calFTlo[_t3mid]/_t3e.calFT_arr[_t3mid] - 0.65) < 0.02);
+
+  // partial: a measured FT but no SHBG/total-T → medium band, no SHBG dynamics
+  G._tcp = {measuredFT:'300', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_t3Log};
+  var _t3pt = G._tcFreeTSeries(_t3Log, {});
+  check('tier: measured FT but no SHBG/TT → "partial"', _t3pt.tier === 'partial');
+  check('tier: partial band (~±20%) is narrower than the no-bloodwork estimate band',
+    !!_t3pt.calFThi && Math.abs(_t3pt.calFThi[_t3mid]/_t3pt.calFT_arr[_t3mid] - 1.20) < 0.02);
+
+  // measured: FT + total T + SHBG + a bloodwork entry → real SHBG model (β-band, not flat)
+  var _t3mLog = [{compId:'testoviron',doseMg:'100',date:'2026-06-24'}];
+  for (var _t3i=0; _t3i<8; _t3i++){ var _t3d=new Date(new Date('2026-06-26').getTime()+_t3i*3*86400000); _t3mLog.push({compId:'nebido',doseMg:'100',date:_t3d.getFullYear()+'-'+String(_t3d.getMonth()+1).padStart(2,'0')+'-'+String(_t3d.getDate()).padStart(2,'0')}); }
+  G._tcp = {measuredFT:'400', currentDoseMgWk:'', totalT:'25', shbg:'40', birthYear:'1985', manualLog:_t3mLog};
+  G._tcBwEntries = [{date:'2026-06-24', total_t:25, shbg:40, free_t:400}];
+  var _t3ms = G._tcFreeTSeries(_t3mLog, {});
+  check('tier: full bloodwork → "measured"', _t3ms.tier === 'measured');
+  check('tier: measured band is a real β-band with width away from the draw (not synthetic flat)',
+    !!_t3ms.calFThi && !!_t3ms.calFTlo && _t3ms.calFThi[_t3ms.totalDays] > _t3ms.calFTlo[_t3ms.totalDays]);
+
+  G._tcp = _t3p0; G._tcBwEntries = _t3Bw0; G._tcGhStack = _t3Gh0;
+}
+
+// SHBG suppression now runs WITHOUT bloodwork (population baselines): GH/Boron move the
+// curve for people who don't test, and for partial/mid-cycle tests.
+if (typeof G._tcFreeTSeries === 'function') {
+  var _psTp = G._tcp, _psBw = G._tcBwEntries, _psGh = G._tcGhStack, _psBase = G._tcShbgBaseline;
+  var _psLog = [];
+  for (var _pi=0; _pi<30; _pi++){ var _pd=new Date(new Date('2026-05-01').getTime()+_pi*3.5*86400000); _psLog.push({compId:'enanthate', doseMg:'100', date:_pd.getFullYear()+'-'+String(_pd.getMonth()+1).padStart(2,'0')+'-'+String(_pd.getDate()).padStart(2,'0')}); }
+  var _psGhI = {shbg:{direction:'suppress', maxSuppression:0.40, halfTimeDays:25, doseResponse:{unit:'IU/day', ed50:2, emax:0.56, typicalDose:5}}};
+  function _psSpread(s){ var mn=1e9,mx=-1e9; for(var t=0;t<=s.totalDays;t++){ var v=s.calFT_arr?s.calFT_arr[t]:s.scale; if(v<mn)mn=v; if(v>mx)mx=v; } return mx/(mn||1); }
+  function _psFt(s,t){ return s.total[t]*(s.calFT_arr?s.calFT_arr[t]:s.scale); }
+  // estimate tier: no measured FT / SHBG / TT, but age present → population baselines
+  G._tcp = {measuredFT:'', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_psLog};
+  G._tcBwEntries = null;
+  G._tcGhStack = [];
+  var _psFlat = G._tcFreeTSeries(_psLog.slice(), {});
+  check('no-bloodwork SHBG: model runs in the estimate tier (calibrated pmol/L)',
+    _psFlat.tier === 'estimate' && _psFlat.calFT > 0 && !!_psFlat.calFT_arr);
+  check('no-bloodwork SHBG: with no suppressors the curve is flat (no invented T-driven swing)',
+    _psSpread(_psFlat) < 1.01);
+  // add a GH suppressor → the curve must bend (suppression shows without any bloodwork)
+  G._tcGhStack = [{pepId:'hgh', startDateStr:'2026-05-01', interactions:_psGhI, dailyDose:5}];
+  var _psSupp = G._tcFreeTSeries(_psLog.slice(), {});
+  check('no-bloodwork SHBG: a GH suppressor bends the free-T curve (population SHBG baseline used)',
+    _psSpread(_psSupp) > 1.03, 'spread=' + _psSpread(_psSupp).toFixed(3));
+  check('no-bloodwork SHBG: GH raises free T later in the cycle vs the same schedule with no GH',
+    _psFt(_psSupp, _psSupp.totalDays - 5) > _psFt(_psFlat, _psFlat.totalDays - 5));
+  // without the population SHBG baseline (e.g. table not loaded) → safe flat fallback
+  G._tcShbgBaseline = null;
+  check('no-bloodwork SHBG: no population baseline → falls back to a flat estimate',
+    _psSpread(G._tcFreeTSeries(_psLog.slice(), {})) < 1.01);
+  G._tcShbgBaseline = _psBase;
+  G._tcp = _psTp; G._tcBwEntries = _psBw; G._tcGhStack = _psGh;
+}
+
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
 // Bug: weighted ke was dominated by TE (short HL=4.5d), causing the prior-protocol
 // baseline to wash out in ~7 days. By Day 30 it was <6% of initial, leaving total
@@ -4152,10 +4284,224 @@ if (typeof G.SUPPLEMENT_CAT !== 'undefined') {
     G._tcComputeGhStack();
     check('SHBG model ignores supplements with no interaction',
       G._tcGhStack.every(function(e){ return e.pepId !== 'supp_vitc'; }));
+
+    // Start date comes from the FIRST checked date in the today view (supplement log),
+    // not the stored start_date — so a supplement counts from when it was first taken.
+    var _savedLog2 = G._suppLog;
+    G._supplements = [{id:'b', supp_id:'boron', name:'Boron', dose:'6 mg', freq:'daily', start_date:'2026-06-20'}];
+    G._suppLog = {};
+    G._suppLog[G._suppLogKey('boron','2026-06-05','AM')] = true;
+    G._suppLog[G._suppLogKey('boron','2026-06-11','AM')] = true;   // later — must not win
+    G._tcGhStack = [];
+    G._tcComputeGhStack();
+    var _bEntry = G._tcGhStack.find(function(e){ return e.pepId==='supp_boron'; });
+    check('supplement start = earliest checked date (2026-06-05), not stored start_date',
+      _bEntry && _bEntry.startDateStr === '2026-06-05', _bEntry && _bEntry.startDateStr);
+    // never checked → falls back to the explicit start_date
+    G._suppLog = {};
+    G._tcGhStack = [];
+    G._tcComputeGhStack();
+    var _bEntry2 = G._tcGhStack.find(function(e){ return e.pepId==='supp_boron'; });
+    check('supplement start falls back to start_date when never checked',
+      _bEntry2 && _bEntry2.startDateStr === '2026-06-20', _bEntry2 && _bEntry2.startDateStr);
+    G._suppLog = _savedLog2 || {};
+
     G._tcSysInter = _savedSys; G._tcActiveStacks = _savedStacks; G._supplements = _savedSupp || []; G._tcGhStack = _savedGh || [];
   }
 } else {
   check('SUPPLEMENT_CAT defined (tab-supplements.js loaded)', false);
+}
+
+// ── SHBG suppression is dose-dependent + time-varying (Emax dose-response) ──
+console.log('\n── T-calc: dose-dependent SHBG suppression (effMaxSupp) ──');
+if (typeof G._tcEffMaxSupp === 'function') {
+  var _drH = {unit:'IU/day', ed50:2, emax:0.56, typicalDose:5};
+  // saturating Emax: 0 at 0 dose, monotone up, capped by emax, calibrated at typical dose
+  check('effMaxSupp: zero dose → zero suppression', G._tcEffMaxSupp(_drH, 0) === null || G._tcEffMaxSupp(_drH, 0) === 0);
+  check('effMaxSupp: monotone increasing in dose', G._tcEffMaxSupp(_drH, 4) < G._tcEffMaxSupp(_drH, 5) && G._tcEffMaxSupp(_drH, 5) < G._tcEffMaxSupp(_drH, 8));
+  check('effMaxSupp: calibrated to ~0.40 at the 5 IU typical dose', Math.abs(G._tcEffMaxSupp(_drH, 5) - 0.40) < 0.02);
+  check('effMaxSupp: saturates below emax', G._tcEffMaxSupp(_drH, 1e6) <= _drH.emax + 1e-9);
+  check('effMaxSupp: HGH 4 IU suppresses less than the 5 IU reference', G._tcEffMaxSupp(_drH, 4) < G._tcEffMaxSupp(_drH, 5));
+  check('effMaxSupp: null/invalid dose-response → null', G._tcEffMaxSupp(null, 5) === null && G._tcEffMaxSupp({ed50:2,emax:0.5}, -1) === null);
+}
+if (typeof G._tcConvDose === 'function') {
+  check('convDose: mcg → mg divides by 1000', Math.abs(G._tcConvDose(300, 'mcg', 'mg/day') - 0.3) < 1e-9);
+  check('convDose: same unit is identity (strips /period)', G._tcConvDose(10, 'mg', 'mg/day') === 10);
+  check('convDose: IU ↔ mass refused (returns null)', G._tcConvDose(5, 'IU', 'mg/day') === null);
+  check('convDose: IU → IU passes through', Math.abs(G._tcConvDose(5, 'IU', 'IU/day') - 5) < 1e-9);
+}
+if (typeof G._tcSuppDailyDose === 'function') {
+  var _iHgh = {shbg:{direction:'suppress', maxSuppression:0.40, halfTimeDays:25, doseResponse:{unit:'IU/day', ed50:2, emax:0.56, typicalDose:5}}};
+  // peptide dosed 5 IU AM every day → 5 IU/day
+  check('suppDailyDose: daily IU peptide → 5 IU/day',
+    Math.abs(G._tcSuppDailyDose(_iHgh, 'peptide', {dose_am:'5', unit_am:'IU', times:['AM'], days:[0,1,2,3,4,5,6]}) - 5) < 1e-9);
+  // same 5 IU dosed only 5 days/week → averaged to 5·5/7 IU/day
+  check('suppDailyDose: 5-day/week schedule is averaged over the week',
+    Math.abs(G._tcSuppDailyDose(_iHgh, 'peptide', {dose_am:'5', unit_am:'IU', times:['AM'], days:[1,2,3,4,5]}) - 5*5/7) < 1e-9);
+  var _iBor = {shbg:{direction:'suppress', maxSuppression:0.09, halfTimeDays:4, doseResponse:{unit:'mg/day', ed50:4, emax:0.126, typicalDose:10}}};
+  check('suppDailyDose: daily boron supplement "10 mg" → 10 mg/day',
+    Math.abs(G._tcSuppDailyDose(_iBor, 'supp', {dose:'10 mg', freq:'daily'}) - 10) < 1e-9);
+  var _iCjc = {shbg:{direction:'suppress', maxSuppression:0.20, halfTimeDays:32, doseResponse:{unit:'mcg/day', ed50:120, emax:0.28, typicalDose:300}}};
+  check('suppDailyDose: enhanced compound "2100 mcg/week" → 300 mcg/day',
+    Math.abs(G._tcSuppDailyDose(_iCjc, 'compound', {dose:'2100', unit:'mcg/week'}) - 300) < 1e-9);
+  check('suppDailyDose: no dose-response → null', G._tcSuppDailyDose({shbg:{direction:'suppress',maxSuppression:0.2,halfTimeDays:10}}, 'supp', {dose:'10 mg', freq:'daily'}) === null);
+}
+
+// integration: a lower GH dose leaves SHBG higher → a lower free-T peak than the reference dose.
+if (typeof G._tcDrawManualChart === 'function' && typeof G._tcEffMaxSupp === 'function') {
+  var _ddSaveTp = G._tcp, _ddSaveBw = G._tcBwEntries, _ddSaveGh = G._tcGhStack, _ddSaveGE = G.document.getElementById;
+  var _ddCap = null;
+  var _ddCtx = { scale:noop,beginPath:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,moveTo:noop,lineTo:noop,measureText:function(){return{width:0};},createLinearGradient:function(){return{addColorStop:noop};} };
+  G.document.getElementById = function(id){ return id==='tc-manual-chart' ? { style:{},classList:{add:noop,remove:noop,contains:function(){return false;}},offsetWidth:350,offsetHeight:250,_testShbgHook:function(v){_ddCap=v;},getContext:function(){return _ddCtx;} } : _ddSaveGE(id); };
+  var _ddLog = [{compId:'testoviron',doseMg:'100',date:'2026-06-01'}];
+  for (var _ddi=0;_ddi<12;_ddi++){ var _ddd=new Date(new Date('2026-06-03').getTime()+_ddi*3*86400000); _ddLog.push({compId:'nebido',doseMg:'100',date:_ddd.getFullYear()+'-'+String(_ddd.getMonth()+1).padStart(2,'0')+'-'+String(_ddd.getDate()).padStart(2,'0')}); }
+  G._tcp = {measuredFT:'400', currentDoseMgWk:'0', totalT:'25', shbg:'40', birthYear:'1980', manualLog:_ddLog};
+  G._tcBwEntries = [{date:'2026-06-15', total_t:25, shbg:40, free_t:400}];
+  var _ghInter = {shbg:{direction:'suppress', maxSuppression:0.40, halfTimeDays:25, doseResponse:{unit:'IU/day', ed50:2, emax:0.56, typicalDose:5}}};
+  function _ddPeak(dailyDose){
+    G._tcGhStack = [{pepId:'hgh', startDateStr:'2026-06-01', interactions:_ghInter, dailyDose:dailyDose}];
+    _ddCap = null; G._tcDrawManualChart('tc-manual-chart', _ddLog);
+    var arr=_ddCap.arr, tot=_ddCap.total, pk=0,pv=0;
+    for(var t=0;t<tot.length;t++){ var v=tot[t]*arr[t]; if(v>pv){pv=v;pk=t;} }
+    return pv;
+  }
+  var _ddThrew=false, _peak2=0, _peak4=0, _peak5=0, _peak8=0;
+  try { _peak2=_ddPeak(2); _peak4=_ddPeak(4); _peak5=_ddPeak(5); _peak8=_ddPeak(8); } catch(e){ _ddThrew=true; console.error('  dose-dep test threw:', e.message); }
+  check('dose-dep SHBG: no crash', !_ddThrew && _ddCap !== null);
+  // Higher GH dose → more SHBG suppression → higher modelled free-T peak (monotone in dose).
+  check('dose-dep SHBG: free-T peak increases monotonically with GH dose (2<4<8 IU)',
+    !_ddThrew && _peak2 < _peak4 && _peak4 < _peak8, 'peak2='+_peak2.toFixed(1)+' peak4='+_peak4.toFixed(1)+' peak8='+_peak8.toFixed(1));
+  check('dose-dep SHBG: lower HGH dose (4 IU) → lower free-T peak than 5 IU reference',
+    !_ddThrew && _peak4 < _peak5, 'peak4='+_peak4.toFixed(1)+' peak5='+_peak5.toFixed(1));
+  G._tcp = _ddSaveTp; G._tcBwEntries = _ddSaveBw; G._tcGhStack = _ddSaveGh; G.document.getElementById = _ddSaveGE;
+}
+
+// ── Mid-cycle draw: a suppressor-dose snapshot freezes the SHBG baseline ──
+// A change to today's dose must NOT retroactively move the pre-draw curve / baseline
+// (the snapshot pins the draw), but MUST move the forward (post-draw) curve.
+console.log('\n── T-calc: draw snapshot decouples the SHBG baseline from today\'s dose ──');
+if (typeof G._tcFreeTSeries === 'function') {
+  var _snSaveTp = G._tcp, _snSaveBw = G._tcBwEntries, _snSaveGh = G._tcGhStack;
+  var _snLog = [{compId:'testoviron', doseMg:'100', date:'2026-06-01'}];
+  for (var _sni=0; _sni<16; _sni++){ var _snd=new Date(new Date('2026-06-03').getTime()+_sni*3*86400000); _snLog.push({compId:'nebido', doseMg:'100', date:_snd.getFullYear()+'-'+String(_snd.getMonth()+1).padStart(2,'0')+'-'+String(_snd.getDate()).padStart(2,'0')}); }
+  var _snInter = {shbg:{direction:'suppress', maxSuppression:0.40, halfTimeDays:25, doseResponse:{unit:'IU/day', ed50:2, emax:0.56, typicalDose:5}}};
+  // Mid-cycle draw on 2026-06-20; suppressor started 2026-06-01 (draw is day ~19).
+  var _snSuppSnap = [{id:'hgh', dailyDose:5, unit:'IU/day', startDate:'2026-06-01'}];
+  G._tcp = {measuredFT:'400', currentDoseMgWk:'0', totalT:'25', shbg:'40', birthYear:'1985', manualLog:_snLog};
+
+  function _snSeries(dailyDose, withSnap){
+    G._tcGhStack = [{pepId:'hgh', startDateStr:'2026-06-01', interactions:_snInter, dailyDose:dailyDose}];
+    G._tcBwEntries = [{date:'2026-06-20', total_t:25, shbg:40, free_t:400, suppressors: withSnap ? _snSuppSnap : undefined}];
+    var s = G._tcFreeTSeries(_snLog.slice(), {});
+    return { ft:function(d){ return s.total[d]*(s.calFT_arr?s.calFT_arr[d]:s.scale); }, calFT:s.calFT, days:s.totalDays };
+  }
+
+  var _snThrew=false, _s5, _s4, _s5n, _s4n;
+  try { _s5=_snSeries(5,true); _s4=_snSeries(4,true); _s5n=_snSeries(5,false); _s4n=_snSeries(4,false); }
+  catch(e){ _snThrew=true; console.error('  snapshot test threw:', e.message); }
+  check('draw snapshot: no crash', !_snThrew && _s5 && _s4);
+  if (!_snThrew) {
+    var _preDay = 8, _postDay = 45;   // before vs after the day-19 draw
+    // WITH snapshot: today's dose (5→4) must not move the pre-draw free T (baseline frozen).
+    check('draw snapshot: pre-draw free T is unchanged when today\'s dose changes',
+      Math.abs(_s5.ft(_preDay) - _s4.ft(_preDay)) < 1e-6,
+      'ft5='+_s5.ft(_preDay).toFixed(4)+' ft4='+_s4.ft(_preDay).toFixed(4));
+    // …but the forward curve DOES respond to the new dose (more GH → more free T).
+    check('draw snapshot: post-draw free T tracks today\'s dose (5 IU > 4 IU)',
+      _s5.ft(_postDay) > _s4.ft(_postDay) + 1e-6,
+      'ft5='+_s5.ft(_postDay).toFixed(2)+' ft4='+_s4.ft(_postDay).toFixed(2));
+    // Calibration stays exact at the draw regardless of the snapshot.
+    var _snRef = 19;
+    check('draw snapshot: curve still passes through the measured free T at the draw',
+      Math.abs(_s5.ft(_snRef) - 400) < 400*0.03, 'ft@draw='+_s5.ft(_snRef).toFixed(1));
+    // Contrast: WITHOUT a snapshot the old coupling remains — a dose change moves the
+    // pre-draw curve too. This is exactly what the snapshot fixes.
+    check('draw snapshot: WITHOUT a snapshot the pre-draw curve is (still) dose-coupled',
+      Math.abs(_s5n.ft(_preDay) - _s4n.ft(_preDay)) > 1e-6,
+      'ft5='+_s5n.ft(_preDay).toFixed(4)+' ft4='+_s4n.ft(_preDay).toFixed(4));
+  }
+  G._tcp = _snSaveTp; G._tcBwEntries = _snSaveBw; G._tcGhStack = _snSaveGh;
+}
+
+// ── Steady-state AVERAGE line: toggle + the pharmacology it communicates ──
+console.log('\n── T-calc: steady-state average line ──');
+if (typeof G._tcShowAvg === 'function' && typeof G._tcToggleAvgLine === 'function') {
+  var _avSaved = null; try { _avSaved = localStorage.getItem('tc-avg-line'); } catch(e){}
+  var _avSaveTp = G._tcp; G._tcp = { manualLog: [] };   // make the toggle's redraw a no-op
+  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  check('avg line: shown by default', G._tcShowAvg() === true);
+  G._tcToggleAvgLine({ checked: false });
+  check('avg line: hiding it persists (survives getData\'s ||-default trap)', G._tcShowAvg() === false);
+  G._tcToggleAvgLine({ checked: true });
+  check('avg line: re-showing it persists', G._tcShowAvg() === true);
+  G._tcp = _avSaveTp;
+  try { if (_avSaved === null) localStorage.removeItem('tc-avg-line'); else localStorage.setItem('tc-avg-line', _avSaved); } catch(e){}
+}
+
+// The line's premise: at steady state the MEAN is set by mg/day (dose ÷ interval),
+// independent of injection frequency, while the PEAK grows with dose-per-shot.
+// Proven directly from the PK primitive so it can't drift from the model.
+if (typeof G._tcPkConc === 'function' && typeof G._tcKa === 'function') {
+  var _ssHl = 7, _ssKe = Math.LN2 / _ssHl, _ssKa = G._tcKa(_ssHl);
+  function _ssMeanPeak(dose, interval) {
+    var N = 360, c = new Float64Array(N + 1);
+    for (var inj = 0; inj <= N; inj += interval) { for (var t = inj; t <= N; t++) c[t] += G._tcPkConc(dose, _ssKa, _ssKe, t - inj); }
+    var from = N - 60, sum = 0, n = 0, pk = 0;
+    for (var t2 = from; t2 <= N; t2++) { sum += c[t2]; if (c[t2] > pk) pk = c[t2]; n++; }
+    return { mean: sum / n, peak: pk };
+  }
+  var _ssA = _ssMeanPeak(100, 2);   // 50 mg/day, frequent small shots
+  var _ssB = _ssMeanPeak(300, 6);   // 50 mg/day, infrequent larger shots
+  check('avg line: steady-state MEAN is ~equal across injection frequency (same mg/day)',
+    Math.abs(_ssA.mean - _ssB.mean) / _ssA.mean < 0.02, 'meanA=' + _ssA.mean.toFixed(3) + ' meanB=' + _ssB.mean.toFixed(3));
+  check('avg line: PEAK is markedly higher for the infrequent larger dose',
+    _ssB.peak > _ssA.peak * 1.15, 'peakA=' + _ssA.peak.toFixed(3) + ' peakB=' + _ssB.peak.toFixed(3));
+}
+
+// The line averages the VISIBLE window, so it tracks the zoom instead of one global value.
+if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'function') {
+  var _awSaveTp = G._tcp, _awSaveBw = G._tcBwEntries, _awSaveGh = G._tcGhStack, _awSaveGE = G.document.getElementById;
+  var _awCap = null;
+  var _awCtx = { scale:noop,beginPath:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,moveTo:noop,lineTo:noop,measureText:function(){return{width:0};},createLinearGradient:function(){return{addColorStop:noop};} };
+  G.document.getElementById = function(id){ return id==='tc-main-chart' ? { style:{},classList:{add:noop,remove:noop,contains:function(){return false;}},offsetWidth:350,offsetHeight:250,_testAvgHook:function(v){_awCap=v;},getContext:function(){return _awCtx;} } : _awSaveGE(id); };
+  // A long single-ester ramp so the early window sits well below the settled plateau.
+  var _awLog = [];
+  for (var _awi=0; _awi<40; _awi++){ var _awd=new Date(new Date('2026-04-01').getTime()+_awi*3.5*86400000); _awLog.push({compId:'enanthate', doseMg:'100', date:_awd.getFullYear()+'-'+String(_awd.getMonth()+1).padStart(2,'0')+'-'+String(_awd.getDate()).padStart(2,'0')}); }
+  G._tcp = {measuredFT:'500', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_awLog};
+  G._tcBwEntries = null; G._tcGhStack = [];
+  var _awS = G._tcFreeTSeries(_awLog.slice(), {});
+  function _awWinMean(a,b){ var s=0,n=0; for(var t=a;t<=b;t++){ s+=_awS.total[t]*(_awS.calFT_arr?_awS.calFT_arr[t]:_awS.scale); n++; } return n?s/n:0; }
+  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  var _awThrew=false, _awWhole=null, _awMonth=null;
+  try {
+    _awCap=null; G._tcDrawManualChart('tc-main-chart', _awLog, 'whole'); _awWhole=_awCap;
+    _awCap=null; G._tcDrawManualChart('tc-main-chart', _awLog, 'month'); _awMonth=_awCap;
+  } catch(e){ _awThrew=true; console.error('  avg-window test threw:', e.message); }
+  check('avg window: hook fires with a window', !_awThrew && _awWhole && _awMonth);
+  if (_awWhole && _awMonth) {
+    check('avg window: reported average equals the mean of its own visible window',
+      Math.abs(_awWhole.avg - _awWinMean(_awWhole.xStart, _awWhole.xEnd)) < 0.5);
+    check('avg window: zoom changes the window (month narrower than whole)',
+      (_awMonth.xEnd - _awMonth.xStart) < (_awWhole.xEnd - _awWhole.xStart));
+    check('avg window: the two zooms yield different averages (not a stale global value)',
+      Math.abs(_awWhole.avg - _awMonth.avg) > 1);
+  }
+  G._tcp = _awSaveTp; G._tcBwEntries = _awSaveBw; G._tcGhStack = _awSaveGh; G.document.getElementById = _awSaveGE;
+}
+
+// ── Chart label de-collision (peak/today overlap in tight zooms) ──
+if (typeof G._tcNudgeLabelY === 'function') {
+  var _nlo = 10, _nhi = 200;
+  check('label nudge: no collision → unchanged (clamped)',
+    G._tcNudgeLabelY(100, [140], 11, _nlo, _nhi) === 100);
+  check('label nudge: clamps to bounds', G._tcNudgeLabelY(5, [], 11, _nlo, _nhi) === _nlo && G._tcNudgeLabelY(999, [], 11, _nlo, _nhi) === _nhi);
+  // a label landing on top of an existing one is pushed at least `gap` away
+  var _n1 = G._tcNudgeLabelY(102, [100], 11, _nlo, _nhi);
+  check('label nudge: overlapping label pushed ≥ gap away', Math.abs(_n1 - 100) >= 11 - 1e-9);
+  // clears two nearby occupied rows
+  var _n2 = G._tcNudgeLabelY(100, [100, 110], 11, _nlo, _nhi);
+  check('label nudge: clears every nearby label', Math.abs(_n2 - 100) >= 11 - 1e-9 && Math.abs(_n2 - 110) >= 11 - 1e-9);
+  check('label nudge: result stays within bounds', G._tcNudgeLabelY(100, [100,110,120,130], 11, _nlo, _nhi) >= _nlo);
 }
 
 // ── Testosterone → SHBG dose-dependent free-T model (+ uncertainty band) ──
@@ -4495,6 +4841,171 @@ check('body measurements parse via parseDec',  html.includes('var v=parseDec(inp
   check('tab-tcalc.js has no raw parseFloat left', !tcalcSrc.includes('parseFloat('));
   const stackSrc = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
   check('tab-stack.js has no raw parseFloat left', !stackSrc.includes('parseFloat('));
+}
+
+// ── Labs: catalogue-driven bloodwork flagging ─────────────────────────────────
+console.log('\n── Labs: flagging / conversion / trend ────────────────────');
+if (typeof G._labSetCatalogue === 'function') {
+  // seed a small catalogue (the real one comes from GET /lab-markers; fetch is stubbed)
+  G._labSetCatalogue({
+    version: 't',
+    panels: [{key:'hormones',label:'Hormones'},{key:'cbc',label:'Blood count'},{key:'lipids',label:'Lipids'}],
+    markers: [
+      {key:'total_t',label:'Total Testosterone',unit:'nmol/L',panel:'hormones',direction:'band',safety:false,
+       ranges:{male:{low:8.6,high:29.0},female:{low:0.3,high:2.4}},altUnits:[{unit:'ng/dL',factor:28.84}],meaning:'m1'},
+      {key:'hematocrit',label:'Hematocrit',unit:'%',panel:'cbc',direction:'band',safety:true,
+       ranges:{male:{low:40,high:54},female:{low:36,high:48}},altUnits:[],meaning:'m2'},
+      {key:'hdl',label:'HDL',unit:'mmol/L',panel:'lipids',direction:'higher',safety:true,
+       ranges:{male:{low:1.0,high:null},female:{low:1.3,high:null}},altUnits:[],meaning:'m3'},
+      {key:'ldl',label:'LDL',unit:'mmol/L',panel:'lipids',direction:'lower',safety:true,
+       ranges:{male:{low:0,high:3.0},female:{low:0,high:3.0}},altUnits:[],meaning:'m4'},
+    ],
+  });
+  const M = k => G._labMarkerIndex[k];
+
+  // band: below/above/in
+  check('lab flag band: below range → low',  G._labFlag(M('total_t'), 6, 'male') === 'low');
+  check('lab flag band: above range → high', G._labFlag(M('total_t'), 40, 'male') === 'high');
+  check('lab flag band: within → in',        G._labFlag(M('total_t'), 18, 'male') === 'in');
+  // sex-specific range applied
+  check('lab flag uses female range',        G._labFlag(M('total_t'), 1.5, 'female') === 'in' && G._labFlag(M('total_t'), 1.5, 'male') === 'low');
+  // direction: lower (only flags high), higher (only flags low)
+  check('lab flag lower: high LDL flagged',  G._labFlag(M('ldl'), 4.0, 'male') === 'high');
+  check('lab flag lower: low LDL is in',     G._labFlag(M('ldl'), 0.5, 'male') === 'in');
+  check('lab flag higher: low HDL flagged',  G._labFlag(M('hdl'), 0.8, 'male') === 'low');
+  check('lab flag higher: open top is in',   G._labFlag(M('hdl'), 3.0, 'male') === 'in');   // high bound null
+  check('lab flag: null value → null',       G._labFlag(M('total_t'), null, 'male') === null);
+
+  // unit conversion: entered ng/dL → canonical nmol/L (alt = canonical*factor ⇒ canonical = alt/factor)
+  const conv = G._labConvert(M('total_t'), 577, 'ng/dL');
+  check('lab convert ng/dL→nmol/L ≈ 20', Math.abs(conv - 20) < 0.2, `got ${conv}`);
+  check('lab convert: canonical unit passthrough', G._labConvert(M('total_t'), 20, 'nmol/L') === 20);
+  check('lab convert: empty unit passthrough',     G._labConvert(M('total_t'), 20, '') === 20);
+
+  // entry value resolution: unified markers map preferred, legacy mirror fallback
+  check('lab entry value: from markers map', G._labEntryValue({markers:{hematocrit:{value:52,unit:'%'}}}, 'hematocrit').value === 52);
+  check('lab entry value: legacy mirror',    G._labEntryValue({total_t:22}, 'total_t').value === 22);
+  check('lab entry value: missing → null',   G._labEntryValue({markers:{}}, 'shbg') === null);
+
+  // trend vs previous older entry (entries sorted date-desc)
+  const entries = [
+    {date:'2026-07-01', markers:{total_t:{value:22,unit:''}}},
+    {date:'2026-06-01', markers:{total_t:{value:18,unit:''}}},
+  ];
+  check('lab trend: rising vs previous', (G._labTrend(entries,0,'total_t')||{}).dir === 'up');
+  check('lab trend: none when no prior', G._labTrend(entries,1,'total_t') === null);
+
+  // safety flag colouring: out-of-range safety marker uses danger
+  check('lab flag meta: safety high → danger', G._labFlagMeta('high', true).color === 'var(--danger)');
+  check('lab flag meta: non-safety high → warning', G._labFlagMeta('high', false).color === 'var(--warning)');
+  check('lab flag meta: in → ok colour', G._labFlagMeta('in', true).label === 'In range');
+
+  // entry key ordering follows catalogue order, includes legacy mirrors
+  const ek = G._labEntryKeys({markers:{hdl:{value:1.2}}, total_t:20});
+  check('lab entry keys: catalogue-ordered', ek.indexOf('total_t') < ek.indexOf('hdl'));
+} else {
+  check('tab-labs.js loaded (_labSetCatalogue present)', false, 'tab-labs.js not loaded in harness');
+}
+
+// wiring: the Labs tab is registered end-to-end in index.html
+check('Labs tab button present',        html.includes("switchTab('labs',this)"));
+check('Labs content pane present',      html.includes('id="tab-labs"'));
+check('Labs in TAB_DEFAULTS',           /TAB_DEFAULTS=[^;]*labs:true/.test(html));
+check('Labs dispatched in switchTab',   html.includes("if(id==='labs')buildLabs()"));
+check('tab-labs.js script included',    html.includes('tab-labs.js'));
+check('lab-markers catalogue synced on init', html.includes('syncLabMarkersFromAgent()'));
+{
+  const labsSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+  check('tab-labs.js has no raw parseFloat', !labsSrc.includes('parseFloat('));
+  check('tab-labs.js writes structured markers to /bloodwork', labsSrc.includes("markers: markers") && labsSrc.includes("'/bloodwork'"));
+  check('tab-labs.js keeps total_t/shbg/free_t mirrors', labsSrc.includes("total_t: mirror('total_t')"));
+  check('tab-labs.js does not hardcode reference ranges (backend-driven)', labsSrc.includes('/lab-markers'));
+}
+
+// ── Phase 3: "Blood Levels" → "Levels" rename + entry moved to Labs ───────────
+console.log('\n── Labs Phase 3: rename + single front door ───────────────');
+// tab renamed (display only) — internal key 'blood' unchanged so prefs survive
+check('nav tab labelled "Levels"',        /switchTab\('blood',this\)">Levels</.test(html));
+check('no "Blood Levels" nav label left', !/switchTab\('blood',this\)">Blood Levels</.test(html));
+check('TAB_LABELS blood → "Levels"',      /blood:'Levels'/.test(html));
+check('internal tab key still "blood"',   html.includes("switchTab('blood',this)") && html.includes('id="tab-btn-blood"'));
+{
+  const tcalcSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  // entry moved out of T-Calc → single front door in Labs
+  check('T-Calc no longer shows "+ ADD ENTRY"',      !tcalcSrc.includes('+ ADD ENTRY'));
+  check('T-Calc add button routes to Labs',           tcalcSrc.includes('MANAGE IN LABS') && tcalcSrc.includes('tab-btn-labs'));
+  check('T-Calc entry list has no inline delete',    !tcalcSrc.includes('event.stopPropagation();_tcBwDeleteEntry('));
+  check('T-Calc still consumes bloodwork (_tcBwEntries)', tcalcSrc.includes('_tcBwEntries'));
+}
+
+// ── Phase 4: cycle bloodwork folded into the unified store ────────────────────
+console.log('\n── Labs Phase 4: cycle checkpoints → one store ────────────');
+if (typeof G._cycleBwMatch === 'function') {
+  const _saveBw = G._tcBwEntries;
+  G._tcBwEntries = [{ id: 'a', date: '2026-07-01' }, { id: 'b', date: '2026-06-01' }];
+  const near = G._cycleBwMatch(new Date('2026-07-03T12:00:00'));
+  check('cycle bw match: entry within ±14d → nearest', !!near && near.id === 'a');
+  const far = G._cycleBwMatch(new Date('2026-05-01T12:00:00'));
+  check('cycle bw match: nothing within window → null', far === null);
+  G._tcBwEntries = null;
+  check('cycle bw match: no entries → null', G._cycleBwMatch(new Date('2026-07-01T12:00:00')) === null);
+  check('cycle bw match: bad date → null', G._cycleBwMatch(new Date('nope')) === null);
+  G._tcBwEntries = _saveBw;
+} else {
+  check('tab-cycles.js loaded (_cycleBwMatch present)', false, '_cycleBwMatch missing');
+}
+{
+  const cyc = fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8');
+  check('checkpoint "Log result" routes to unified sheet', cyc.includes('_cycleLogCheckpoint(') && cyc.includes('_labOpenAddSheet'));
+  check('checkpoint done derived from unified store',       cyc.includes('_cycleBwMatch(d)') && cyc.includes('var _done=bw.done||!!_uni'));
+  check('checkpoint no longer opens the separate inline form', !/onclick="cycleBwToggle\(/.test(cyc));
+  const labs = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+  check('Labs add-sheet accepts a prefill date',   labs.includes('function _labOpenAddSheet(prefillDate)'));
+  check('Labs save refreshes the cycle view',      labs.includes('renderCyclesTab()'));
+}
+
+// ── Phase 5: analysis polish (safety summary, sparklines, tier) ───────────────
+console.log('\n── Labs Phase 5: safety summary + sparklines + tier ───────');
+if (typeof G._labSafetyFindings === 'function') {
+  G._labSetCatalogue({
+    version: 't5',
+    panels: [{key:'cbc',label:'Blood count'},{key:'hormones',label:'Hormones'}],
+    markers: [
+      {key:'hematocrit',label:'Hematocrit',unit:'%',panel:'cbc',direction:'band',safety:true,
+       ranges:{male:{low:40,high:54},female:{low:36,high:48}},altUnits:[],meaning:'hct-mean',note:'hct-note'},
+      {key:'total_t',label:'Total T',unit:'nmol/L',panel:'hormones',direction:'band',safety:false,
+       ranges:{male:{low:8.6,high:29},female:{low:0.3,high:2.4}},altUnits:[],meaning:'tt-mean'},
+    ],
+  });
+  const entries = [
+    {date:'2026-07-01', markers:{hematocrit:{value:50}}},
+    {date:'2026-06-01', markers:{hematocrit:{value:45}}},
+  ];
+  // tier
+  check('_labTier default is 1',        G._labTier() === 1);
+  const _st = G._userTier; G._userTier = 4;
+  check('_labTier reflects _userTier',  G._labTier() === 4);
+  G._userTier = _st;
+  // series + sparkline
+  const ser = G._labSeries(entries, 'hematocrit');
+  check('series oldest→newest',         ser.length === 2 && ser[0].value === 45 && ser[1].value === 50);
+  check('sparkline empty when <2 pts',  G._labSparkline([entries[0]], 'hematocrit') === '');
+  const spk = G._labSparkline(entries, 'hematocrit');
+  check('sparkline is an SVG path',      /<svg/.test(spk) && /<path/.test(spk));
+  // derived safety findings
+  const fHigh = G._labSafetyFindings({markers:{hematocrit:{value:58}}});
+  check('safety finding on out-of-range safety marker', fHigh.length === 1 && fHigh[0].key === 'hematocrit' && fHigh[0].flag === 'high');
+  check('safety finding prefers backend note',          fHigh[0].text === 'hct-note');
+  check('no safety finding when in range',              G._labSafetyFindings({markers:{hematocrit:{value:48}}}).length === 0);
+  check('no safety finding for non-safety marker',      G._labSafetyFindings({markers:{total_t:{value:40}}}).length === 0);
+} else {
+  check('tab-labs.js Phase 5 helpers present', false, '_labSafetyFindings missing');
+}
+{
+  const labs = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+  check('Labs renders a derived safety card',   labs.includes('_labSafetyCard(entries[0])'));
+  check('Labs marker rows include a sparkline',  labs.includes('_labSparkline(entries, key)'));
+  check('safety guidance uses backend note→meaning', labs.includes('m.note || m.meaning'));
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
