@@ -89,6 +89,10 @@ async function wizSave(){
   var btn=document.querySelector('.wiz-footer .btn.btn-primary');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
+  // Preserve the stable id when editing (proto is rebuilt from the wizard state);
+  // assign one for a brand-new stack. Keeps this stack's injections linked.
+  if(_wiz.stackIndex>=0&&_wiz.stackIndex<_userStacks.length&&_userStacks[_wiz.stackIndex]&&_userStacks[_wiz.stackIndex].id)proto.id=_userStacks[_wiz.stackIndex].id;
+  _ensureStackId(proto);
   if(_wiz.stackIndex>=0&&_wiz.stackIndex<_userStacks.length){
     _userStacks[_wiz.stackIndex]=proto;
   } else {
@@ -97,6 +101,10 @@ async function wizSave(){
     if(_userStacks.length===1)_activeStackIndices=[0];
   }
   _userStacks=_userStacks.slice(0,4);
+  // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
+  // is assigned to it, warn and let the user keep one source (may clear proto.trt).
+  // Fast-path: only engage when this stack is the current T-Calc target.
+  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&proto&&_tcp.targetStackId===proto.id)await _reconcileStackTestoSource(proto);
   var res=await saveStacksToBackend();
   updateWEEKLY();
   var _savedStack=_wiz.stackIndex>=0?_userStacks[_wiz.stackIndex]:null;
@@ -373,6 +381,10 @@ async function saveEditBuf(){
   });
   var _oldProtoCids=_getProtocolCompoundIds(_userStacks[_editIdx]||{});
   _userStacks[_editIdx]=_editBuf;
+  // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
+  // is assigned to it, warn and let the user keep one source (may clear _editBuf.trt).
+  // Fast-path: only engage when this stack is the current T-Calc target.
+  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&_editBuf&&_tcp.targetStackId===_editBuf.id)await _reconcileStackTestoSource(_editBuf);
   updateWEEKLY();
   await saveStacksToBackend();
   if(_editBuf&&_editBuf.cycle_start){
@@ -1532,9 +1544,19 @@ function showWizard(editModeUnused){
 
 // ── Injection generation ──────────────────────────────────────────────────────
 
+function _deriveStackCycleId(stack){
+  var name=((stack&&stack.name)||'stack').replace(/\s+/g,'_').toLowerCase().replace(/[^a-z0-9_]/g,'');
+  return name+'_'+((stack&&stack.cycle_start)||'nostart');
+}
+// Stable per-stack id, frozen so renaming a stack or moving its cycle start no
+// longer orphans the stack's scheduled injections. Legacy stacks (no id) adopt
+// their CURRENT derived cycle_id, which keeps their existing injections linked.
+function _ensureStackId(stack){
+  if(stack&&!stack.id)stack.id=_deriveStackCycleId(stack);
+  return stack?stack.id:'';
+}
 function _stackCycleId(stack){
-  var name=(stack.name||'stack').replace(/\s+/g,'_').toLowerCase().replace(/[^a-z0-9_]/g,'');
-  return name+'_'+(stack.cycle_start||'nostart');
+  return (stack&&stack.id)?stack.id:_deriveStackCycleId(stack);
 }
 
 function _getProtocolCompoundIds(stack){

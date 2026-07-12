@@ -4781,6 +4781,25 @@ if (typeof G._blBuildLines === 'function') {
     G._injectionsCache = _saveInj; G._userStacks = _saveStacks2; G._activeStackIndices = _saveIdx2; G._supplements = _saveSupp2;
   })();
 
+  // Regression (Option B): T-Calc testosterone ASSIGNED to a stack has cycle_id
+  // 'tcalc:<stackId>' (not the bare 'tcalc'). _blTcalcTestosterone must still pick
+  // it up so the Blood Levels Free T curve stays as complete as the T-Calc tab.
+  // _injectionsCache is already visibility-filtered, so both forms belong on the line.
+  if (typeof G._blTcalcTestosterone === 'function') {
+    var _sInjA = G._injectionsCache;
+    G._injectionsCache = {
+      '2026-06-10':[{cycle_id:'tcalc',      compound_id:'nebido',  compound_name:'Nebido',       tier:'trt', date:'2026-06-10', dose:'1000', unit:'mg', active:true}],
+      '2026-06-12':[{cycle_id:'tcalc:mystack', compound_id:'test-e', compound_name:'Testosterone E', tier:'trt', date:'2026-06-12', dose:'50',  unit:'mg', active:true}]
+    };
+    var _tct = G._blTcalcTestosterone();
+    check('_blTcalcTestosterone: includes unassigned tcalc plan',      _tct.some(function(c){ return c.id==='nebido'; }));
+    check('_blTcalcTestosterone: includes stack-assigned tcalc:<id>',  _tct.some(function(c){ return c.id==='test-e'; }));
+    // a non-tcalc cycle_id (a stack's own config injections) must NOT be double-counted here
+    G._injectionsCache = { '2026-06-14':[{cycle_id:'mystack', compound_id:'test-c', compound_name:'Test C', tier:'trt', date:'2026-06-14', dose:'80', unit:'mg', active:true}] };
+    check('_blTcalcTestosterone: ignores non-tcalc (stack-config) cycle_ids', G._blTcalcTestosterone().every(function(c){ return c.id!=='test-c'; }));
+    G._injectionsCache = _sInjA;
+  }
+
   // Phase 2: backend PK dataset → actual blood levels for compounds with an assay
   // (Vitamin D3 → 25-OH-D), reference ranges attached, no-assay compounds untouched.
   (function(){
@@ -5006,6 +5025,199 @@ if (typeof G._labSafetyFindings === 'function') {
   check('Labs renders a derived safety card',   labs.includes('_labSafetyCard(entries[0])'));
   check('Labs marker rows include a sparkline',  labs.includes('_labSparkline(entries, key)'));
   check('safety guidance uses backend note→meaning', labs.includes('m.note || m.meaning'));
+}
+
+// ── Blood Levels: "Day" zoom is a 24h window, not several days ────────────────
+console.log('\n── Blood Levels: Day zoom = 24h window ────────────────────');
+{
+  const blSrc = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
+  const m = blSrc.match(/_blZoom==='today'\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/);
+  check("'today' zoom branch found", !!m);
+  if (m) {
+    const body = m[1];
+    // window must be a single day: start ≈ now-0.5, end = start+1 (24h), not nowDay±2
+    check("Day zoom spans 24h (xStart+1)",     body.includes('xStart+1'));
+    check("Day zoom centred on now (-0.5)",    body.includes('nowDay-0.5'));
+    check("Day zoom no longer ±2 days",        !body.includes('nowDay-2') && !body.includes('nowDay+2'));
+  }
+}
+
+// ── Testosterone compounds render red ─────────────────────────────────────────
+console.log('\n── Testosterone compounds use the red dot ─────────────────');
+if (Array.isArray(G.TRT_CAT)) {
+  check('all TRT_CAT esters are red (#e05050)', G.TRT_CAT.every(c => c.dot === '#e05050'), JSON.stringify(G.TRT_CAT.map(c=>c.dot)));
+  check('TRT_CAT covers the esters', G.TRT_CAT.length >= 6);
+} else {
+  check('TRT_CAT present', false);
+}
+{
+  const todaySrc = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  // existing (snapshot-dotted) TRT injections recolour to red at render
+  check("Today recolours TRT doses red at render", todaySrc.includes("dose.tier==='trt'?'#e05050'"));
+}
+
+// ── Stack cards: tier badges (peptide / TRT / enhanced), option B ─────────────
+console.log('\n── Stack tier badges (detect from what the stack runs) ────');
+if (typeof G._stackTierFlags === 'function') {
+  const f = G._stackTierFlags;
+  // TRT badge only when the stack is ACTIVE and has testosterone planned
+  check('tier: active + configured TRT → TRT',       f({peptides:[1,2],trt:{compounds:[{id:'nebido'}]}}, true, false).trt === true);
+  check('tier: inactive + configured TRT → no TRT',  f({peptides:[1,2],trt:{compounds:[{id:'nebido'}]}}, false, false).trt === false);
+  check('tier: active + T-Calc testosterone → TRT',  f({peptides:[1,2],trt:{}}, true, true).trt === true);
+  check('tier: inactive + T-Calc testosterone → no TRT', f({peptides:[1,2],trt:{}}, false, true).trt === false);
+  check('tier: active but no testosterone → no TRT', f({peptides:[1,2],trt:{}}, true, false).trt === false);
+  check('tier: enhanced compounds → Enhanced',   f({peptides:[],enhanced:{compounds:[{id:'tren'}]}}, false, false).enhanced === true);
+  check('tier: peptide count + flag',            f({peptides:[1,2,3]}, false, false).pCount === 3 && f({peptides:[1,2,3]}, false, false).peptide === true);
+  check('tier: empty stack → no tiers', (function(){ var t=f({peptides:[],trt:{},enhanced:{compounds:[]}}, false, false); return !t.peptide && !t.trt && !t.enhanced; })());
+} else {
+  check('_stackTierFlags present', false);
+}
+{
+  const idxSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('stack card renders TRT + Enhanced chips', idxSrc.includes("_stackTierChip('TRT','#e05050')") && idxSrc.includes("_stackTierChip('ENHANCED'"));
+  check('stack card uses injection-aware tier flags',  idxSrc.includes('_stackTierFlags(st,isActive,_stackHasScheduledTrt(st.id))'));
+}
+
+// ── Option B / phase 1: stable stack ids (injections stop orphaning) ──────────
+console.log('\n── Stable stack ids ──────────────────────────────────────');
+if (typeof G._stackCycleId === 'function' && typeof G._ensureStackId === 'function') {
+  // legacy stack (no id) derives the old name_start cycle id → existing injections stay linked
+  check('derive: sanitised name_start', G._deriveStackCycleId({name:'Cycle 2 TRT+HGH', cycle_start:'2026-05-18'}) === 'cycle_2_trthgh_2026-05-18');
+  check('stackCycleId prefers a stored id', G._stackCycleId({id:'fixed_id', name:'X', cycle_start:'2026-01-01'}) === 'fixed_id');
+  check('legacy (no id) still derives', G._stackCycleId({name:'Cycle 2 TRT+HGH', cycle_start:'2026-05-18'}) === 'cycle_2_trthgh_2026-05-18');
+  // ensureStackId adopts the CURRENT derived id (keeps existing injections), then freezes it
+  var _leg = {name:'Cycle 2 TRT+HGH', cycle_start:'2026-05-18'};
+  check('ensureStackId adopts current derived id', G._ensureStackId(_leg) === 'cycle_2_trthgh_2026-05-18' && _leg.id === 'cycle_2_trthgh_2026-05-18');
+  // once assigned, a rename or start-date change must NOT change the id
+  var _s = {name:'A', cycle_start:'2026-01-01'}; G._ensureStackId(_s); var _id1 = _s.id;
+  _s.name = 'Renamed'; _s.cycle_start = '2026-02-02';
+  check('id stable across rename + start change', G._stackCycleId(_s) === _id1 && G._ensureStackId(_s) === _id1);
+} else {
+  check('_stackCycleId / _ensureStackId present', false);
+}
+{
+  const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('loadUserStacks backfills + persists ids', idx.includes('_ensureStackId(stack)') && idx.includes('_needIdSave'));
+  const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  check('wizSave preserves the stable id on edit', stk.includes('proto.id=_userStacks[_wiz.stackIndex].id') && stk.includes('_ensureStackId(proto)'));
+}
+
+// ── Option B / phase 2: copy T-Calc testosterone to any stack ─────────────────
+console.log('\n── T-Calc → copy testosterone to any stack ────────────────');
+if (typeof G._injOwnerStackId === 'function' && typeof G._stackHasScheduledTrt === 'function') {
+  check('owner: tcalc namespace → stack id', G._injOwnerStackId({cycle_id:'tcalc:cycle_2_2026'}) === 'cycle_2_2026');
+  check('owner: plain stack cycle_id → itself', G._injOwnerStackId({cycle_id:'my_stack_2026'}) === 'my_stack_2026');
+  check('owner: unassigned tcalc → tcalc', G._injOwnerStackId({cycle_id:'tcalc'}) === 'tcalc');
+  var _cache = { '2026-07-20':[ {tier:'peptide',cycle_id:'s1'}, {tier:'trt',cycle_id:'tcalc:s2'} ], '2026-07-22':[ {tier:'trt',cycle_id:'s3'} ] };
+  check('scheduledTrt: via tcalc:<id> namespace', G._stackHasScheduledTrt('s2', _cache) === true);
+  check('scheduledTrt: via own cycle_id',         G._stackHasScheduledTrt('s3', _cache) === true);
+  check('scheduledTrt: peptide-only stack → no',  G._stackHasScheduledTrt('s1', _cache) === false);
+  check('scheduledTrt: unknown stack → no',       G._stackHasScheduledTrt('nope', _cache) === false);
+} else {
+  check('_injOwnerStackId / _stackHasScheduledTrt present', false);
+}
+if (typeof G._tcTargetCycleId === 'function') {
+  var _svT = G._tcp.targetStackId, _svS = G._userStacks;
+  G._userStacks = [{id:'cyc_a'},{id:'cyc_b'}];
+  G._tcp.targetStackId = '';       check('targetCycleId: unassigned → tcalc',        G._tcTargetCycleId() === 'tcalc');
+  G._tcp.targetStackId = 'cyc_b';  check('targetCycleId: assigned → tcalc:<id>',     G._tcTargetCycleId() === 'tcalc:cyc_b');
+  G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → tcalc',     G._tcTargetCycleId() === 'tcalc');
+  G._tcp.targetStackId = _svT; G._userStacks = _svS;
+}
+{
+  const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('T-Calc sync writes the target cycle id', tc.includes('var _cid=_tcTargetCycleId();') && tc.includes('cycle_id:_cid'));
+  check('T-Calc copy-to-stack picker present',    tc.includes('_tcStackPickerHtml()') && tc.includes('onchange="_tcSetTargetStack(this.value)"'));
+  const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('badge detects testo from stack injections', idx.includes('_stackHasScheduledTrt(st.id)'));
+}
+
+// ── Option B / phase 3: active = stack property; schedule surfaces its testo ───
+console.log('\n── Active = stack property (schedule filtering) ───────────');
+if (typeof G._tcalcEntryVisible === 'function') {
+  var _act = new Set(['cyc_b']);
+  check('visible: unassigned tcalc → always',            G._tcalcEntryVisible({cycle_id:'tcalc'}, _act) === true);
+  check('visible: assigned to an ACTIVE stack',          G._tcalcEntryVisible({cycle_id:'tcalc:cyc_b'}, _act) === true);
+  check('hidden: assigned to an INACTIVE stack',         G._tcalcEntryVisible({cycle_id:'tcalc:cyc_a'}, _act) === false);
+  check('n/a: own-stack row not a tcalc-family entry',   G._tcalcEntryVisible({cycle_id:'cyc_b'}, _act) === false);
+} else {
+  check('_tcalcEntryVisible present', false);
+}
+{
+  const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('cache surfaces active assigned testo',       idx.includes('_tcalcEntryVisible(e,activeCycleIds)'));
+  check('toggleStack refreshes cache on active switch', /async function toggleStack[\s\S]*?refreshInjectionsCache\(\)/.test(idx));
+  check('useStack refreshes cache on active switch',    /async function useStack[\s\S]*?refreshInjectionsCache\(\)/.test(idx));
+}
+
+// ── Single testosterone source per stack (warn + let me choose) ───────────────
+console.log('\n── Single testo source per stack ──────────────────────────');
+if (typeof G._stackHasConfigTrt === 'function') {
+  check('configTrt: enabled with compounds → yes', G._stackHasConfigTrt({trt:{enabled:true,compounds:[{id:'testoviron'}]}}) === true);
+  check('configTrt: disabled with compounds → no', G._stackHasConfigTrt({trt:{enabled:false,compounds:[{id:'testoviron'}]}}) === false);
+  check('configTrt: enabled but empty → no',       G._stackHasConfigTrt({trt:{enabled:true,compounds:[]}}) === false);
+  check('configTrt: no trt → no',                  G._stackHasConfigTrt({trt:{}}) === false);
+} else {
+  check('_stackHasConfigTrt present', false);
+}
+
+if (typeof G._reconcileStackTestoSource === 'function') {
+  var _svTcp = G._tcp, _svConfirm = G.confirm, _svSetTarget = G._tcSetTargetStack;
+  // Conflict: stack has config testo AND is the current T-Calc target.
+  var _mkConflictStack = function(){ return {id:'s1', name:'S1', trt:{enabled:true,compounds:[{id:'testoviron'}]}}; };
+  G._tcp = { targetStackId:'s1' };
+
+  // (a) Cancel / keep-T-Calc → discard the config testosterone (trt cleared), no unassign.
+  var _unassigned = false;
+  G._tcSetTargetStack = function(v){ _unassigned = (v===''); return Promise.resolve(); };
+  G.confirm = function(){ return false; };
+  var _s = _mkConflictStack();
+  G._reconcileStackTestoSource(_s); // sync up to first await; Cancel branch has no await
+  check('reconcile: Cancel keeps T-Calc, drops config testo', _s.trt && !_s.trt.enabled && !_unassigned);
+
+  // (b) OK / switch-to-config → unassign the T-Calc plan, keep config testo.
+  _unassigned = false;
+  G.confirm = function(){ return true; };
+  var _s2 = _mkConflictStack();
+  G._reconcileStackTestoSource(_s2); // _tcSetTargetStack('') invoked synchronously before await
+  check('reconcile: OK switches to config, unassigns T-Calc', _unassigned === true && _s2.trt.enabled === true);
+
+  // (c) No conflict when the stack is not the T-Calc target → no prompt, no change.
+  G._tcp = { targetStackId:'other' };
+  var _confirmed = false; G.confirm = function(){ _confirmed = true; return true; };
+  var _s3 = _mkConflictStack();
+  G._reconcileStackTestoSource(_s3);
+  check('reconcile: not the target → no-op', _confirmed === false && _s3.trt.enabled === true);
+
+  // (d) No conflict when the target stack has no config testo → no prompt.
+  G._tcp = { targetStackId:'s1' };
+  _confirmed = false; G.confirm = function(){ _confirmed = true; return true; };
+  var _s4 = {id:'s1', name:'S1', trt:{}};
+  G._reconcileStackTestoSource(_s4);
+  check('reconcile: no config testo → no-op', _confirmed === false);
+
+  G._tcp = _svTcp; G.confirm = _svConfirm; G._tcSetTargetStack = _svSetTarget;
+} else {
+  check('_reconcileStackTestoSource present', false);
+}
+
+if (typeof G._tcClearStackConfigTrt === 'function') {
+  var _svSave = G.saveStacksToBackend, _svAuth = G.authHeaders;
+  G.saveStacksToBackend = function(){ return Promise.resolve(); };
+  G.authHeaders = function(){ return null; }; // null → skip the injection DELETE loop in tests
+  var _cs = {id:'s9', name:'S9', trt:{enabled:true,compounds:[{id:'testoviron'}]}, peptides:[{id:'cjc'}]};
+  G._tcClearStackConfigTrt(_cs); // stack.trt={} runs synchronously before the first await
+  check('clearStackConfigTrt: disables config testo, keeps peptides', _cs.trt && !_cs.trt.enabled && _cs.peptides.length === 1);
+  G.saveStacksToBackend = _svSave; G.authHeaders = _svAuth;
+} else {
+  check('_tcClearStackConfigTrt present', false);
+}
+
+{
+  const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('T-Calc assign guards against config-testo conflict', tc.includes('_stackHasConfigTrt(_tgt)') && tc.includes('_tcClearStackConfigTrt(_tgt)'));
+  const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  check('wizSave + editSave reconcile testo source', (stk.match(/_reconcileStackTestoSource\(/g) || []).length >= 2);
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
