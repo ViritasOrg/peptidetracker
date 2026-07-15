@@ -29,6 +29,8 @@ const patchedScript = rawScript
   .replace('let _userWeight=',        'var _userWeight=')
   .replace('var _wizOverlay=',        'var _wizOverlay=')
   .replace('const RECON_DB=',         'var RECON_DB=')
+  .replace("let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};",
+           "var _tabVis={};var _currentTab='today';var _currentPrimary='today';var _lastSub={};")
   .replace('let _viewDate=',          'var _viewDate=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
   .replace('let _reconState=',        'var _reconState=')
@@ -1555,6 +1557,40 @@ console.log('\n── dose dedup migration ────────────�
   check('getDosesForDate function defined',typeof G.getDosesForDate==='function');
   check('_findWeeklyItemInfo function defined',typeof G._findWeeklyItemInfo==='function');
 
+  // Empty-state coaching: a user with no active stack is offered a first action,
+  // not a dead "nothing scheduled"; a rest day on an active stack still reads calm.
+  check('Today empty state coaches first-timers to build a stack', todayJs.includes('Build your first stack') && todayJs.includes('createNewStack()'));
+  check('Today empty state keeps "Nothing scheduled today" for active-stack rest days', todayJs.includes('Nothing scheduled today'));
+  check('Today empty state branches on an active stack', todayJs.includes('_hasActive'));
+  check('Today empty state offers a template when templates loaded', todayJs.includes('openTemplatePicker()') && todayJs.includes('_protocolTemplates'));
+
+  // Protocol templates — fetched from the backend, instantiated into a stack.
+  check('syncProtocolTemplates fetches the backend endpoint', rawScript.includes("'/protocol-templates'") && rawScript.includes('function syncProtocolTemplates'));
+  if (typeof G.useTemplate === 'function' && typeof G.openTemplatePicker === 'function') {
+    var _svS=G._userStacks,_svA=G._activeStackIndices,_svT=G._protocolTemplates,_svSave=G.saveStacksToBackend,_svGen=G.generateAndPushInjections,_svRef=G.refreshInjectionsCache,_svNew=G.createNewStack;
+    G._protocolTemplates=[{id:'tpl-x',name:'Test Plan',cycle_length:8,
+      peptides:[{id:'bpc157',name:'BPC-157',dot:'#3b9eff',times:['AM'],days:[0,1,2,3,4,5,6],dose_am:'250',unit_am:'mcg'}],
+      trt:{compounds:[{id:'enanthate',name:'Testosterone Enanthate',dot:'#e05050',dose:'125',unit:'mg',freqVal:1,freqUnit:'weeks',days:[1]}]},
+      enhanced:null}];
+    G._userStacks=[]; G._activeStackIndices=[];
+    G.saveStacksToBackend=async function(){return true;}; G.generateAndPushInjections=async function(){}; G.refreshInjectionsCache=async function(){};
+    G.useTemplate('tpl-x'); // synchronous portion runs before the first await
+    var _st=G._userStacks[G._userStacks.length-1];
+    check('useTemplate: creates a stack from the template', !!_st && _st.name==='Test Plan' && _st.cycle_length===8);
+    check('useTemplate: stack starts today so doses schedule immediately', !!(_st && _st.cycle_start));
+    check('useTemplate: maps peptides into the stack model', !!_st && _st.peptides.length===1 && _st.peptides[0].id==='bpc157' && _st.peptides[0].dose_am==='250' && _st.peptides[0].active===true);
+    check('useTemplate: maps TRT compounds with frequency', !!_st && _st.trt && _st.trt.enabled===true && _st.trt.compounds[0].id==='enanthate' && _st.trt.compounds[0].freqVal===1);
+    check('useTemplate: activates the new stack', G._activeStackIndices.indexOf(G._userStacks.length-1)>=0);
+    check('useTemplate: assigns a stable stack id', !!(_st && _st.id));
+    // picker falls back to the wizard when no templates exist
+    G._protocolTemplates=[]; var _newCalled=false; G.createNewStack=function(){_newCalled=true;};
+    G.openTemplatePicker();
+    check('openTemplatePicker: no templates → falls back to the wizard', _newCalled===true);
+    G._userStacks=_svS;G._activeStackIndices=_svA;G._protocolTemplates=_svT;G.saveStacksToBackend=_svSave;G.generateAndPushInjections=_svGen;G.refreshInjectionsCache=_svRef;G.createNewStack=_svNew;
+  } else {
+    check('useTemplate / openTemplatePicker present', false);
+  }
+
   const cycleStack={name:'Cycle A',cycle_start:'2026-06-21',cycle_length:12,end_date:'2026-09-13',
     peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
   G._userStacks=[cycleStack];G._activeStackIndices=[0];
@@ -1765,8 +1801,9 @@ console.log('\n── dose dedup migration ────────────�
     rawScript.includes("IS_STAGING?{storage:true}:{}"));
   check('tab-btn-storage exists in HTML (hidden by default)',
     html.includes('id="tab-btn-storage"'));
-  check('storage tab controlled by applyTabVis via TAB_LABELS (no manual show override in init)',
-    rawScript.includes("Object.keys(TAB_LABELS).forEach") &&
+  check('storage tab visibility gated by TAB_LABELS membership (no manual show override in init)',
+    rawScript.includes('function _subVisible(id)') &&
+    rawScript.includes('id in TAB_LABELS') &&
     !rawScript.includes("tab-btn-storage').style.display=''"));
   check('initTabVis called in init() without manual storage override after it',
     (function(){
@@ -4800,6 +4837,33 @@ if (typeof G._blBuildLines === 'function') {
     G._injectionsCache = _sInjA;
   }
 
+  // "What this means" card — a computed one-liner from the Free T model state.
+  if (typeof G._blFreetCard === 'function') {
+    var _svBl = G._blLines, _svTcp2 = G._tcp;
+    G._blLines = [{ kind:'freet', curve:[100,120,180] }]; G._tcp = { measuredFT:0 };
+    var _c1 = G._blFreetCard();
+    check('what-this-means: rising testo reads as above baseline', _c1.includes('trending above baseline'));
+    check('what-this-means: no bloodwork nudges to add a lab',     _c1.includes('population estimate'));
+    check('what-this-means: card is labelled',                     _c1.includes('What this means'));
+    G._blLines = [{ kind:'freet', curve:[200,200,200] }]; G._tcp = { measuredFT:'350' };
+    var _c2 = G._blFreetCard();
+    check('what-this-means: flat line reads as near baseline',      _c2.includes('near your baseline'));
+    check('what-this-means: measured FT shows calibrated note',     _c2.includes('Calibrated to your bloodwork'));
+    G._blLines = [{ kind:'peptide', curve:[1,2] }];
+    check('what-this-means: no Free T line → no card',              G._blFreetCard() === '');
+    G._blLines = _svBl; G._tcp = _svTcp2;
+  }
+
+  // Semantic chart palette — canvas hues mirror the CSS tokens.
+  {
+    const _bloodJs = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
+    const _tcalcJs = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+    check('data hues defined (plasma/teal/amber)', rawScript.includes("DATA_PLASMA='#ff3b30'") && rawScript.includes("DATA_TEAL='#2fd4c4'") && rawScript.includes("DATA_AMBER='#ffb03c'"));
+    check('T-Calc measured-FT line is teal (calibrated)', _tcalcJs.includes("DATA_TEAL + '99'"));
+    check('Blood optimal zone is teal ("good")',          _bloodJs.includes("DATA_TEAL + '22'"));
+    check('Blood "now" marker uses the amber token',        _bloodJs.includes("DATA_AMBER + '99'"));
+  }
+
   // Phase 2: backend PK dataset → actual blood levels for compounds with an assay
   // (Vitamin D3 → 25-OH-D), reference ranges attached, no-assay compounds untouched.
   (function(){
@@ -5218,6 +5282,88 @@ if (typeof G._tcClearStackConfigTrt === 'function') {
   check('T-Calc assign guards against config-testo conflict', tc.includes('_stackHasConfigTrt(_tgt)') && tc.includes('_tcClearStackConfigTrt(_tgt)'));
   const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
   check('wizSave + editSave reconcile testo source', (stk.match(/_reconcileStackTestoSource\(/g) || []).length >= 2);
+}
+
+// ── Two-tier navigation: 5 primary tabs + nested sub-tabs ─────────────────────
+console.log('\n── 5-tab bottom nav + sub-nav ─────────────────────────────');
+if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') {
+  // Every legacy destination maps to exactly one primary group (primaryOf reads the internal map).
+  var _dests = ['today','stacks','blood','tcalc','labs','supplements','recon','schedule','macros','timeline','body','settings','storage'];
+  check('nav: every destination maps to a primary group', _dests.every(function(id){ return G.primaryOf(id) !== ''; }));
+  check('primaryOf: tcalc → levels',   G.primaryOf('tcalc') === 'levels');
+  check('primaryOf: recon → plan',     G.primaryOf('recon') === 'plan');
+  check('primaryOf: settings → more',  G.primaryOf('settings') === 'more');
+  check('primaryOf: unknown → ""',     G.primaryOf('nope') === '');
+  // Human sub-tab renames present (jargon → plain language)
+  check('sub-labels: T-Calc → Testosterone',  rawScript.includes("tcalc:'Testosterone'"));
+  check('sub-labels: Recon → Reconstitution', rawScript.includes("recon:'Reconstitution'"));
+  check('sub-labels: blood → Blood Levels',   rawScript.includes("blood:'Blood Levels'"));
+  // switchPrimary opens the first visible sub-tab, or the remembered one (_tabVis/_lastSub exposed as vars)
+  var _origSwitch = G.switchTab, _cap = null; G.switchTab = function(id){ _cap = id; };
+  G._tabVis = {}; G._lastSub = {};
+  G.switchPrimary('levels'); check('switchPrimary: opens first visible sub-tab (levels → blood)', _cap === 'blood');
+  G._lastSub = { levels:'tcalc' }; _cap = null; G.switchPrimary('levels'); check('switchPrimary: reopens the remembered sub-tab (tcalc)', _cap === 'tcalc');
+  // Regression: legacy per-tab settings that hid EVERY sub-tab in a group must not
+  // leave the primary empty/unreachable — it falls back to the whole group.
+  var _svVis = G._tabVis;
+  G._tabVis = { blood:false, tcalc:false }; _cap = null; G._lastSub = {};
+  G.switchPrimary('levels'); check('switchPrimary: all sub-tabs hidden → still opens the group (fallback)', _cap === 'blood');
+  if (typeof G._groupVisibleSubs === 'function') {
+    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 2);
+  }
+  G._tabVis = _svVis;
+  G.switchTab = _origSwitch;
+  // switchTab records the active primary + its last sub-tab (bookkeeping runs before any builder)
+  G._lastSub = {}; try { G.switchTab('timeline', G.document.getElementById('tab-btn-timeline')); } catch(e){}
+  check('switchTab: sets _currentPrimary from the tab', G._currentPrimary === 'plan');
+  check('switchTab: remembers the last sub for that primary', G._lastSub['plan'] === 'timeline');
+} else {
+  check('switchPrimary / primaryOf present', false);
+}
+{
+  check('bottom nav has all 5 primary buttons', ['today','plan','levels','labs','more'].every(function(p){ return html.includes('id="navbtn-'+p+'"'); }));
+  const _navcss = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+  check('.navbar is fixed to the bottom',        /\.navbar\{[^}]*position:fixed[^}]*bottom:0/.test(_navcss));
+  check('content clears the fixed bottom bar',   /\.content\{[^}]*padding:[^;]*116px/.test(_navcss));
+}
+
+// ── Adaptive onboarding: experience + goals → suggested template ──────────────
+console.log('\n── Adaptive onboarding ────────────────────────────────────');
+if (Array.isArray(G._OB_ORDER) && typeof G.obToggleGoal === 'function' && typeof G.obSetExperience === 'function') {
+  check('onboarding asks experience before the cosmetic steps', G._OB_ORDER.indexOf('experience') >= 0 && G._OB_ORDER.indexOf('experience') < G._OB_ORDER.indexOf('theme'));
+  check('onboarding asks goals before the cosmetic steps',      G._OB_ORDER.indexOf('goals') >= 0 && G._OB_ORDER.indexOf('goals') < G._OB_ORDER.indexOf('stats'));
+  var _svOb = G._obData;
+  G._obData = { sex:null, height:'', weight:'', theme:3, experience:'', goals:[] };
+  G.obSetExperience('advanced'); check('obSetExperience records the level', G._obData.experience === 'advanced');
+  G.obToggleGoal('recovery');    check('obToggleGoal adds a goal',            G._obData.goals.indexOf('recovery') >= 0);
+  G.obToggleGoal('recovery');    check('obToggleGoal removes on second tap',  G._obData.goals.indexOf('recovery') < 0);
+  G._obData = _svOb;
+  check('obFinish persists experience + goals to the backend', rawScript.includes("kv['pep-experience']") && rawScript.includes("kv['pep-goals']"));
+  check('obFinish offers a goal-matched template when empty',  rawScript.includes('openTemplatePicker(_g)'));
+  const _stkJs = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  check('template picker accepts goal preferences + marks suggested', _stkJs.includes('function openTemplatePicker(preferGoals)') && _stkJs.includes('SUGGESTED'));
+} else {
+  check('_OB_ORDER / obToggleGoal / obSetExperience present', false);
+}
+
+// ── Contextual safety notes (watch/test/stop, all tiers) ─────────────────────
+console.log('\n── Contextual safety notes ────────────────────────────────');
+if (typeof G._renderSafetyNote === 'function') {
+  var _svSN = G._safetyNotes, _svSD = G._safetyDismissed;
+  G._safetyNotes = { trt:{ label:'TRT', watch:'hematocrit', test:'6 weeks', stop:'see a doctor' } };
+  G._safetyDismissed = {};
+  var _sc = G._renderSafetyNote('trt');
+  check('safety note renders watch/test/stop', _sc.includes('Watch:') && _sc.includes('Test:') && _sc.includes('Stop:') && _sc.includes('hematocrit'));
+  check('safety note shows the tier label',    _sc.includes('TRT'));
+  check('safety note: unknown tier → empty',   G._renderSafetyNote('nope') === '');
+  G._safetyDismissed = { trt:1 };
+  check('safety note: dismissed tier → empty', G._renderSafetyNote('trt') === '');
+  G._safetyNotes = _svSN; G._safetyDismissed = _svSD;
+  const _stkSN = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  check('safety note shown in ALL three tiers (parity)', _stkSN.includes("_renderSafetyNote('peptide')") && _stkSN.includes("_renderSafetyNote('trt')") && _stkSN.includes("_renderSafetyNote('enhanced')"));
+  check('syncSafetyNotes fetches the backend endpoint', rawScript.includes("'/safety-notes'") && rawScript.includes('function syncSafetyNotes'));
+} else {
+  check('_renderSafetyNote present', false);
 }
 
 console.log('\n───────────────────────────────────────────────────────────');

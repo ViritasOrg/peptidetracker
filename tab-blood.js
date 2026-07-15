@@ -559,7 +559,8 @@ function _blDrawChart(canvas){
     var yHi = yOf(ln.marker.ref[1]), yLo = yOf(ln.marker.ref[0]);
     ctx.fillStyle = ln.color + '14'; ctx.fillRect(PAD.left, yHi, cW, yLo - yHi);
     if(ln.marker.opt){ var yoHi = yOf(ln.marker.opt[1]), yoLo = yOf(ln.marker.opt[0]);
-      ctx.fillStyle = ln.color + '20'; ctx.fillRect(PAD.left, yoHi, cW, yoLo - yoHi); }
+      // Optimal zone → teal ("good") so an in-range level reads at a glance.
+      ctx.fillStyle = DATA_TEAL + '22'; ctx.fillRect(PAD.left, yoHi, cW, yoLo - yoHi); }
   });
 
   // Vertical date grid + labels
@@ -577,7 +578,7 @@ function _blDrawChart(canvas){
   // "Now" marker
   if(nowDay>=xStart && nowDay<=xEnd){
     var nx = xOf(nowDay);
-    ctx.strokeStyle = '#e8a02099'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+    ctx.strokeStyle = DATA_AMBER + '99'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
     ctx.beginPath(); ctx.moveTo(nx, PAD.top); ctx.lineTo(nx, PAD.top+cH); ctx.stroke(); ctx.setLineDash([]);
   }
 
@@ -697,6 +698,26 @@ function _blAttachPan(canvas){
   canvas.addEventListener('mouseup', canvas._blTE);
 }
 
+// Plain-language "What this means" card for the Free T line — a one-sentence read
+// derived only from the model's own output (trend vs the endogenous baseline) and
+// the confidence tier (measured bloodwork vs population estimate). No compound
+// data, no dosing advice. Returns '' when there is no testosterone to interpret.
+function _blFreetCard(){
+  var ft = (_blLines||[]).find(function(l){ return l.kind==='freet'; });
+  if(!ft || !ft.curve || !ft.curve.length) return '';
+  var base = ft.curve[0]||0, peak = base;
+  for(var i=0;i<ft.curve.length;i++) if(ft.curve[i]>peak) peak = ft.curve[i];
+  var measured = (typeof _tcp!=='undefined' && _tcp && parseDec(_tcp.measuredFT)>0);
+  var trend;
+  if(base>0 && peak>base*1.1)      trend = 'Your free testosterone is trending above baseline as your compounds accumulate.';
+  else if(base>0 && peak<base*0.9) trend = 'Your free testosterone is sitting below your baseline.';
+  else                             trend = 'Your free testosterone is holding near your baseline.';
+  var conf = measured ? 'Calibrated to your bloodwork.'
+                      : 'This is a population estimate — add a bloodwork entry to sharpen it.';
+  return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px">'+
+    '<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted2);margin-bottom:5px">What this means</div>'+
+    '<div style="font-size:13px;color:var(--text);line-height:1.5">'+trend+' '+conf+'</div></div>';
+}
 function buildBloodLevels(){
   var el = document.getElementById('blood-body');
   if(!el) return;
@@ -712,6 +733,7 @@ function buildBloodLevels(){
   html += '<div id="bl-zoom-bar" style="display:flex;gap:4px;margin-bottom:8px"></div>';
   html += '<canvas id="bl-chart" style="width:100%;display:block"></canvas>';
   html += '<div id="bl-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>';
+  html += _blFreetCard();
   html += '<div style="margin-top:10px;font-size:10px;color:var(--muted2);line-height:1.5">Lines with a clinical assay show a <b>real blood level</b>: <b>Free T</b> (pmol/L, via the T-Calc model) and <b>Vitamin D</b> (25-OH-D, nmol/L) — each with its shaded normal range. Compounds without a routine blood test (research peptides, GH→IGF-1) still show estimated amount-in-body (mg-eq.). The Y-axis is <b>logarithmic</b> (each gridline = 10×); it labels in a shared unit when the visible lines agree, else relative magnitude. Solid = to date, dimmed = projected from today. Tap a chip to hide/show; zoom then drag to pan.</div>';
   html += '</div>';
   el.innerHTML = html;
