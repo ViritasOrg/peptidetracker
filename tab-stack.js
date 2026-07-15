@@ -126,6 +126,68 @@ async function wizSave(){
 }
 // ── Updated buildStackStore to show cycle length ────────────────────────────
 function createNewStack(){initWizard();showWizard(false);}
+// ── Protocol templates (curated starter stacks served from the backend) ────────
+function openTemplatePicker(preferGoals){
+  var tpl=(typeof _protocolTemplates!=='undefined'&&_protocolTemplates)?_protocolTemplates:[];
+  if(!tpl.length){createNewStack();return;}
+  var pref=Array.isArray(preferGoals)?preferGoals:[];
+  var _tplMatches=function(t){return pref.length&&(t.goals||[]).some(function(g){return pref.indexOf(g)>=0;});};
+  if(pref.length)tpl=tpl.slice().sort(function(a,b){return (_tplMatches(b)?1:0)-(_tplMatches(a)?1:0);}); // goal matches first
+  var ov=document.createElement('div');ov.id='tpl-picker-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;display:flex;align-items:flex-end;justify-content:center';
+  ov.onclick=function(e){if(e.target===ov)_closeTemplatePicker();};
+  var cards=tpl.map(function(t){
+    var comps=[].concat((t.peptides||[]).map(function(p){return {name:p.name,dot:p.dot,dose:(p.dose_am||'')+(p.unit_am?' '+p.unit_am:'')};}),
+      ((t.trt&&t.trt.compounds)||[]).map(function(c){return {name:c.name,dot:c.dot,dose:(c.dose||'')+(c.unit?' '+c.unit:'')};}),
+      ((t.enhanced&&t.enhanced.compounds)||[]).map(function(c){return {name:c.name,dot:c.dot,dose:(c.dose||'')+(c.unit?' '+c.unit:'')};}));
+    var rows=comps.map(function(c){return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="width:7px;height:7px;border-radius:50%;background:'+(c.dot||'#888')+';flex-shrink:0"></span><span style="font-size:13px;color:var(--text);flex:1">'+_esc(c.name)+'</span><span style="font-size:12px;color:var(--muted2);font-family:var(--font-mono)">'+_esc(c.dose)+'</span></div>';}).join('');
+    var _sug=_tplMatches(t)?'<span style="font-size:9px;font-weight:800;letter-spacing:0.4px;color:#000;background:var(--accent);border-radius:5px;padding:2px 6px;margin-left:8px;vertical-align:middle">SUGGESTED</span>':'';
+    return '<div style="border:1px solid '+(_tplMatches(t)?'var(--accent)':'var(--border)')+';border-radius:12px;padding:14px;margin-bottom:12px;background:var(--surface2)">'+
+      '<div style="font-family:var(--font-display);font-size:19px;color:var(--text)">'+_esc(t.name)+_sug+'</div>'+
+      (t.tagline?'<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-top:2px">'+_esc(t.tagline)+'</div>':'')+
+      (t.description?'<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin:8px 0 10px">'+_esc(t.description)+'</div>':'')+
+      rows+
+      '<button onclick="useTemplate(\''+_esc(t.id)+'\')" style="margin-top:12px;width:100%;background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Use this plan</button>'+
+    '</div>';
+  }).join('');
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:18px 18px 28px;max-height:85vh;overflow-y:auto';
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-family:var(--font-display);font-size:22px;color:var(--accent)">Starter protocols</div><button onclick="_closeTemplatePicker()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;line-height:1">&times;</button></div>'+
+    '<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:14px">Vetted starting points. You can edit doses, timing and the start date any time.</div>'+
+    cards+
+    '<button onclick="_closeTemplatePicker();createNewStack()" style="width:100%;background:var(--surface2);color:var(--muted2);border:1px solid var(--border);border-radius:20px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;margin-top:4px">Start from scratch instead</button>';
+  ov.appendChild(sheet);document.body.appendChild(ov);
+}
+function _closeTemplatePicker(){var ov=document.getElementById('tpl-picker-overlay');if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);}
+// Instantiate a stack from a template: starts today (so doses schedule immediately),
+// activates it, persists to the backend and regenerates injections. Fully editable after.
+async function useTemplate(tid){
+  var t=((typeof _protocolTemplates!=='undefined'&&_protocolTemplates)||[]).find(function(x){return x.id===tid;});
+  if(!t)return;
+  if(!Array.isArray(_userStacks))_userStacks=[];
+  if(_userStacks.length>=4){alert('You already have 4 stacks — remove one first.');return;}
+  var _t0=new Date(NOW);_t0.setHours(0,0,0,0);
+  var proto={name:t.name,cycle_length:t.cycle_length||12,cycle_start:dateKey(_t0),
+    peptides:(t.peptides||[]).map(function(p){return {id:p.id,name:p.name,dot:p.dot,times:(p.times||['AM']).slice(),days:(p.days||[0,1,2,3,4,5,6]).slice(),dose_am:p.dose_am||'',dose_pm:p.dose_pm||'',unit_am:p.unit_am||'',unit_pm:p.unit_pm||'',active:true};}),
+    trt:(t.trt&&t.trt.compounds&&t.trt.compounds.length)?{enabled:true,compounds:t.trt.compounds.map(function(c){return {id:c.id,name:c.name,dot:c.dot,dose:c.dose,unit:c.unit,freqVal:c.freqVal,freqUnit:c.freqUnit,days:(c.days||[1]).slice()};})}:{},
+    enhanced:(t.enhanced&&t.enhanced.compounds&&t.enhanced.compounds.length)?{enabled:true,compounds:t.enhanced.compounds.map(function(c){return {id:c.id,name:c.name,dot:c.dot,dose:c.dose,unit:c.unit,days:(c.days||[0,1,2,3,4,5,6]).slice()};})}:{}
+  };
+  if(typeof _ensureStackId==='function')_ensureStackId(proto);
+  _userStacks.push(proto);_userStacks=_userStacks.slice(0,4);
+  var _idx=_userStacks.length-1;
+  if(!Array.isArray(_activeStackIndices))_activeStackIndices=[];
+  if(_activeStackIndices.indexOf(_idx)<0)_activeStackIndices.push(_idx);
+  _closeTemplatePicker();
+  await saveStacksToBackend();
+  if(typeof updateWEEKLY==='function')updateWEEKLY();
+  await generateAndPushInjections(proto,_t0);
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof buildWeekStrip==='function')buildWeekStrip();
+  if(typeof buildToday==='function')buildToday();
+  if(typeof buildSchedule==='function')buildSchedule();
+  if(typeof buildStackStore==='function')buildStackStore();
+  if(typeof switchPrimary==='function')switchPrimary('today');
+}
 
 function viewStack(idx){_editReadOnly=true;showStackEditor(idx);}
 function editStack(idx){_editReadOnly=false;showStackEditor(idx);}
@@ -341,7 +403,7 @@ function editAddPeptide(){
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:75vh;overflow-y:auto;';
   var groups={};PEPTIDE_CAT.forEach(function(cat){if(!groups[cat.group])groups[cat.group]=[];groups[cat.group].push(cat);});
   var html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">';
-  html+='<div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent);">ADD PEPTIDE</div>';
+  html+='<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent);">ADD PEPTIDE</div>';
   html+='<button onclick="this.closest(\'[style*=fixed]\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;">×</button>';
   html+='</div>';
   Object.keys(groups).forEach(function(grp){
@@ -492,7 +554,7 @@ function _rcToggle(ctx,id){
   if(idx!==-1)_wiz.peptides.splice(idx,1);
   if(ctx==='wizpopup'&&window._wizCheckSheet){
     var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-    window._wizCheckSheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
+    window._wizCheckSheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
   } else {
     var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
     var chkEl=document.getElementById('wiz-chk-section');
@@ -518,7 +580,7 @@ function showCheckPanel(){
   overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:80vh;overflow-y:auto;';
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -705,7 +767,7 @@ function wizShowCheck(){
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:70vh;overflow-y:auto;';
   window._wizCheckSheet=sheet;
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -727,6 +789,23 @@ function wizStepCheck(body,footer){
   body.innerHTML=html;
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
+// Contextual safety note for a compound tier (peptide / trt / enhanced) — a short,
+// dismissible watch/test/stop card shown in every tier's dose-guidance view.
+// Un-gated: safety always surfaces. Content is served from the backend.
+function _renderSafetyNote(tier){
+  if(typeof _safetyDismissed!=='undefined'&&_safetyDismissed[tier])return '';
+  var n=(typeof _safetyNotes!=='undefined'&&_safetyNotes)?_safetyNotes[tier]:null;
+  if(!n)return '';
+  return '<div data-safety="'+tier+'" style="margin-top:8px;background:rgba(255,176,60,0.06);border:1px solid rgba(255,176,60,0.25);border-radius:8px;padding:9px 11px">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px"><span style="display:flex;align-items:center;gap:6px"><span style="font-size:12px">⚠️</span><span style="font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--warning)">Safety'+(n.label?' — '+_esc(n.label):'')+'</span></span>'+
+    '<button onclick="dismissSafety(\''+tier+'\',this)" style="background:none;border:none;color:var(--muted2);font-size:15px;line-height:1;cursor:pointer;padding:0 2px">&times;</button></div>'+
+    '<div style="font-size:11px;color:var(--text);line-height:1.5">'+
+      (n.watch?'<div><b style="color:var(--muted2)">Watch:</b> '+_esc(n.watch)+'</div>':'')+
+      (n.test?'<div style="margin-top:2px"><b style="color:var(--muted2)">Test:</b> '+_esc(n.test)+'</div>':'')+
+      (n.stop?'<div style="margin-top:2px"><b style="color:var(--muted2)">Stop:</b> '+_esc(n.stop)+'</div>':'')+
+    '</div></div>';
+}
+function dismissSafety(tier,el){if(typeof _safetyDismissed!=='undefined')_safetyDismissed[tier]=1;var c=(el&&el.closest)?el.closest('[data-safety]'):null;if(c&&c.parentNode)c.parentNode.removeChild(c);}
 function _renderDoseGuide(pepId,currentDose){
   var tiers=DOSE_GUIDE&&DOSE_GUIDE[pepId];
   if(!tiers||!tiers.length)return'';
@@ -753,7 +832,7 @@ function _renderDoseGuide(pepId,currentDose){
   var mods=_dosePersonalization(pepId,profile);
   var modHtml='';
   if(mods.length){var colorMap={adj:'#3b9eff',ok:'#3cffa0',warn:'#f59e0b',info:'#c084fc'};modHtml='<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">'+mods.map(function(m){var c=colorMap[m.type]||'#3b9eff';return'<div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:4px"><span style="color:'+c+';font-size:12px;line-height:1.4;margin-top:1px">●</span><span style="font-size:11px;color:var(--text);line-height:1.4">'+m.text+'</span></div>';}).join('')+'</div>';}else if(!hasProfile){modHtml='<div style="margin-top:6px;font-size:11px;color:var(--muted2);font-style:italic">Add age & weight in Body tab for personalized dosing</div>';}
-  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows.join('')+modHtml+'</div>';
+  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows.join('')+modHtml+'</div>'+_renderSafetyNote('peptide');
 }
 function _renderRampSection(p,pi){
   var hasRamp=!!(p.dose_phases&&p.dose_phases.length);
@@ -1097,7 +1176,7 @@ function stackAddAASCompound(){
   var selHtml='<select id="aas-name" onchange="stackAASAutoFill(this.value)" style="'+ins+'"><option value="">— Choose compound —</option>';
   _grps.forEach(function(g){var ge=(ENHANCEMENT_COMPOUNDS||[]).filter(function(e){return e.group===g;});if(!ge.length)return;selHtml+='<optgroup label="'+g+'">';ge.forEach(function(e){selHtml+='<option value="'+e.id+'">'+e.name+'</option>';});selHtml+='</optgroup>';});
   selHtml+='</select>';
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;"><div style="font-family:Bebas Neue,sans-serif;font-size:20px;letter-spacing:1px;color:var(--accent);">ADD COMPOUND</div><button onclick="document.getElementById(\'aas-add-overlay\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1;">&#x2715;</button></div>'
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent);">ADD COMPOUND</div><button onclick="document.getElementById(\'aas-add-overlay\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1;">&#x2715;</button></div>'
     +'<div style="display:grid;gap:10px;">'
     +selHtml
     +'<div style="display:flex;gap:8px;">'
@@ -1117,7 +1196,7 @@ function _renderEnhancedGuide(cat,activeDose){
   if(tiers&&tiers.length){var rows=tiers.map(function(t){var _isActive=(activeDose&&activeDose>0)?(function(){var _ns=(t.d||'').match(/[\d.]+/g);if(_ns&&_ns.length>=2){var _mn=parseDec(_ns[0]),_mx=parseDec(_ns[_ns.length-1]);return activeDose>=_mn&&activeDose<=_mx;}return!!t.b;})():!!t.b;var bg=_isActive?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:'+(_isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+'</div>'+note+risk+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
   if(cat.interaction)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">How it works</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.interaction+'</div></div>';
   if(cat.sides)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Side effects</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.sides+'</div></div>';
-  return html;
+  return html+_renderSafetyNote('enhanced');
 }
 function stackAASAutoFill(id){
   var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});
@@ -1253,7 +1332,7 @@ function _renderTRTGuide(cId,weeklyDoseMg){
   if(weeklyDoseMg>250){supraHtml='<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:7px 10px;margin-bottom:5px"><div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:2px">⚠ Supraphysiological dose</div><div style="font-size:11px;color:var(--muted2);line-height:1.5;">'+Math.round(weeklyDoseMg)+' mg/week exceeds the TRT range (100–200 mg/wk). At this dose you are running a blast, not a TRT protocol. Consider tracking this compound in the Enhanced tab instead and running TRT-range Test here.</div></div>';}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
     +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">TRT Guide</div>'
-    +supraHtml+cadHtml+tiersHtml+modHtml+'</div>';
+    +supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
 function wizStepTRT(body,footer){
