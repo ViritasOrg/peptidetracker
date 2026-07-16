@@ -12,6 +12,7 @@ const rawScript = html.slice(html.indexOf('<script>') + 8, html.indexOf('</scrip
 
 const patchedScript = rawScript
   .replace('const PEPTIDE_CAT=',      'var PEPTIDE_CAT=')
+.replace('const THEMES=',           'var THEMES=')
   .replace('const STACK_RULES=',      'var STACK_RULES=')
   .replace('const WEEKLY_DEFAULT=',   'var WEEKLY_DEFAULT=')
   .replace("const VERSION='",         "var VERSION='")
@@ -33,6 +34,7 @@ const patchedScript = rawScript
            "var _tabVis={};var _currentTab='today';var _currentPrimary='today';var _lastSub={};")
   .replace('let _viewDate=',          'var _viewDate=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
+.replace('let _reconStackPicked=',  'var _reconStackPicked=')
   .replace('let _reconState=',        'var _reconState=')
   .replace('let weights=',            'var weights=')
   .replace('var _bcWeightWindow=',    'var _bcWeightWindow=')
@@ -4698,7 +4700,7 @@ if (typeof G._blBuildLines === 'function') {
   check('_blBuildLines: Free T day-indexed (spd=1)', _blFT && _blFT.spd === 1);
   check('_blBuildLines: Free T starts near the 217 baseline', _blFT && Math.abs(_blFT.curve[0] - 217) < 217*0.15, 'curve[0]='+(_blFT&&_blFT.curve[0])+' peak='+(_blFT&&_blFT.peak));
   check('_blBuildLines: Free T rises above baseline with injections', _blFT && _blFT.peak > _blFT.curve[0]*1.05);
-  check('_blBuildLines: Free T is red', _blFT && _blFT.color === '#ff3b30');
+  check('_blBuildLines: Free T is plasma (bright series red)', _blFT && _blFT.color === '#FF7A6B');
 
   // absorption model for amount line kinds: a dose at day 0 gives curve[0] ~ 0
   // (nothing absorbed yet) and a peak strictly later — not an instant jump.
@@ -4813,7 +4815,7 @@ if (typeof G._blBuildLines === 'function') {
     var _tl = G._blBuildLines();
     var _fts = _tl.filter(function(l){ return l.kind==='freet'; });
     check('_blBuildLines: exactly one Free T line for multiple esters', _fts.length === 1);
-    check('_blBuildLines: Free T is red + pmol/L', _fts[0] && _fts[0].color === '#ff3b30' && _fts[0].unit === 'pmol/L');
+    check('_blBuildLines: Free T is plasma + pmol/L', _fts[0] && _fts[0].color === '#FF7A6B' && _fts[0].unit === 'pmol/L');
     check('_blBuildLines: Free T peak > baseline (rises with injections)', _fts[0] && _fts[0].peak > _fts[0].curve[0]);
     G._injectionsCache = _saveInj; G._userStacks = _saveStacks2; G._activeStackIndices = _saveIdx2; G._supplements = _saveSupp2;
   })();
@@ -4858,7 +4860,7 @@ if (typeof G._blBuildLines === 'function') {
   {
     const _bloodJs = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
     const _tcalcJs = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-    check('data hues defined (plasma/teal/amber)', rawScript.includes("DATA_PLASMA='#ff3b30'") && rawScript.includes("DATA_TEAL='#2fd4c4'") && rawScript.includes("DATA_AMBER='#ffb03c'"));
+    check('data hues defined (plasma/teal/amber)', rawScript.includes("DATA_PLASMA='#FF7A6B'") && rawScript.includes("DATA_TEAL='#2fd4c4'") && rawScript.includes("DATA_AMBER='#ffb03c'"));
     check('T-Calc measured-FT line is teal (calibrated)', _tcalcJs.includes("DATA_TEAL + '99'"));
     check('Blood optimal zone is teal ("good")',          _bloodJs.includes("DATA_TEAL + '22'"));
     check('Blood "now" marker uses the amber token',        _bloodJs.includes("DATA_AMBER + '99'"));
@@ -5364,6 +5366,146 @@ if (typeof G._renderSafetyNote === 'function') {
   check('syncSafetyNotes fetches the backend endpoint', rawScript.includes("'/safety-notes'") && rawScript.includes('function syncSafetyNotes'));
 } else {
   check('_renderSafetyNote present', false);
+}
+
+// ── PLASMA theme tokens ────────────────────────────────────────────────────────
+console.log('\n── PLASMA theme tokens ────────────────────────────────────');
+{
+  const _css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+  check('true-black ground',                    _css.includes('--bg:#000000'));
+  check('warm surfaces',                        _css.includes('--surface:#15130F') && _css.includes('--surface2:#1F1B15'));
+  check('hairline border brightened',           _css.includes('--border:#3A352B'));
+  check('--border-strong exists (3.3:1 functional boundaries)', _css.includes('--border-strong:#6E675A'));
+  check('ink ramp: text/muted2/muted',          _css.includes('--text:#F5F4EF') && _css.includes('--muted2:#C9C4BA') && _css.includes('--muted:#8D897C'));
+  check('muted no longer the 2.75:1 WCAG failure', !_css.includes('#5a5751'));
+  check('plasma series brightened, danger deepened', _css.includes('--plasma:#FF7A6B') && _css.includes('--danger:#FF3B30'));
+  // the VOLTAGE default theme applies at startup and must carry the same values,
+  // otherwise applyTheme() would override the stylesheet tokens with the old greys
+  const _volt = (G.THEMES || []).find(function(t){ return t.id === 1; });
+  check('VOLTAGE default theme matches PLASMA surfaces', !!_volt && _volt.vars.surface === '#15130F' && _volt.vars.surface2 === '#1F1B15' && _volt.vars.border === '#3A352B');
+  check('VOLTAGE default theme matches PLASMA ink',      !!_volt && _volt.vars.text === '#F5F4EF' && _volt.vars.muted === '#8D897C' && _volt.vars.muted2 === '#C9C4BA');
+  check('VOLTAGE danger is status-only deep red',        !!_volt && _volt.vars.danger === '#FF3B30');
+  check('non-default themes untouched',                  (G.THEMES || []).length >= 4 && G.THEMES[1].vars.surface === '#150c10');
+}
+
+// ── PLASMA nav icons + strong boundaries ──────────────────────────────────────
+console.log('\n── PLASMA nav + boundaries ────────────────────────────────');
+{
+  const _css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+  check('all 5 nav buttons carry a glyph icon', ['today','plan','levels','labs','more'].every(function(p){
+    return new RegExp('id="navbtn-'+p+'"[^>]*>\\s*<span class="navic">.+?</span>').test(html);
+  }));
+  check('nav icon is 26px block above an 11px label', /\.navic\{[^}]*display:block[^}]*font-size:26px/.test(_css) && /\.navbtn\{[^}]*font-size:11px/.test(_css));
+  check('navbar insets clear the rounded phone corners', /\.navbar\{[^}]*padding-left:max\(22px,env\(safe-area-inset-left\)\)[^}]*padding-right:max\(22px,env\(safe-area-inset-right\)\)/.test(_css));
+  check('active nav tab gets a lime top indicator (color is not the only cue)', /\.navbtn\.active::before\{[^}]*background:var\(--accent\)/.test(_css));
+  check('checkboxes use --border-strong', /\.check-box\{[^}]*border:2px solid var\(--border-strong\)/.test(_css) && /\.pep-chk\{[^}]*border:2px solid var\(--border-strong\)/.test(_css));
+  check('toggle off-track uses --border-strong', /\.toggle-sw\{[^}]*background:var\(--border-strong\)/.test(_css));
+  check('selection chips use --border-strong', ['day-chip','time-chip','goal-chip'].every(function(c){
+    return new RegExp('\\.'+c+'\\{[^}]*border:1px solid var\\(--border-strong\\)').test(_css);
+  }));
+  check('text inputs use --border-strong', ['input\\.dose-in','select\\.unit-sel','input\\.note-in','input\\.trt-in'].every(function(c){
+    return new RegExp(c+'\\{[^}]*border:1px solid var\\(--border-strong\\)').test(_css);
+  }));
+  check('decorative hairlines still use --border (cards, dividers)', /\.card\{[^}]*border:1px solid var\(--border\)/.test(_css) && /\.divider\{[^}]*background:var\(--border\)/.test(_css));
+}
+
+// ── PLASMA Today rings + streak + freshness ────────────────────────────────────
+console.log('\n── PLASMA Today rings ─────────────────────────────────────');
+if (typeof G._ringStats === 'function' && typeof G._calcDoseStreak === 'function') {
+  const _svCache = G._injectionsCache, _svSupps = G._supplements, _svLog = G.window._peptideLog;
+  const _rd = new Date(2026, 5, 10); // Wed 10 Jun 2026
+  const _k = d => G.dateKey ? G.dateKey(d) : d.toISOString().split('T')[0];
+  const day = off => { const d = new Date(_rd); d.setDate(d.getDate() + off); return _k(d); };
+  const dose = (id, logged) => ({ id, compound_id: id, time_of_day: 'AM', active: true, logged });
+  G._supplements = [];
+  G.window._peptideLog = [];
+
+  // ring stats: 1 of 2 doses logged today; yesterday 1/1 → week 2/3
+  G._injectionsCache = {};
+  G._injectionsCache[day(0)]  = [dose('a', true), dose('b', false)];
+  G._injectionsCache[day(-1)] = [dose('a1', true)];
+  let st = G._ringStats(_rd);
+  check('_ringStats: today doses 1/2', st.dDone === 1 && st.dTot === 2, JSON.stringify(st));
+  check('_ringStats: 7-day window 2/3', st.wDone === 2 && st.wTot === 3, JSON.stringify(st));
+  check('_ringStats: no supplements → 0/0', st.sDone === 0 && st.sTot === 0);
+
+  // streak: incomplete today is skipped; d-1 complete, d-2 empty (gap), d-3 complete → 2
+  G._injectionsCache = {};
+  G._injectionsCache[day(0)]  = [dose('a', true), dose('b', false)];
+  G._injectionsCache[day(-1)] = [dose('c', true)];
+  G._injectionsCache[day(-3)] = [dose('d', true)];
+  check('streak: skips incomplete today, bridges a rest day', G._calcDoseStreak(_rd) === 2, 'got ' + G._calcDoseStreak(_rd));
+
+  // streak: complete today counts; a partially-logged past day breaks it
+  G._injectionsCache = {};
+  G._injectionsCache[day(0)]  = [dose('a', true)];
+  G._injectionsCache[day(-1)] = [dose('b', true), dose('c', false)];
+  check('streak: complete today counts, partial past day breaks', G._calcDoseStreak(_rd) === 1, 'got ' + G._calcDoseStreak(_rd));
+
+  // streak: 3 consecutive empty days end the walk
+  G._injectionsCache = {};
+  G._injectionsCache[day(0)]  = [dose('a', true)];
+  G._injectionsCache[day(-5)] = [dose('z', true)];
+  check('streak: 3 empty days end the history walk', G._calcDoseStreak(_rd) === 1, 'got ' + G._calcDoseStreak(_rd));
+
+  // streak: dose-escalation immunity — the same day counts identically with more doses logged
+  G._injectionsCache = {};
+  G._injectionsCache[day(0)] = [dose('a', true), dose('extra1', true), dose('extra2', true)];
+  const _s3 = G._calcDoseStreak(_rd);
+  G._injectionsCache[day(0)] = [dose('a', true)];
+  check('rings/streak measure the plan, not the amount', _s3 === G._calcDoseStreak(_rd));
+
+  G._injectionsCache = _svCache; G._supplements = _svSupps; G.window._peptideLog = _svLog;
+
+  // wiring + markup
+  const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  const _suppJs  = fs.readFileSync(path.join(__dirname, '../tab-supplements.js'), 'utf8');
+  check('today page has the rings container', html.includes('id="today-rings"'));
+  check('buildToday refreshes the rings', /function buildToday\(\)\{if\(typeof buildTodayRings==='function'\)buildTodayRings\(\);/.test(_todayJs));
+  check('supplement toggle refreshes the rings', _suppJs.includes("if(typeof buildTodayRings==='function') buildTodayRings();"));
+  check('rings hide while sync pending', /_syncPending\|\|!_injCacheReady\)\{el\.innerHTML='';return;\}/.test(_todayJs));
+  check('ring colors ride theme tokens (lime/teal/violet)', _todayJs.includes("'var(--accent)'") && _todayJs.includes("'var(--teal)'") && _todayJs.includes("'var(--accent4)'"));
+} else {
+  check('_ringStats/_calcDoseStreak present', false);
+}
+console.log('\n── PLASMA freshness chip ──────────────────────────────────');
+if (typeof G._bcAgeLabel === 'function') {
+  const _ref = new Date(2026, 6, 16);
+  check('_bcAgeLabel: same day → today',  G._bcAgeLabel('2026-07-16', _ref) === 'today',  G._bcAgeLabel('2026-07-16', _ref));
+  check('_bcAgeLabel: 1 day → 1d ago',    G._bcAgeLabel('2026-07-15', _ref) === '1d ago', G._bcAgeLabel('2026-07-15', _ref));
+  check('_bcAgeLabel: 5 days → 5d ago',   G._bcAgeLabel('2026-07-11', _ref) === '5d ago', G._bcAgeLabel('2026-07-11', _ref));
+  check('_bcAgeLabel: ~2 months → 2mo ago', G._bcAgeLabel('2026-05-07', _ref) === '2mo ago', G._bcAgeLabel('2026-05-07', _ref));
+  check('_bcAgeLabel: bad input → empty', G._bcAgeLabel('', _ref) === '' && G._bcAgeLabel('nonsense', _ref) === '');
+  const _bodyJs = fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8');
+  check('LATEST RESULTS header carries the age chip', html.includes('id="res-age"'));
+  check('bcRender sets the age chip from the latest entry', _bodyJs.includes("_ra.textContent=_bcAgeLabel(latest.date)"));
+} else {
+  check('_bcAgeLabel present', false);
+}
+
+// ── Recon tab defaults to the ACTIVE stack ─────────────────────────────────────
+console.log('\n── Recon: active stack default ────────────────────────────');
+if (typeof G.renderRecon === 'function' && typeof G.selectReconStack === 'function') {
+  const _svStacks = G._userStacks, _svIdx = G._activeStackIndices,
+        _svRIdx = G._reconStackIdx, _svPicked = G._reconStackPicked;
+  G._userStacks = [{ name: 'Old stack', peptides: [] }, { name: 'Active stack', peptides: [] }];
+  G._activeStackIndices = [1];
+  G._reconStackPicked = false; G._reconStackIdx = 0;
+  G.renderRecon();
+  check('recon defaults to the active stack, not index 0', G._reconStackIdx === 1, 'idx=' + G._reconStackIdx);
+  // explicit user choice wins and sticks across re-renders
+  G.selectReconStack(0);
+  check('manual selection sticks (picked flag set)', G._reconStackPicked === true && G._reconStackIdx === 0);
+  G.renderRecon();
+  check('re-render does not override a manual selection', G._reconStackIdx === 0, 'idx=' + G._reconStackIdx);
+  // out-of-range active index is ignored safely
+  G._reconStackPicked = false; G._reconStackIdx = 0; G._activeStackIndices = [9];
+  G.renderRecon();
+  check('out-of-range active index falls back safely', G._reconStackIdx === 0, 'idx=' + G._reconStackIdx);
+  G._userStacks = _svStacks; G._activeStackIndices = _svIdx;
+  G._reconStackIdx = _svRIdx; G._reconStackPicked = _svPicked;
+} else {
+  check('renderRecon/selectReconStack present', false);
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
