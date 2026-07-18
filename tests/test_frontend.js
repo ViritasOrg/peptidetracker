@@ -2662,7 +2662,7 @@ console.log('\n── Source-code structural assertions ────────
   check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,4000}/);return m&&m[0].includes("id=\"trt-guide-");})());
-  check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('trt-guide-');})());
+  check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('trt-guide-');})());
 
   // _refreshTRTGuide logic: correct weekly dose calculation
   (function(){
@@ -5745,6 +5745,84 @@ console.log('\n── Swipe navigation between top-level tabs ──────
     // respects the visible subset, not the full order
     check('operates on the visible subset', G._navSwipeTarget([order[0],order[2]],order[0],1)===order[2]);
   }
+}
+
+// ── Pre-cycle body-fat readiness card ────────────────────────────────────────
+console.log('\n── Pre-cycle body-fat readiness card ───────────────────────');
+{
+  const G=sandbox;
+  check('_bfReadinessCard defined', typeof G._bfReadinessCard==='function');
+  check('_latestBodyFat defined', typeof G._latestBodyFat==='function');
+  check('_READINESS_FALLBACK has body_fat', !!(G._READINESS_FALLBACK&&G._READINESS_FALLBACK.body_fat));
+  if(typeof G._bfReadinessCard==='function'){
+    G.localStorage.setItem('user_sex','male');
+    // Tier gating: only trt/enhanced get the card, never peptide
+    check('readiness card shown for enhanced tier', G._bfReadinessCard('enhanced').indexOf('Lean out before you start')>=0);
+    check('readiness card shown for trt tier', G._bfReadinessCard('trt').indexOf('Lean out before you start')>=0);
+    check('readiness card NOT shown for peptide tier', G._bfReadinessCard('peptide')==='');
+    // High BF (> male elevated 20) → strong "lean out" framing with the actual %
+    G.localStorage.setItem('proto-bodycomp-v2', JSON.stringify([{date:'2026-07-01',bf:25,neck:42,belly:100}]));
+    var hi=G._bfReadinessCard('enhanced');
+    check('latest BF resolves to logged entry (25)', G._latestBodyFat()===25);
+    check('high BF → recommend leaning out first', hi.indexOf('Recommend leaning out first')>=0);
+    check('high BF → shows the user’s %', hi.indexOf('25')>=0);
+    // Borderline (between target 15 and elevated 20)
+    G.localStorage.setItem('proto-bodycomp-v2', JSON.stringify([{date:'2026-07-02',bf:17,neck:42,belly:95}]));
+    check('borderline BF → a little above ideal', G._bfReadinessCard('trt').indexOf('A little above ideal')>=0);
+    // At/under target 15 → good to start
+    G.localStorage.setItem('proto-bodycomp-v2', JSON.stringify([{date:'2026-07-03',bf:12,neck:41,belly:88}]));
+    check('lean BF → good range to start', G._bfReadinessCard('enhanced').indexOf('Good range to start')>=0);
+    // Female band (target 25 / elevated 30): 27% is borderline, not elevated
+    G.localStorage.setItem('user_sex','female');
+    G.localStorage.setItem('proto-bodycomp-v2', JSON.stringify([{date:'2026-07-04',bf:27,neck:34,belly:80,hip:98}]));
+    check('female borderline (27%) → a little above ideal', G._bfReadinessCard('enhanced').indexOf('A little above ideal')>=0);
+    G.localStorage.setItem('user_sex','male');
+    G.localStorage.removeItem('proto-bodycomp-v2');
+  }
+  // Source wiring: both cycle-start surfaces call the card
+  var _cycSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-cycles.js'),'utf8');
+  check('cycle wizard step 1 renders readiness card', _cycSrc.includes("_bfReadinessCard('enhanced')"));
+  var _stkSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('TRT protocol section renders readiness card', _stkSrc.includes("_bfReadinessCard('trt')"));
+}
+
+// ── T-Calc: body-fat adjustment of the population SHBG baseline ───────────────
+console.log('\n── T-Calc: body-fat → SHBG baseline adjustment ─────────────');
+{
+  const G=sandbox;
+  const approx=(a,b)=>Math.abs(a-b)<1e-3;
+  check('_tcShbgBodyFatFactor defined', typeof G._tcShbgBodyFatFactor==='function');
+  if(typeof G._tcShbgBodyFatFactor==='function'){
+    // Unknown / non-positive BF → no change
+    check('factor=1 when BF unknown (0)', G._tcShbgBodyFatFactor(0,'male')===1);
+    check('factor=1 when BF null', G._tcShbgBodyFatFactor(null,'male')===1);
+    // At the reference BF the factor is exactly 1 (male ref 18, female ref 27)
+    check('male at ref 18% → factor 1', approx(G._tcShbgBodyFatFactor(18,'male'),1));
+    check('female at ref 27% → factor 1', approx(G._tcShbgBodyFatFactor(27,'female'),1));
+    // Higher BF lowers SHBG (<1); lower BF raises it (>1)
+    check('high BF (28%) lowers SHBG (<1)', G._tcShbgBodyFatFactor(28,'male')<1);
+    check('high BF (28%) ≈ 0.819', approx(G._tcShbgBodyFatFactor(28,'male'),Math.exp(-0.02*10)));
+    check('lean BF (12%) raises SHBG (>1)', G._tcShbgBodyFatFactor(12,'male')>1);
+    // Monotonic: fatter → smaller factor
+    check('monotonic in BF', G._tcShbgBodyFatFactor(30,'male')<G._tcShbgBodyFatFactor(20,'male'));
+    // Clamp: extreme adiposity floored at min_factor (0.60)
+    check('extreme BF floored at 0.60', approx(G._tcShbgBodyFatFactor(60,'male'),0.60));
+    check('factor never below min', G._tcShbgBodyFatFactor(90,'male')>=0.60);
+    // Sex-specific bands differ
+    check('male vs female bands differ at 30%', G._tcShbgBodyFatFactor(30,'male')!==G._tcShbgBodyFatFactor(30,'female'));
+    // Direction check through Vermeulen: lower SHBG → higher free T
+    if(typeof G._tcVermeulenFT==='function'){
+      var ftBase=G._tcVermeulenFT(20,40);
+      var ftAdj=G._tcVermeulenFT(20,40*G._tcShbgBodyFatFactor(28,'male'));
+      check('BF-lowered SHBG raises the free-T estimate', ftAdj>ftBase);
+    }
+  }
+  // Source wiring: applied only to the population baseline, sync consumes the params
+  var _tcSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('tcalc consumes shbgBodyFat from backend', _tcSrc.includes('d.shbgBodyFat'));
+  check('tcalc applies BF factor to population SHBG', _tcSrc.includes('_popShbg = _popShbg * _bfFac'));
+  check('tcalc guards BF factor behind _popShbg>0 (no measured SHBG)',
+    /_popShbg > 0[\s\S]{0,400}_tcShbgBodyFatFactor/.test(_tcSrc));
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
