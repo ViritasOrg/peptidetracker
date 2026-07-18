@@ -5825,6 +5825,120 @@ console.log('\n── T-Calc: body-fat → SHBG baseline adjustment ────
     /_popShbg > 0[\s\S]{0,400}_tcShbgBodyFatFactor/.test(_tcSrc));
 }
 
+// ── Female Tier-3 cycle protocols (sex-aware wizard) ─────────────────────────
+console.log('\n── Female Tier-3 cycle protocols ───────────────────────────');
+{
+  const G=sandbox;
+  check('CYCLE_TEMPLATES_FEMALE defined', Array.isArray(G.CYCLE_TEMPLATES_FEMALE));
+  check('_userSexCyc defined', typeof G._userSexCyc==='function');
+  check('_activeCycleTemplates defined', typeof G._activeCycleTemplates==='function');
+  check('_cycleTemplateById defined', typeof G._cycleTemplateById==='function');
+  check('_femaleCycleNoteHtml defined', typeof G._femaleCycleNoteHtml==='function');
+  if(Array.isArray(G.CYCLE_TEMPLATES_FEMALE)){
+    // SAFETY-CRITICAL: tren / 19-nors / harsh DHTs / male orals never appear anywhere
+    var banned=/trenbolone|\bnpp\b|nandrolone|\bdeca\b|masteron|drostanolone|dianabol|methandrostenolone|anadrol|oxymetholone/i;
+    // Injectable testosterone esters are banned even in HRT (peaky → virilizing)
+    var injTest=/testosterone\s*(enanthate|cypionate|propionate)|sustanon/i;
+    var leak=null, injLeak=null, perfTest=null;
+    G.CYCLE_TEMPLATES_FEMALE.forEach(function(t){(t.compounds||[]).forEach(function(c){
+      if(banned.test(c.name))leak=t.id+':'+c.name;
+      if(injTest.test(c.name))injLeak=t.id+':'+c.name;
+      // testosterone may ONLY appear in the hrt-kind template
+      if(t.kind!=='hrt'&&/testosterone/i.test(c.name))perfTest=t.id+':'+c.name;
+    });});
+    check('NO tren/19-nor/harsh compound in any female template', leak===null, leak||'');
+    check('NO injectable testosterone ester in any female template', injLeak===null, injLeak||'');
+    check('testosterone appears ONLY in the HRT template', perfTest===null, perfTest||'');
+    // Female performance whitelist + dose bands (HRT handled separately below)
+    var okDose=true;
+    G.CYCLE_TEMPLATES_FEMALE.forEach(function(t){(t.compounds||[]).forEach(function(c){
+      if(/oxandrolone|anavar/i.test(c.name)){ if(!(c.unit==='mg/day'&&c.dose<=10)) okDose=false; }
+      else if(/primobolan|metenolone/i.test(c.name)){ if(!(c.unit==='mg/week'&&c.dose<=50)) okDose=false; }
+    });});
+    check('female doses within safe bands (Anavar ≤10 mg/day, Primo ≤50 mg/week)', okDose);
+    // HRT template: physiologic, transdermal, low dose
+    var hrt=G.CYCLE_TEMPLATES_FEMALE.find(function(t){return t.kind==='hrt';});
+    check('female HRT template present (kind=hrt)', !!hrt);
+    if(hrt){
+      var hc=hrt.compounds[0];
+      check('HRT testosterone is transdermal (not injectable)', /transdermal/i.test(hc.name));
+      check('HRT is a low-dose topical (% cream or ≤10 mg/day)', (hc.unit==='%'&&hc.dose<=2)||(hc.unit==='mg/day'&&hc.dose<=10));
+      check('HRT framed as replacement, not a cycle', /replacement/i.test(hrt.desc));
+    }
+    // Performance female cycles (non-HRT) stay short (≤8 weeks)
+    check('all female PERFORMANCE cycles ≤8 weeks', G.CYCLE_TEMPLATES_FEMALE.filter(function(t){return t.kind!=='hrt';}).every(function(t){return t.weeks<=8;}));
+    // Every female template carries a virilization risk axis + a stop-protocol ancillary
+    check('female templates carry viril_risk', G.CYCLE_TEMPLATES_FEMALE.every(function(t){return t.safety&&t.safety.viril_risk;}));
+    check('female templates carry a virilization stop-protocol', G.CYCLE_TEMPLATES_FEMALE.every(function(t){return (t.ancillaries||[]).some(function(a){return /virilization/i.test(a.name);});}));
+    // No AI / hCG in a female kit
+    check('female kit has no AI/hCG', G.CYCLE_TEMPLATES_FEMALE.every(function(t){return !(t.ancillaries||[]).some(function(a){return /aromatase inhibitor|\bhcg\b/i.test(a.name);});}));
+  }
+  if(typeof G._activeCycleTemplates==='function'){
+    // Male user → male set (test present); female user → female set (never test)
+    G.localStorage.setItem('user_sex','male');
+    var maleSet=G._activeCycleTemplates();
+    check('male user gets the male template set', maleSet.some(function(t){return /Test/i.test(t.name);}));
+    G.localStorage.setItem('user_sex','female');
+    var femSet=G._activeCycleTemplates();
+    check('female user gets the female set (ids)', femSet.some(function(t){return t.id==='fem_first';}));
+    check('female user NEVER sees a performance/injectable testosterone template', !femSet.some(function(t){return t.kind!=='hrt'&&(t.compounds||[]).some(function(c){return /testosterone/i.test(c.name);});}));
+    check('female user gets the low-dose testosterone HRT option', femSet.some(function(t){return t.kind==='hrt';}));
+    // Contraindication banner shows for female, hidden for male
+    check('female contraindication banner renders', /Do not use|different sport/i.test(G._femaleCycleNoteHtml()));
+    check('female banner lists testosterone + tren as avoid', /Testosterone/.test(G._femaleCycleNoteHtml())&&/Trenbolone/.test(G._femaleCycleNoteHtml()));
+    G.localStorage.setItem('user_sex','male');
+    check('male user sees no female banner', G._femaleCycleNoteHtml()==='');
+    // lookup spans both sets
+    check('_cycleTemplateById finds a female template', !!G._cycleTemplateById('fem_synergy'));
+    check('_cycleTemplateById finds a male template', !!G._cycleTemplateById('first'));
+  }
+  // Viril badge renders in the safety badges
+  if(typeof G._cycleSafetyBadges==='function'){
+    check('_cycleSafetyBadges renders a Viril badge', /Viril/.test(G._cycleSafetyBadges({safety:{viril_risk:'low'}})));
+  }
+}
+
+// ── SI units: µg not mcg + % for topical products ───────────────────────────
+console.log('\n── SI units (µg not mcg) + % topical unit ──────────────────');
+{
+  const G=sandbox;
+  check('_canonUnit defined', typeof G._canonUnit==='function');
+  if(typeof G._canonUnit==='function'){
+    check('_canonUnit maps legacy mcg → µg', G._canonUnit('mcg')==='µg');
+    check('_canonUnit leaves µg as µg', G._canonUnit('µg')==='µg');
+    check('_canonUnit leaves mg/IU/ml/% untouched', G._canonUnit('mg')==='mg'&&G._canonUnit('%')==='%'&&G._canonUnit('IU')==='IU');
+  }
+  // Unit dropdown list: µg + % present, raw mcg gone
+  check('UNITS uses µg (SI), not mcg', Array.isArray(G.UNITS)&&G.UNITS.indexOf('µg')>=0&&G.UNITS.indexOf('mcg')<0);
+  check('UNITS offers % for topical products', Array.isArray(G.UNITS)&&G.UNITS.indexOf('%')>=0);
+  // Peptide catalogue defaults never store the US "mcg" token
+  if(Array.isArray(G.PEPTIDE_CAT)){
+    var catMcg=G.PEPTIDE_CAT.some(function(p){var d=p&&p.dflt;return d&&(d.unitAm==='mcg'||d.unitPm==='mcg');});
+    check('no PEPTIDE_CAT default uses mcg', !catMcg);
+    var catUg=G.PEPTIDE_CAT.some(function(p){var d=p&&p.dflt;return d&&(d.unitAm==='µg'||d.unitPm==='µg');});
+    check('peptide catalogue uses µg defaults', catUg);
+  }
+  // Legacy mcg data still renders — but as µg, never mcg
+  if(typeof G._doseLabel==='function'){
+    var lbl=G._doseLabel('cjc-ipa','100','mcg');
+    check('_doseLabel renders legacy mcg as µg', /µg/.test(lbl)&&!/mcg/.test(lbl), lbl);
+    check('_doseLabel passes % through', /%/.test(G._doseLabel('someid','1','%')));
+  }
+  // Female HRT cream is expressed as a % topical
+  if(Array.isArray(G.CYCLE_TEMPLATES_FEMALE)){
+    var hrt=G.CYCLE_TEMPLATES_FEMALE.find(function(t){return t.kind==='hrt';});
+    check('HRT cream expressed as % topical', !!hrt&&hrt.compounds[0].unit==='%');
+  }
+  // GUARD: the unit dropdown must NEVER render an 'mcg' option — even for legacy mcg
+  // data the option shown is 'µg'. Enforces the "never surface mcg" rule.
+  if(typeof G._renderEditPep==='function'){
+    G._editBuf={name:'T',peptides:[{id:'cjc-ipa',name:'CJC/IPA',dot:'#3cffa0',times:['AM','PM'],days:[1,2,3],dose_am:'100',dose_pm:'100',unit_am:'mcg',unit_pm:'mcg',active:true}],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]},cycle_length:12};
+    var pepHtml=G._renderEditPep(G._editBuf.peptides[0],0);
+    check('unit dropdown never renders an mcg option', !/>mcg<|value="mcg"/.test(pepHtml));
+    check('unit dropdown offers µg', /value="µg"/.test(pepHtml));
+  }
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
