@@ -5714,6 +5714,39 @@ if (typeof G.renderRecon === 'function' && typeof G.selectReconStack === 'functi
   check('renderRecon/selectReconStack present', false);
 }
 
+// ── Swipe navigation between top-level (bottom-nav) tabs ─────────────────────
+console.log('\n── Swipe navigation between top-level tabs ─────────────────');
+{
+  const G=sandbox;
+  check('_navSwipeTarget defined', typeof G._navSwipeTarget==='function');
+  check('_navVisiblePrimaries defined', typeof G._navVisiblePrimaries==='function');
+  check('_navNoSwipeZone defined', typeof G._navNoSwipeZone==='function');
+  check('_initSwipeNav defined', typeof G._initSwipeNav==='function');
+  check('_navActiveView defined', typeof G._navActiveView==='function');
+  // drag-follow animation wiring must be present
+  var _swpSrc=fs.readFileSync(path.resolve(htmlPath),'utf8');
+  check('swipe: touchmove drag handler wired', _swpSrc.includes("addEventListener('touchmove'"));
+  check('swipe: view follows finger via translateX', /av\.style\.transform='translateX\(/.test(_swpSrc));
+  check('swipe: rubber-band resistance at the ends', _swpSrc.includes('dx*0.28'));
+  if(typeof G._navSwipeTarget==='function'){
+    var order=['today','plan','levels','labs','more']; // mirrors PRIMARY_ORDER (const, not exported to sandbox)
+    // swipe left (dir +1) → next primary
+    check('swipe next from first → second', G._navSwipeTarget(order,order[0],1)===order[1]);
+    // swipe right (dir -1) → previous primary
+    check('swipe prev from second → first', G._navSwipeTarget(order,order[1],-1)===order[0]);
+    // no wrap past the last tab
+    check('no wrap past last tab', G._navSwipeTarget(order,order[order.length-1],1)===null);
+    // no wrap before the first tab
+    check('no wrap before first tab', G._navSwipeTarget(order,order[0],-1)===null);
+    // unknown current → null (safe)
+    check('unknown current primary → null', G._navSwipeTarget(order,'__nope__',1)===null);
+    // single visible primary → null (nothing to move to)
+    check('single visible primary → null', G._navSwipeTarget([order[0]],order[0],1)===null);
+    // respects the visible subset, not the full order
+    check('operates on the visible subset', G._navSwipeTarget([order[0],order[2]],order[0],1)===order[2]);
+  }
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
