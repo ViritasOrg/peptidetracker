@@ -1577,6 +1577,19 @@ console.log('\n── dose dedup migration ────────────�
   check('Today empty state branches on an active stack', todayJs.includes('_hasActive'));
   check('Today empty state offers a template when templates loaded', todayJs.includes('openTemplatePicker()') && todayJs.includes('_protocolTemplates'));
 
+  // Empty-state coaching extended to Levels + Timeline (usability study, #621):
+  // a dead "nothing here" becomes a first action routed to the right flow.
+  {
+    const _bloodJs2 = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
+    const _tlJs2 = fs.readFileSync(path.join(__dirname, '../tab-timeline.js'), 'utf8');
+    check('Levels empty state has a CTA (build stack / go to Plan)',
+      _bloodJs2.includes('Build your first stack') && /switchPrimary\(\\?'plan\\?'\)/.test(_bloodJs2) && _bloodJs2.includes('createNewStack()'));
+    check('Levels empty state branches on whether stacks exist', _bloodJs2.includes('_hasStacks'));
+    check('Timeline empty state coaches with a CTA',
+      _tlJs2.includes('No milestones yet') && /switchPrimary\(\\?'plan\\?'\)/.test(_tlJs2) && _tlJs2.includes('createNewStack()'));
+    check('Timeline empty state branches on whether stacks exist', _tlJs2.includes('_hasStk'));
+  }
+
   // Protocol templates — fetched from the backend, instantiated into a stack.
   check('syncProtocolTemplates fetches the backend endpoint', rawScript.includes("'/protocol-templates'") && rawScript.includes('function syncProtocolTemplates'));
   if (typeof G.useTemplate === 'function' && typeof G.openTemplatePicker === 'function') {
@@ -4867,6 +4880,22 @@ if (typeof G._blBuildLines === 'function') {
     G._blLines = _svBl; G._tcp = _svTcp2;
   }
 
+  // Timeline "What this means" — a computed one-liner from cycle position only.
+  if (typeof G._tlWhatThisMeans === 'function') {
+    check('timeline wtm: before start reads as not started',
+      G._tlWhatThisMeans(1, 12, -3, 84).includes("hasn't started"));
+    check('timeline wtm: early cycle mentions building to steady state',
+      /early|building/.test(G._tlWhatThisMeans(2, 12, 10, 84)));
+    check('timeline wtm: mid cycle reads as stable',
+      G._tlWhatThisMeans(6, 12, 42, 84).includes('mid-cycle'));
+    check('timeline wtm: final week flags planning next step',
+      G._tlWhatThisMeans(12, 12, 81, 84).includes('final week'));
+    check('timeline wtm: complete cycle nudges bloodwork review',
+      G._tlWhatThisMeans(12, 12, 90, 84).includes('complete'));
+    check('timeline wtm: reports weeks remaining',
+      /week[s]? left/.test(G._tlWhatThisMeans(6, 12, 42, 84)));
+  }
+
   // Semantic chart palette — canvas hues mirror the CSS tokens.
   {
     const _bloodJs = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
@@ -4875,6 +4904,20 @@ if (typeof G._blBuildLines === 'function') {
     check('T-Calc measured-FT line is teal (calibrated)', _tcalcJs.includes("DATA_TEAL + '99'"));
     check('Blood optimal zone is teal ("good")',          _bloodJs.includes("DATA_TEAL + '22'"));
     check('Blood "now" marker uses the amber token',        _bloodJs.includes("DATA_AMBER + '99'"));
+    // Canvas charts no longer reference the removed DM Sans webfont (dead ref →
+    // browser default). They use the system stack, matching the CSS --font tokens.
+    check('no canvas font references the removed DM Sans webfont',
+      !_bloodJs.includes('DM Sans') && !_tcalcJs.includes('DM Sans') &&
+      !fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8').includes('DM Sans') &&
+      !rawScript.includes('DM Sans'));
+    check('canvas fonts use the system UI stack',
+      _bloodJs.includes("-apple-system,system-ui,sans-serif") && _tcalcJs.includes("-apple-system,system-ui,sans-serif"));
+    // Body-comp charts: stale pre-PLASMA theme greys aligned to the current tokens
+    // (#0a0a0a inner-dot fills now blend with the true-black bg; #2a2a2a grid → --border).
+    const _bodyJs = fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8');
+    check('body-comp charts drop the stale #0a0a0a / #2a2a2a theme greys',
+      !_bodyJs.includes('#0a0a0a') && !_bodyJs.includes('#2a2a2a'));
+    check('body-comp inner-dot fills use the true-black bg', _bodyJs.includes("fillStyle='#000000'"));
   }
 
   // Phase 2: backend PK dataset → actual blood levels for compounds with an assay
@@ -5398,6 +5441,37 @@ if (Array.isArray(G._OB_ORDER) && typeof G.obSetStart === 'function') {
       return r.indexOf('Build my own stack') >= 0 && r.indexOf('Just explore first') >= 0; })());
 } else {
   check('serious onboarding (obSetStart / tour / start) present', false);
+}
+
+// ── Experience-tier adaptive density (#623) ──────────────────────────────────
+console.log('\n── Adaptive density (experience tier) ─────────────────────');
+if (typeof G._isSimplified === 'function' && typeof G._pepExpTier === 'function') {
+  var _svProf = G.getData('pep-profile', null), _svDens = G.getData('pep-density', null);
+  // explicit override wins regardless of tier
+  G.setData('pep-profile', { experience: 'advanced' }); G.setData('pep-density', 'simple');
+  check('detail level "simple" forces simplified even for advanced tier', G._isSimplified() === true);
+  G.setData('pep-density', 'full');
+  check('detail level "full" forces full even for a beginner tier', (function(){ G.setData('pep-profile',{experience:'first'}); return G._isSimplified() === false; })());
+  // auto follows the tier
+  G.setData('pep-density', 'auto');
+  G.setData('pep-profile', { experience: 'curious' }); check('auto + curious → simplified', G._isSimplified() === true);
+  G.setData('pep-profile', { experience: 'first' });   check('auto + first cycle → simplified', G._isSimplified() === true);
+  G.setData('pep-profile', { experience: 'experienced' }); check('auto + experienced → full', G._isSimplified() === false);
+  G.setData('pep-profile', { experience: 'advanced' });    check('auto + advanced → full', G._isSimplified() === false);
+  // safety: an existing user with no experience recorded is never auto-simplified
+  G.setData('pep-profile', { experience: '' }); check('auto + no experience recorded → full (existing users unaffected)', G._isSimplified() === false);
+  G.setData('pep-profile', null);               check('auto + no profile at all → full', G._isSimplified() === false);
+  G.setData('pep-profile', _svProf); G.setData('pep-density', _svDens);
+  check('setPepDensity persists locally and pushes to backend',
+    rawScript.includes("setData('pep-density',mode)") && rawScript.includes("pushPepSettingsToAgent({'pep-density':mode})"));
+  check('pep-density synced back from backend settings', rawScript.includes("s['pep-density']"));
+  check('Settings exposes an overridable Detail level control (auto/simple/full)',
+    rawScript.includes("_densityRow('auto'") && rawScript.includes("_densityRow('simple'") && rawScript.includes("_densityRow('full'"));
+  var _reconJs2 = fs.readFileSync(path.join(__dirname, '../tab-recon.js'), 'utf8');
+  check('Recon dose guidance sits behind a disclosure in simplified mode',
+    _reconJs2.includes('_isSimplified()') && _reconJs2.includes('<details') && _reconJs2.includes('Dosing guidance'));
+} else {
+  check('adaptive density (_isSimplified / _pepExpTier) present', false);
 }
 
 // ── Contextual safety notes (watch/test/stop, all tiers) ─────────────────────
