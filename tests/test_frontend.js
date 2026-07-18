@@ -1182,6 +1182,15 @@ check('reconDoseRow: tiny vol < 0.05ml warns',  rowTiny.includes('Very small vol
 const rowLarge= G.reconDoseRow('AM','3','ml',5,2,'mg');
 check('reconDoseRow: large vol > 1ml warns',    rowLarge.includes('Large injection volume'), `snippet: ${rowLarge.slice(0,200)}`);
 
+// ── Recon guide: low-dead-space (LDS) syringe hardware guidance (#636) ────────
+{
+  const guide = G.buildReconGuide();
+  check('recon guide recommends low-dead-space syringes',
+    /low[- ]dead[- ]space|LDS/i.test(guide));
+  check('recon guide warns about ~10% loss to dead space',
+    guide.includes('10%') && /dead[- ]space|hub/i.test(guide));
+}
+
 // ── reconDoseRow: 1mg threshold display logic ────────────────────────────────
 console.log('\n── reconDoseRow: 1mg threshold display ────────────────────');
 // IU input <1mg → IU only (no ml, no mcg) — CJC 4 IU at 6.667mg/ml = 0.267mg
@@ -2253,6 +2262,19 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     G.wizStepGoals(gBody,gFoot);
     check('wizStepGoals T3: shows Enhanced Cycle toggle', gBody.innerHTML.includes('Enhanced Cycle'));
 
+    // #637: AM/PM split is user-toggleable on any enhanced compound
+    check('editSetEnhAmPm defined', typeof G.editSetEnhAmPm==='function');
+    G.editSetEnhAmPm(testId2,true);
+    check('editSetEnhAmPm: sets amPm=true', G._editBuf.enhanced.compounds[0].amPm===true);
+    G.editSetEnhAmPm(testId2,false);
+    check('editSetEnhAmPm: sets amPm=false', G._editBuf.enhanced.compounds[0].amPm===false);
+    // Edit view surfaces the Split AM / PM toggle row and honours the per-compound flag
+    var enhEditOn=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose_am:'2',dose_pm:'1',unit:'IU/day',days:[1],amPm:true}]});
+    check('_renderEditEnhanced: shows Split AM / PM toggle', enhEditOn.includes('Split AM / PM'));
+    check('_renderEditEnhanced amPm on: shows AM Dose + PM Dose rows', enhEditOn.includes('AM Dose')&&enhEditOn.includes('PM Dose'));
+    var enhEditOff=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose:'250',unit:'mg/week',days:[1],amPm:false}]});
+    check('_renderEditEnhanced amPm off: single Dose row, no AM Dose', enhEditOff.includes('Split AM / PM')&&!enhEditOff.includes('AM Dose'));
+
     G.editToggleEnhancedCompound(testId2);
     check('editToggleEnhancedCompound: removes compound on second call', G._editBuf.enhanced.compounds.length===0);
     check('editToggleEnhancedCompound: enabled=false when empty', G._editBuf.enhanced.enabled===false);
@@ -2562,6 +2584,14 @@ console.log('\n── View & Edit tab render functions ────────�
     check('_renderEditTRT enabled: shows compound name', etH2.includes(tCat0.name));
     check('_renderEditTRT enabled: shows Dose row', etH2.includes('Dose'));
     check('_renderEditTRT enabled: shows Days row (non-Nebido compound)', etH2.includes('Days'));
+    // #637: TRT compounds expose an AM/PM Time selector (parity with peptides/enhanced)
+    check('_renderEditTRT enabled: shows Time row', etH2.includes('>Time<'));
+    check('_renderEditTRT enabled: shows AM/PM time chips', etH2.includes('editSetTRTTime'));
+    check('editSetTRTTime defined', typeof G.editSetTRTTime==='function');
+    G.editSetTRTTime(tCat0.id,'PM');
+    check('editSetTRTTime: sets time=PM', G._editBuf.trt.compounds[0].time==='PM');
+    G.editSetTRTTime(tCat0.id,'AM');
+    check('editSetTRTTime: sets time=AM', G._editBuf.trt.compounds[0].time==='AM');
   }
 
   // _renderEditPep: renders peptide config card
@@ -2601,6 +2631,15 @@ console.log('\n── Source-code structural assertions ────────
   // wizStepGoals must show Enhanced Cycle toggle for T3 (restored 2026-06-25)
   check('source: wizStepGoals shows Enhanced Cycle for T3',
     (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,3000}/);return fn&&fn[0].includes('Enhanced Cycle');})());
+
+  // #637: TRT injection entries must carry a real AM/PM time_of_day, never hardcoded null
+  check('source: TRT injection builder sets time_of_day from c.time (not null)',
+    tsJs.includes("time_of_day:(c.time==='PM'?'PM':'AM')"));
+  check('source: no TRT injection entry hardcodes time_of_day:null',
+    !(function(){var m=tsJs.match(/tier:'trt'[\s\S]{0,120}time_of_day:null/);return!!m;})());
+  // Enhanced injection builder honours the per-compound amPm flag (user-toggleable)
+  check('source: enhanced injection builder reads c.amPm',
+    tsJs.includes('var isAmPm=c.amPm||(eCat&&eCat.amPm)'));
 
   // All required render functions must be defined in tab-stack.js
   check('source: function _renderEnhancedViewTab( defined', tsJs.includes('function _renderEnhancedViewTab('));
@@ -5099,8 +5138,49 @@ if (typeof G._cycleBwMatch === 'function') {
   check('checkpoint done derived from unified store',       cyc.includes('_cycleBwMatch(d)') && cyc.includes('var _done=bw.done||!!_uni'));
   check('checkpoint no longer opens the separate inline form', !/onclick="cycleBwToggle\(/.test(cyc));
   const labs = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
-  check('Labs add-sheet accepts a prefill date',   labs.includes('function _labOpenAddSheet(prefillDate)'));
+  check('Labs add-sheet accepts a prefill date + preselect panel',   labs.includes('function _labOpenAddSheet(prefillDate, preselect)'));
+  check('Labs add-sheet reveals full panel when opened with a recommended set', labs.includes('_labMoreOpen = !!(preselect && preselect.length)'));
   check('Labs save refreshes the cycle view',      labs.includes('renderCyclesTab()'));
+}
+
+// ── Cycle protocol batch: pre-cycle labeling, panels, ancillaries, tier (#638-640) ──
+console.log('\n── Cycle protocol enrichment ──────────────────────────────');
+{
+  const cyc = fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8');
+  const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  // #638: pre-cycle labeling
+  check('checkpoint week label: baseline reads "Pre-cycle", not "Week 0"',
+    /_cycleBwWeekLabel\(bw\)/.test(cyc) && cyc.includes("bw.phase==='pre'||bw.week===0") && cyc.includes("'Pre-cycle'"));
+  check('checkpoint no longer hardcodes "Week "+bw.week in the render', !cyc.includes("'Week '+bw.week+' — '"));
+  // #640: recommended panels
+  check('checkpoint renders recommended marker chips', cyc.includes('_cycleBwMarkersHtml(bw)') && cyc.includes('recommended_markers'));
+  check('checkpoint markers fall back to fetched phase panels', cyc.includes('_cycleBwPanels') && cyc.includes("getData('proto-cycle-bw-panels'"));
+  check('log checkpoint passes recommended markers to Labs', cyc.includes('_labOpenAddSheet(dstr,_markers)'));
+  check('bloodwork-recommendations fetched from backend', cyc.includes("'/cycles/bloodwork-recommendations'"));
+  // #639: templates enrichment + safety + ancillaries + tier gate
+  check('cycle templates enriched from backend', cyc.includes("'/cycles/templates'") && cyc.includes('function syncCycleTemplatesFromAgent'));
+  check('safety badges render gyno/liver risk', cyc.includes('function _cycleSafetyBadges') && cyc.includes('gyno_risk') && cyc.includes('liver_risk'));
+  check('ancillaries render as "have on hand"', cyc.includes('function _cycleAncillariesHtml') && cyc.includes('HAVE ON HAND'));
+  check('wizard step 1 shows safety + ancillaries', cyc.includes('_cycleSafetyBadges(t)') && cyc.includes('_cycleAncillariesHtml(t)'));
+  check('cycles feature gated to TRT/Enhanced (fail-open)',
+    stk.includes('_cyclesAllowed()') && /function _cyclesAllowed\(\)\{if\(!_featuresLoaded\)return true/.test(rawScript));
+}
+
+// ── Reta escalation reconciled to +1 mg/week (#641) ──────────────────────────
+console.log('\n── Reta escalation reconcile ──────────────────────────────');
+{
+  const recon = fs.readFileSync(path.join(__dirname, '../tab-recon.js'), 'utf8');
+  // DEFAULT_PHASES reta must be strictly +1 mg/week
+  const reta = G.DEFAULT_PHASES && G.DEFAULT_PHASES.retatrutide;
+  check('DEFAULT_PHASES reta present', Array.isArray(reta) && reta.length >= 6);
+  if (Array.isArray(reta)) {
+    const incrOk = reta.every((p, i) => i === 0 || (Number(p.d) - Number(reta[i - 1].d) === 1 && Number(p.w) - Number(reta[i - 1].w) === 1));
+    check('DEFAULT_PHASES reta escalates +1 mg every week', incrOk, JSON.stringify(reta.map(p => p.d)));
+  }
+  check('no "monthly" reta escalation prose in catalogue', !rawScript.includes('Escalate monthly: 2 mg'));
+  check('no "every 4 weeks" reta prose in Recon', !recon.includes('every 4 weeks as tolerated'));
+  check('reta prose states +1 mg/week', rawScript.includes('Escalate by 1 mg every week') && recon.includes('escalate by 1 mg every week'));
+  check('backend escalation schedule consumed', rawScript.includes("'/compounds/escalation'") && rawScript.includes('function syncEscalationFromAgent'));
 }
 
 // ── Phase 5: analysis polish (safety summary, sparklines, tier) ───────────────
