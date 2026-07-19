@@ -1,14 +1,14 @@
 // ── Cycle length suggestions ───────────────────────────────────────────────
 var CYCLE_WEEKS=(function(){var a=[];for(var i=4;i<=240;i+=4)a.push(i);return a;})();
 // ── Updated wizard init with cycle_length ──────────────────────────────────
-// Default name for a new stack: the next "Cycle N" — one past the highest
-// existing "Cycle N" (or the stack count), so new stacks bump 1 → 2 → 3 → 4
-// instead of all defaulting to "Cycle 1".
+// Default name for a new protocol: the next "Protocol N" — one past the highest
+// existing "Protocol N" (or the count), so new protocols bump 1 → 2 → 3 → 4
+// instead of all defaulting to "Protocol 1".
 function _nextStackName(){
   var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
   var maxN=0;
-  stacks.forEach(function(s){var m=/^Cycle (\d+)$/.exec((s&&s.name)||'');if(m){var n=parseInt(m[1],10);if(n>maxN)maxN=n;}});
-  return 'Cycle '+(Math.max(maxN,stacks.length)+1);
+  stacks.forEach(function(s){var m=/^Protocol (\d+)$/.exec((s&&s.name)||'');if(m){var n=parseInt(m[1],10);if(n>maxN)maxN=n;}});
+  return 'Protocol '+(Math.max(maxN,stacks.length)+1);
 }
 function initWizard(){
   _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:_nextStackName(),cycle_length:12};
@@ -24,7 +24,7 @@ function editStackWithCycle(idx){
     enhanced:(_wizTier()>=3&&st.enhanced)?JSON.parse(JSON.stringify(st.enhanced)):{enabled:false,compounds:[]},
     editMode:true,
     stackIndex:idx,
-    stackName:st.name||'Stack '+(idx+1),
+    stackName:st.name||'Protocol '+(idx+1),
     cycle_length:st.cycle_length||12
   };
   showWizard(true);
@@ -59,14 +59,16 @@ function _wizFlow(){
   var steps=['cycle','goals'];
   if(hasPeps){steps.push('peptides');steps.push('check');steps.push('configure');}
   if(hasTRT)steps.push('trt');
-  if(hasEnhanced)steps.push('enhanced');
+  // 'advise' (guided recommendation) precedes the raw Enhanced compound list.
+  if(hasEnhanced){steps.push('advise');steps.push('enhanced');}
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
   var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
   steps.push('review');
   return steps;
 }
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,enhanced:wizStepEnhanced,validate:wizStepValidate,review:wizStepReview};
+var _WIZ_STEP_LABELS={advise:'GUIDANCE'};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -77,7 +79,7 @@ function wizRender(){
     prog+='<div class="wiz-dot '+cls+'"></div>';
   }
   document.getElementById('wiz-progress').innerHTML=prog;
-  document.getElementById('wiz-title').textContent=(_wiz.editMode?'EDIT ':'BUILD ')+flow[idx].toUpperCase();
+  document.getElementById('wiz-title').textContent=(_wiz.editMode?'EDIT ':'BUILD ')+((_WIZ_STEP_LABELS&&_WIZ_STEP_LABELS[flow[idx]])||flow[idx].toUpperCase());
   var body=document.getElementById('wiz-body');
   var footer=document.getElementById('wiz-footer');
   body.scrollTop=0;
@@ -165,7 +167,7 @@ async function useTemplate(tid){
   var t=((typeof _protocolTemplates!=='undefined'&&_protocolTemplates)||[]).find(function(x){return x.id===tid;});
   if(!t)return;
   if(!Array.isArray(_userStacks))_userStacks=[];
-  if(_userStacks.length>=4){alert('You already have 4 stacks — remove one first.');return;}
+  if(_userStacks.length>=4){alert('You already have 4 protocols — remove one first.');return;}
   var _t0=new Date(NOW);_t0.setHours(0,0,0,0);
   var proto={name:t.name,cycle_length:t.cycle_length||12,cycle_start:dateKey(_t0),
     peptides:(t.peptides||[]).map(function(p){return {id:p.id,name:p.name,dot:p.dot,times:(p.times||['AM']).slice(),days:(p.days||[0,1,2,3,4,5,6]).slice(),dose_am:p.dose_am||'',dose_pm:p.dose_pm||'',unit_am:p.unit_am||'',unit_pm:p.unit_pm||'',active:true};}),
@@ -234,7 +236,7 @@ function renderStackEditor(){
   if(_editReadOnly){
     html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
     html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
-    html+='<div style="flex:1;font-size:17px;font-weight:700;color:var(--text);">'+_esc(st.name||'Stack '+(_editIdx+1))+'</div>';
+    html+='<div style="flex:1;font-size:17px;font-weight:700;color:var(--text);">'+_esc(st.name||'Protocol '+(_editIdx+1))+'</div>';
     if(isActive)html+='<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>';
     html+='</div>';
     html+='<div class="wiz-section">Cycle</div>';
@@ -291,9 +293,10 @@ function renderStackEditor(){
     html+='<button onclick="toggleStack('+_editIdx+');renderStackEditor()" style="flex:1;background:'+(isActive?'var(--surface2)':'var(--accent)')+';border:'+(isActive?'1px solid var(--border)':'none')+';color:'+(isActive?'var(--danger)':'#000')+';border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">'+(isActive?'Deactivate':'Activate')+'</button>';
     html+='</div>';
     html+='<div style="padding-bottom:20px;">';
-    html+='<button onclick="deleteStack('+_editIdx+')" style="width:100%;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:0.7;">Delete Stack</button>';
+    html+='<button onclick="deleteStack('+_editIdx+')" style="width:100%;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:0.7;">Delete Protocol</button>';
     html+='</div>';
     body.innerHTML=html;
+    if(_stackViewTab==='enhanced'&&(_userTier||1)>=3)_ensurePctPanel(st);
     return;
   }
 
@@ -330,7 +333,7 @@ function renderStackEditor(){
   }
   html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
   html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Cancel</button>';
-  html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Stack</button>';
+  html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Protocol</button>';
   html+='</div>';
   body.innerHTML=html;
 }
@@ -417,7 +420,7 @@ function editAddPeptide(){
       html+='<div class="pep-dot-sm" style="background:'+cat.dot+';"></div>';
       html+='<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">'+cat.name+'</div>';
       html+='<div style="font-size:11px;color:var(--muted2);">'+doseStr+'</div></div>';
-      if(already)html+='<div style="font-size:11px;color:var(--muted2);">in stack</div>';
+      if(already)html+='<div style="font-size:11px;color:var(--muted2);">in protocol</div>';
       html+='<button class="info-btn" onclick="event.stopPropagation();showPeptideCard(\''+cat.id+'\')">ℹ</button>';
       html+='</div>';
     });
@@ -473,7 +476,7 @@ function wizStep4(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var issues=checkStack(pepObjs);
   var hasErrors=issues.some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack..."><div class="wiz-section" style="margin-top:16px">Check</div><div id="wiz-chk-section">'+renderCheckResults(pepObjs,'wizinline')+'</div>';
+  var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…"><div class="wiz-section" style="margin-top:16px">Check</div><div id="wiz-chk-section">'+renderCheckResults(pepObjs,'wizinline')+'</div>';
   html+='<div class="wiz-section">Summary</div>';
   if(_wiz.peptides.length){
     _wiz.peptides.forEach(function(p){
@@ -488,7 +491,7 @@ function wizStep4(body,footer){
     html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT'))+'</div></div>';
   });
   body.innerHTML=html;
-  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
+  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Protocol';
   footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Re-check</button><button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
 }
 function wizSetStackName(val){_wiz.stackName=val;}
@@ -525,7 +528,7 @@ function checkStack(peptides){
 // ── Render Check Stack results ───────────────────────────────────────────────
 function renderCheckResults(peptides,toggleCtx){
   var issues=checkStack(peptides);
-  if(!issues.length)return '<div class="rule-box ok"><div class="rule-title ok">✓ Stack looks clean</div><div class="rule-msg">No contraindications or redundancies detected.</div></div>';
+  if(!issues.length)return '<div class="rule-box ok"><div class="rule-title ok">✓ Protocol looks clean</div><div class="rule-msg">No contraindications or redundancies detected.</div></div>';
   return issues.map(function(i){
     var ruleObj=STACK_RULES.find(function(r){return r.id===i.id;});
     var conflictHtml='';
@@ -555,7 +558,7 @@ function _rcToggle(ctx,id){
   if(idx!==-1)_wiz.peptides.splice(idx,1);
   if(ctx==='wizpopup'&&window._wizCheckSheet){
     var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-    window._wizCheckSheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
+    window._wizCheckSheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">PROTOCOL CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
   } else {
     var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
     var chkEl=document.getElementById('wiz-chk-section');
@@ -581,7 +584,7 @@ function showCheckPanel(){
   overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:80vh;overflow-y:auto;';
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">PROTOCOL CHECK</div><button onclick="document.body.removeChild(this.closest(\'[style*=fixed]\'))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs);
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -768,7 +771,7 @@ function wizShowCheck(){
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:70vh;overflow-y:auto;';
   window._wizCheckSheet=sheet;
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
-  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">STACK CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
+  sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">PROTOCOL CHECK</div><button onclick="this.closest(\'[style*=fixed]\').remove();window._wizCheckSheet=null;" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer">×</button></div>'+renderCheckResults(pepObjs,'wizpopup');
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
 }
@@ -948,7 +951,7 @@ function _stackTabBar(activeTab,setter){
 function _renderEnhancedUpgradeCTA(){
   return '<div style="text-align:center;padding:32px 16px;">'
     +'<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px;">Enhanced Tier</div>'
-    +'<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px;">Track AAS compounds, bloodwork schedule and E2 management alongside your peptide stack.</div>'
+    +'<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px;">Track AAS compounds, bloodwork schedule and E2 management alongside your peptide protocol.</div>'
     +'<button onclick="document.getElementById(\'tab-btn-settings\').click()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:11px 24px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">Enable in Settings</button>'
     +'</div>';
 }
@@ -1003,7 +1006,7 @@ function _renderTRTViewTab(st){
   var _tcCard=(typeof _renderTcalcTrtCard==='function')?_renderTcalcTrtCard():'';
   if(_tcCard) html+=_tcCard;
   if(!compounds.length){
-    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT configured for this stack.</div>';
+    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT configured for this protocol.</div>';
   }else{
     html+='<div class="wiz-section" style="margin-bottom:10px;">Protocol</div>';
     compounds.forEach(function(c){
@@ -1018,7 +1021,7 @@ function _renderTRTViewTab(st){
   }
   html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:10px;">Injection Log</div>';
   if(!st.cycle_start){
-    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Set a start date to see the injection log for this stack.</div>';
+    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Set a start date to see the injection log for this protocol.</div>';
   }else{
     var _cid=_stackCycleId(st);
     if(!_trtLogCache.hasOwnProperty(_cid)){
@@ -1030,7 +1033,7 @@ function _renderTRTViewTab(st){
       _cachedInj.forEach(function(inj){if(!_byDate[inj.date])_byDate[inj.date]=[];_byDate[inj.date].push(inj);});
       var _sortedDates=Object.keys(_byDate).sort(function(a,b){return b.localeCompare(a);});
       if(!_sortedDates.length){
-        html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT injections logged during this stack.</div>';
+        html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT injections logged during this protocol.</div>';
       }else{
         _sortedDates.forEach(function(dateStr){
           var dp=dateStr.split('-');var dObj=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]));
@@ -1070,7 +1073,7 @@ function _buildEnhancementCycleSection(){
   if(!c||!c.startDate){
     h+='<div style="background:var(--surface2);border:1px dashed var(--border);border-radius:10px;padding:20px;text-align:center;margin-bottom:16px;">';
     h+='<div style="font-size:13px;color:var(--muted2);margin-bottom:10px;">No enhancement cycle active</div>';
-    h+='<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:14px;">Track AAS compounds, bloodwork schedule and E2 management alongside your peptide stack.</div>';
+    h+='<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:14px;">Track AAS compounds, bloodwork schedule and E2 management alongside your peptide protocol.</div>';
     h+='<button onclick="cycleWizardOpen()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">Start Enhancement Cycle</button>';
     h+='</div>';
     return h;
@@ -1450,7 +1453,7 @@ function _renderEnhancedViewTab(st){
   var compounds=enh.compounds||[];
   var html='<div class="wiz-section" style="margin-bottom:10px;">Enhancement Compounds</div>';
   if(!compounds.length){
-    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No enhancement compounds configured for this stack.</div>';
+    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No enhancement compounds configured for this protocol.</div>';
   }else{
     compounds.forEach(function(c){
       var dot=c.dot||'var(--accent2)';
@@ -1462,10 +1465,210 @@ function _renderEnhancedViewTab(st){
       html+='<div style="font-size:12px;color:var(--muted2);">'+doseStr+'</div>';
       html+='</div>';
     });
+    // Recovery & PCT panel — filled async from the backend by _ensurePctPanel(st)
+    html+='<div class="wiz-section" style="margin-top:18px;">On-cycle &amp; recovery</div>';
+    html+='<div id="pct-recovery-body"><div style="color:var(--muted2);font-size:12px;padding:8px 0;">Loading recovery plan…</div></div>';
   }
   return html;
 }
+// ── Recovery & PCT (fetched from /compounds/pct-plan, cached per compound set) ──
+var _pctCache={};
+function _pctSig(st){var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean).sort();var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';return sex+'|'+ids.join(',');}
+async function pctPlanFromAgent(compoundIds,sex){
+  var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
+  try{
+    var r=await fetch(AGENT_URL+'/compounds/pct-plan',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({compounds:compoundIds,sex:sex}),signal:ctrl.signal});
+    clearTimeout(tid);
+    if(!r.ok){if(typeof _logHttp==='function')_logHttp('pct',r.status,'/compounds/pct-plan');return{ok:false,status:r.status};}
+    var d=await r.json();return{ok:true,plan:(d&&d.plan)||null};
+  }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('pct',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
+}
+function _renderPctPlanHtml(plan){
+  if(!plan)return '<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable.</div>';
+  if(plan.applicable===false){return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--muted2);line-height:1.5;">'+_esc((plan.notes&&plan.notes[0])||'Not applicable.')+'</div>';}
+  var h='';
+  // ── On-cycle support (runs DURING the cycle) ──
+  if(plan.on_cycle&&plan.on_cycle.length){
+    h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin:0 0 6px;">On-cycle support</div>';
+    plan.on_cycle.forEach(function(o){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;"><div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px;">＋ '+_esc(o.agent||'')+'</div><div style="font-size:12px;color:var(--muted2);line-height:1.5;">'+_esc(o.message||'')+'</div></div>';});
+  }
+  var p=plan.pct;
+  if(p){
+    h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:16px 0 6px;border-top:1px solid var(--border);padding-top:12px;">Post-cycle (PCT)</div>';
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:4px 0 4px;">Start PCT</div>';
+    h+='<div style="font-size:12px;color:var(--text);line-height:1.5;margin-bottom:8px;">'+_esc(p.start||'')+'</div>';
+    if(p.serm){
+      var sm=p.serm;
+      function _sermRows(x){return (x.schedule||[]).map(function(s){return '<div style="font-size:12px;color:var(--text);">'+_esc(s.weeks)+': <b>'+_esc(s.dose)+'</b></div>';}).join('');}
+      h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 4px;">SERM restart</div>';
+      h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px;"><div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px;">'+_esc(sm.primary.agent)+'</div>'+_sermRows(sm.primary)+'</div>';
+      if(sm.alternative)h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px;"><div style="font-size:11px;font-weight:600;color:var(--muted2);margin-bottom:3px;">Alternative · '+_esc(sm.alternative.agent)+'</div>'+_sermRows(sm.alternative)+'</div>';
+      if(sm.note)h+='<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-bottom:6px;">⚠ '+_esc(sm.note)+'</div>';
+    }
+    if(p.confirm_labs&&p.confirm_labs.length){h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 4px;">Confirm recovery</div>'+p.confirm_labs.map(function(l){return '<div style="font-size:11px;color:var(--text);line-height:1.5;padding:1px 0;">• '+_esc(l)+'</div>';}).join('');}
+  }
+  (plan.notes||[]).forEach(function(n){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-top:6px;font-size:11px;color:var(--muted2);line-height:1.5;">ℹ '+_esc(n)+'</div>';});
+  if(plan.guardrails&&plan.guardrails.length){h+='<div style="margin-top:8px;">'+plan.guardrails.map(function(g){return '<div style="font-size:11px;color:var(--muted2);line-height:1.5;">• '+_esc(g)+'</div>';}).join('')+'</div>';}
+  h+=(typeof _renderSafetyNote==='function')?_renderSafetyNote('enhanced'):'';
+  return h;
+}
+function _ensurePctPanel(st){
+  var el=document.getElementById('pct-recovery-body');if(!el||!st)return;
+  var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean);
+  if(!ids.length){el.innerHTML='';return;}
+  var sig=_pctSig(st);
+  if(_pctCache[sig]){el.innerHTML=_renderPctPlanHtml(_pctCache[sig]);return;}
+  var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';
+  pctPlanFromAgent(ids,sex).then(function(res){
+    var el2=document.getElementById('pct-recovery-body');if(!el2)return;
+    if(res.ok&&res.plan){_pctCache[sig]=res.plan;el2.innerHTML=_renderPctPlanHtml(res.plan);}
+    else{el2.innerHTML='<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable'+(res.status?(' (HTTP '+res.status+')'):'')+'.</div>';}
+  });
+}
 
+// ── Enhanced advisor step (guided recommendation before the raw list) ────────
+var _ADV_OBJECTIVES=[['lean_mass','Lean mass'],['mass','Mass / bulk'],['recomp','Recomposition'],['cut','Cutting'],['contest','Contest prep'],['strength','Strength']];
+var _ADV_FLAGS=[['hair_loss','Hair-loss prone'],['hypertension_hct','High BP / hematocrit'],['lipids','Poor lipids (low HDL)'],['mood','Mood sensitive'],['fertility','Preserve fertility']];
+
+// Cycle-stage selector — maps to the backend experience tiers. 'curious' collapses
+// to 'first' (starting an enhanced protocol = at least a first cycle).
+var _ADV_EXPERIENCE=[['first','First cycle'],['experienced','2nd–few cycles'],['advanced','Advanced / many']];
+function _advNormExp(e){e=(e||'').toLowerCase();return e==='curious'?'first':(['first','experienced','advanced'].indexOf(e)>=0?e:'first');}
+function _wizAdviseState(){
+  if(!_wiz.advise){
+    var prof=(typeof getData==='function')?getData('pep-profile',null):null;
+    var exp0=_advNormExp((typeof _pepExpTier==='function'&&_pepExpTier())||(prof&&prof.experience)||'first');
+    _wiz.advise={objective:'lean_mass',experience:exp0,flags:{},result:null,loading:false,error:'',fetched:false,_seeded:false};
+  }
+  return _wiz.advise;
+}
+function _wizAdviseInputs(){
+  var st=_wizAdviseState();
+  var prof=(typeof getData==='function')?getData('pep-profile',null):null;
+  var sex=(prof&&prof.sex)||(typeof _userProfile==='function'&&_userProfile().sex)||'male';
+  var bfEntry=(typeof _latestBodyFat==='function')?_latestBodyFat():null;
+  var bf=(bfEntry&&typeof bfEntry.bf==='number')?bfEntry.bf:(typeof bfEntry==='number'?bfEntry:null);
+  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{}};
+}
+function wizAdviseSetExperience(v){
+  var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
+  // Persist the correction so it isn't stale here or elsewhere in the app.
+  try{var p=(typeof getData==='function'&&getData('pep-profile',null))||{};p.experience=v;if(typeof setData==='function')setData('pep-profile',p);
+      if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v});}catch(e){}
+  wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+async function enhancedAdvisorFromAgent(inp){
+  var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
+  try{
+    var r=await fetch(AGENT_URL+'/compounds/enhanced-advisor',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(inp||{}),signal:ctrl.signal});
+    clearTimeout(tid);
+    if(!r.ok){if(typeof _logHttp==='function')_logHttp('advisor',r.status,'/compounds/enhanced-advisor');return{ok:false,status:r.status};}
+    var d=await r.json();return{ok:true,advice:(d&&d.advice)||null};
+  }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('advisor',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
+}
+async function wizAdviseFetch(){
+  var st=_wizAdviseState();
+  st.loading=true;st.error='';st._seeded=false;
+  wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+  var res=await enhancedAdvisorFromAgent(_wizAdviseInputs());
+  st.loading=false;st.fetched=true;
+  if(res.ok&&res.advice){st.result=res.advice;}
+  else{st.result=null;st.error='Could not load recommendations'+(res.status?(' (HTTP '+res.status+')'):'')+'.';}
+  if(_wizFlow()[_wiz.step]==='advise')wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizAdviseSetObjective(v){var st=_wizAdviseState();st.objective=v;st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizAdviseToggleFlag(k){var st=_wizAdviseState();if(!st.flags)st.flags={};st.flags[k]=!st.flags[k];st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function _wizAdviseCompoundRow(item,kind){
+  var map={best:['var(--accent)','★'],primary:['var(--accent)','✓'],consider:['var(--muted2)','○'],later:['#7a8899','⏱'],avoid:['#f59e0b','✕'],oncycle:['var(--accent)','＋']};
+  var m=map[kind]||map.consider;var accent=m[0],icon=m[1];
+  var bg=kind==='best'?'rgba(232,255,60,0.06)':'var(--surface2)';
+  var badge=kind==='best'?'<span style="font-size:9px;font-weight:700;letter-spacing:1px;color:#0a0a0a;background:var(--accent);border-radius:4px;padding:1px 6px;margin-left:auto;text-transform:uppercase;">Best pick</span>':'';
+  return '<div style="background:'+bg+';border:1px solid var(--border);border-left:3px solid '+accent+';border-radius:6px;padding:8px 10px;margin-bottom:6px;">'
+    +'<div style="display:flex;align-items:center;gap:8px;"><span style="color:'+accent+';font-weight:700;font-size:12px;">'+icon+'</span><span style="font-size:13px;font-weight:700;color:var(--text);">'+_esc(item.name||item.agent||item.id)+'</span>'+badge+'</div>'
+    +(item.reason||item.message?'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:3px;">'+_esc(item.reason||item.message)+'</div>':'')
+    +'</div>';
+}
+function _wizAdviseSection(title,items,kind){
+  if(!items||!items.length)return '';
+  return '<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">'+title+'</div>'
+    +items.map(function(it){return _wizAdviseCompoundRow(it,kind);}).join('')+'</div>';
+}
+function wizApplyAdviseRecommendations(){
+  var st=_wizAdviseState();var res=st.result;
+  if(!res||st._seeded)return;
+  st._seeded=true;
+  if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
+  if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
+  // Only seed when the user hasn't already built a selection, so we never
+  // overwrite manual choices (respects "only fix what was asked").
+  if(_wiz.enhanced.compounds.length)return;
+  var picks=[];
+  if(res.base&&res.base.id)picks.push(res.base.id);
+  (res.primary||[]).forEach(function(p){if(p&&p.id)picks.push(p.id);});
+  picks.forEach(function(id){
+    if(_wiz.enhanced.compounds.some(function(c){return c.id===id;}))return;
+    var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;});
+    if(!cat)return;
+    var e={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};
+    if(cat.amPm){e.amPm=true;e.dose_am=String(cat.defaultDoseAm||'');e.dose_pm=String(cat.defaultDosePm||'');}
+    _wiz.enhanced.compounds.push(e);
+  });
+  _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
+}
+function wizAdviseNext(){wizApplyAdviseRecommendations();wizNext();}
+function wizStepAdvise(body,footer){
+  var st=_wizAdviseState();
+  var inp=_wizAdviseInputs();
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Tell us where you are and what you\'re after — we\'ll recommend which compound to add (and what to save for later). You can still pick anything on the next step.</div>';
+  // Profile summary (sex + BF are read from your profile)
+  html+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:11px;color:var(--muted2);">'
+    +'From your profile: <b style="color:var(--text)">'+_esc(inp.sex)+'</b>'
+    +(inp.body_fat!=null?(' · <b style="color:var(--text)">'+Math.round(inp.body_fat)+'% BF</b>'):' · <span style="color:var(--muted2)">body-fat not logged</span>')+'</div>';
+  // Experience / cycle stage (drives the whole recommendation — editable here)
+  html+='<div class="wiz-section" style="margin-bottom:8px;">Where are you at?</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
+  _ADV_EXPERIENCE.forEach(function(e){var sel=_advNormExp(st.experience)===e[0];
+    html+='<div onclick="wizAdviseSetExperience(\''+e[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'rgba(232,255,60,0.08)':'transparent')+';color:'+(sel?'var(--accent)':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+e[1]+'</div>';
+  });
+  html+='</div>';
+  // Objective
+  html+='<div class="wiz-section" style="margin-bottom:8px;">Primary objective</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
+  _ADV_OBJECTIVES.forEach(function(o){var sel=st.objective===o[0];
+    html+='<div onclick="wizAdviseSetObjective(\''+o[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'rgba(232,255,60,0.08)':'transparent')+';color:'+(sel?'var(--accent)':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+o[1]+'</div>';
+  });
+  html+='</div>';
+  // Sensitivity flags
+  html+='<div class="wiz-section" style="margin-bottom:8px;">Any of these apply?</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
+  _ADV_FLAGS.forEach(function(fl){var sel=!!(st.flags&&st.flags[fl[0]]);
+    html+='<div onclick="wizAdviseToggleFlag(\''+fl[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'#f59e0b':'var(--border)')+';background:'+(sel?'rgba(245,158,11,0.10)':'transparent')+';color:'+(sel?'#f59e0b':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+(sel?'✓ ':'')+fl[1]+'</div>';
+  });
+  html+='</div>';
+  // Fetch button
+  html+='<button onclick="wizAdviseFetch()" '+(st.loading?'disabled ':'')+'style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;margin-bottom:14px;'+(st.loading?'opacity:0.6;':'')+'">'+(st.loading?'Getting recommendations…':(st.fetched?'Update recommendations':'Get recommendations'))+'</button>';
+  // Results
+  if(st.error){html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'+_esc(st.error)+'</div>';}
+  else if(st.result){
+    var res=st.result;
+    // Headline — the plain-language answer up top.
+    if(res.headline){html+='<div style="background:rgba(232,255,60,0.06);border:1px solid rgba(232,255,60,0.3);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px;font-weight:600;color:var(--text);line-height:1.5;">'+_esc(res.headline)+'</div>';}
+    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Required base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary')+'</div>';}
+    // Best addition (the single top pick), then the rest of primary.
+    var bestId=res.best_addition&&res.best_addition.id;
+    var restPrimary=(res.primary||[]).filter(function(p){return p.id!==bestId;});
+    if(res.best_addition){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Best addition</div>'+_wizAdviseCompoundRow(res.best_addition,'best')+'</div>';}
+    if(restPrimary.length)html+=_wizAdviseSection(res.best_addition?'Also recommended':'Recommended for you',restPrimary,'primary');
+    html+=_wizAdviseSection('Worth considering',res.consider,'consider');
+    // On-cycle support (e.g. HCG) — this runs DURING the cycle, not in PCT.
+    if(res.on_cycle&&res.on_cycle.length){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">On-cycle support</div>'+res.on_cycle.map(function(o){return _wizAdviseCompoundRow(o,'oncycle');}).join('')+'</div>';}
+    html+=_wizAdviseSection('Save for a later cycle',res.save_for_later,'later');
+    html+=_wizAdviseSection('Not recommended for you',res.avoid,'avoid');
+    if(res.guardrails&&res.guardrails.length){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Guardrails</div>'+res.guardrails.map(function(g){return '<div style="font-size:11px;color:var(--text);line-height:1.5;padding:2px 0;">• '+_esc(g)+'</div>';}).join('')+'</div>';}
+    if(res.notes&&res.notes.length){html+=res.notes.map(function(n){return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-bottom:6px;font-size:11px;color:var(--muted2);line-height:1.5;">ℹ '+_esc(n)+'</div>';}).join('');}
+    html+='<div style="font-size:11px;color:var(--muted2);margin-top:8px;line-height:1.5;">Recommended compounds will be pre-selected on the next step — you can change anything.</div>';
+    html+=_renderSafetyNote('enhanced');
+  }
+  body.innerHTML=html;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizAdviseNext()">Next →</button>';
+}
 function wizStepEnhanced(body,footer){
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
   // Catalogue not yet loaded — show a visible loading state and auto-fetch
@@ -1585,7 +1788,7 @@ function wizStepValidate(body,footer){
 function wizStepReview(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var hasErrors=checkStack(pepObjs).some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Stack Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cycle 1, Cutting Stack...">';
+  var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…">';
   html+='<div class="wiz-section" style="margin-top:16px">Summary</div>';
   var _reviewFlow=_wizFlow();
   if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
@@ -1602,7 +1805,7 @@ function wizStepReview(body,footer){
     }else{html+='<div style="color:var(--muted2);font-size:13px;">No enhancement compounds selected.</div>';}
   }
   body.innerHTML=html;
-  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Stack';
+  var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Protocol';
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
 }
 
