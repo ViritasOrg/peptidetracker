@@ -1,21 +1,84 @@
 /* ── MACROS ── */
 var _macrosPhase='recomp';
-function loadMacros(){var bw=parseDec(localStorage.getItem('user_weight'))||0;renderMacros(bw);}
+var _macrosTrainKcal=0;   // measured training burn, kcal/day averaged over the last 14 days (from /training-energy)
+function loadMacros(){
+  var bw=parseDec(localStorage.getItem('user_weight'))||0;
+  renderMacros(bw,_macrosOnAndrogens());
+  syncMacrosTrainEnergy(function(){ if(_currentTab==='macros'){ var bw2=parseDec(localStorage.getItem('user_weight'))||0; renderMacros(bw2,_macrosOnAndrogens()); } });
+}
 function switchMacrosPhase(p){_macrosPhase=p;loadMacros();}
-function calcMacros(bw,phase){
-  var protein=Math.round(bw*2.2);
+// Pull the user's measured training burn from the shared backend (their OWN workout
+// logs, user-scoped server-side). Shown SEPARATELY for awareness — deliberately NOT
+// added to the calorie target. The 14-day per-calendar-day average is the steady figure.
+function syncMacrosTrainEnergy(cb){
+  if(typeof AGENT_URL==='undefined'){ if(cb)cb(); return; }
+  var bw=parseDec(localStorage.getItem('user_weight'))||0;
+  var hc=parseDec(localStorage.getItem('user_height'))||0;
+  var qs='?days=14'+(bw?'&bodyweight_kg='+bw:'')+(hc?'&height_cm='+hc:'');
+  fetch(AGENT_URL+'/training-energy'+qs,{headers:authHeaders()})
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(d){ _macrosTrainKcal=(d&&isFinite(d.avg_per_calendar_day))?d.avg_per_calendar_day:0; if(cb)cb(); })
+    .catch(function(){ if(cb)cb(); });
+}
+function calcMacros(bw,phase,onAndrogens){
+  // Protein is phase-aware. In a caloric deficit, lean resistance-trained athletes
+  // need MORE protein to preserve muscle — 2.3–3.1 g/kg fat-free mass (Helms 2014),
+  // ~2.5 g/kg total bodyweight for a lean build — so a cut targets 2.5 g/kg; a
+  // maintenance/surplus phase stays at the 2.2 g/kg upper-athletic bound (Morton 2018).
+  // Androgens improve nitrogen retention, so being on-cycle does not raise the
+  // requirement further — the driver is the deficit, not the compounds.
+  var proteinPerKg=phase==='cut'?2.5:2.2;
+  var protein=Math.round(bw*proteinPerKg);
+  // Calorie target is intake-only and independent of training burn: ~31 kcal/kg
+  // maintenance ± phase. Training expenditure is reported separately (see the
+  // Training Burn card / _macrosBurnCard), never folded into this number.
   var kcalBase=Math.round(bw*31);
   var kcal=phase==='cut'?kcalBase-300:phase==='reset'?kcalBase:kcalBase+100;
-  var fat=Math.round(bw*0.9);
+  // On exogenous androgens the endogenous-T-protection reason for higher fat is moot
+  // (Whittaker 2021), so fat can run down to a ~0.5–0.6 g/kg essential-fat floor;
+  // otherwise keep ~0.9 g/kg (~25–30% kcal). See docs/enhanced-bodybuilding/08.
+  var fat=Math.round(bw*(onAndrogens?0.6:0.9));
   var carbs=Math.max(0,Math.round((kcal-protein*4-fat*9)/4));
-  return {protein:protein,carbs:carbs,fat:fat,kcal:kcal};
+  return {protein:protein,carbs:carbs,fat:fat,kcal:kcal,onAndrogens:!!onAndrogens};
+}
+// A standalone card showing the estimated training burn from logged workouts. It is
+// presented separately and explicitly NOT added to the calorie target above.
+function _macrosBurnCard(){
+  var t=Math.max(0,Math.round(_macrosTrainKcal||0));
+  var note=(t>0)
+    ? 'Estimated from your logged workouts (training volume × range-of-motion, placed in the resistance-training MET band — Ainsworth 2011). Shown for awareness; <b>not added to the calorie target above</b>.'
+    : 'Log your workouts in the workout tracker to see your estimated training burn here. It is shown separately and never changes your calorie target.';
+  return '<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">TRAINING BURN</div></div><span style="font-size:11px;color:var(--muted2)">14-day avg</span></div>'
+    +'<div style="padding:16px 6px;text-align:center"><div style="font-family:var(--font-mono);font-size:26px;line-height:1;color:var(--accent2)">'+(t>0?('+'+t):'—')+'</div><div style="font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:0.5px;margin-top:3px">kcal / day</div></div>'
+    +'<div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.6">'+note+'</div></div></div>';
+}
+// True when the user's active stack(s) include any injected androgen (TRT or Enhanced),
+// which lowers the dietary-fat floor (see calcMacros). Read-only over the active stacks.
+function _macrosOnAndrogens(){
+  try{
+    var idxs=(typeof _activeStackIndices!=='undefined'&&_activeStackIndices&&_activeStackIndices.length)?_activeStackIndices:[];
+    for(var i=0;i<idxs.length;i++){var s=(typeof _userStacks!=='undefined')?_userStacks[idxs[i]]:null;if(!s)continue;
+      if(s.trt&&s.trt.enabled&&s.trt.compounds&&s.trt.compounds.length)return true;
+      if(s.enhanced&&s.enhanced.compounds&&s.enhanced.compounds.length)return true;}
+  }catch(e){}
+  return false;
+}
+// Evidence-backed macro note; branches on the cut/deficit phase (protein) and on
+// whether injected androgens are present (fat).
+function _macrosFatNote(onAndrogens,phase){
+  var protein=phase==='cut'
+    ? 'Protein <b>2.5 g/kg</b> — raised for the cut: in a caloric deficit, lean trained athletes need more protein to preserve muscle (2.3–3.1 g/kg fat-free mass, Helms 2014).'
+    : 'Protein 2.2 g/kg — upper end of the evidence-based range for muscle retention (Morton 2018).';
+  return onAndrogens
+    ? protein+' <b>Fat set lower</b> (~0.5–0.6 g/kg): on injected hormones the main reason to keep fat high — protecting your own testosterone — no longer applies (low-fat diets cut endogenous T ~10–15%, Whittaker 2021; your testes are already suppressed on-cycle). Kept at an essential-fat floor for fatty acids and satiety; carbs take the freed calories around training.'
+    : protein+' Keep fat ~0.9 g/kg (≈25–30% kcal) to protect endogenous testosterone (low-fat diets cut it ~10–15%, Whittaker 2021). Adjust carbs and fat around training windows, not randomly.';
 }
 function saveMacrosTrainTime(val){localStorage.setItem('macros-train-time',val);pushPepSettingsToAgent({'macros-train-time':val});loadMacros();}
 function saveMacrosTrainDur(val){localStorage.setItem('macros-train-dur',String(val));pushPepSettingsToAgent({'macros-train-dur':val});loadMacros();}
-function renderMacros(bw){
+function renderMacros(bw,onAndrogens){
   var body=document.getElementById('macros-body');if(!body)return;
   if(!bw){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2)"><div style="font-size:32px;margin-bottom:12px">⚖️</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Set your body weight</div><div style="font-size:13px;line-height:1.5">Log your weight in the <b>Weights</b> tab so macros can be calculated for you.</div></div>';return;}
-  var m=calcMacros(bw,_macrosPhase);
+  var m=calcMacros(bw,_macrosPhase,onAndrogens);
   var phases=[{id:'reset',label:'Reset',color:'var(--accent4)'},{id:'cut',label:'Cut',color:'var(--accent2)'},{id:'recomp',label:'Recomp',color:'var(--accent3)'}];
   var trainTime=localStorage.getItem('macros-train-time')||'17:00';
   var trainDur=parseInt(localStorage.getItem('macros-train-dur'))||60;
@@ -31,7 +94,8 @@ function renderMacros(bw){
   h+='<div style="display:grid;grid-template-columns:repeat(4,1fr)">';
   var mi=[{l:'Calories',v:m.kcal,u:'kcal',c:'var(--accent)'},{l:'Protein',v:m.protein,u:'g',c:'var(--accent3)'},{l:'Carbs',v:m.carbs,u:'g',c:'var(--accent2)'},{l:'Fat',v:m.fat,u:'g',c:'var(--accent4)'}];
   mi.forEach(function(x,i){h+='<div style="padding:16px 6px;text-align:center'+(i<3?';border-right:1px solid var(--border)':'')+'">';h+='<div style="font-family:var(--font-mono);font-size:26px;line-height:1;color:'+x.c+'">'+x.v+'</div>';h+='<div style="font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:0.5px;margin-top:3px">'+x.u+'</div>';h+='<div style="font-size:9px;color:var(--muted2)">'+x.l+'</div></div>';});
-  h+='</div><div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.5">Protein 2.2 g/kg — non-negotiable for muscle retention. Adjust carbs and fat around training windows, not randomly.</div></div></div>';
+  h+='</div><div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_macrosFatNote(onAndrogens,_macrosPhase)+'</div></div></div>';
+  h+=_macrosBurnCard();
   h+='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">MEAL TIMING</div></div></div>';
   h+='<div class="card-body" style="gap:12px">';
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';

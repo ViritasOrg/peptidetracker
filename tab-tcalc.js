@@ -194,6 +194,9 @@ function _tcSaveProfile() {
     headers: Object.assign({'Content-Type':'application/json'}, h),
     body: JSON.stringify(_tcp)
   }).catch(function(){});
+  // The T-Calc manual log or calibration just changed — recompute & persist the
+  // free-T history so the (fetch-and-plot) T-History view stays in sync.
+  if (typeof _captureFreeTHistory === 'function') _captureFreeTHistory();
 }
 
 // Saturating Emax dose-response for SHBG suppression: effMaxSupp(dose) = emax·dose/(dose+ed50).
@@ -1205,7 +1208,6 @@ function _tcFreeTSeries(sorted, hooks) {
     var _adD = new Date(firstDate.getTime() + _anchorDay * 86400000);
     _anchorCutoffDate = _adD.getFullYear() + '-' + String(_adD.getMonth() + 1).padStart(2, '0') + '-' + String(_adD.getDate()).padStart(2, '0');
   }
-
   // Warm-start: pre-fill curve so the chart starts at the user's measured free T.
   if (calFT && _mftNum > 0) {
     if (_curDose > 0) {

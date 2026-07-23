@@ -70,7 +70,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -373,33 +373,34 @@ console.log('\n── Wizard navigation ─────────────�
 // _wizFlow: peps-only (T1, no TRT, no enhanced)
 G._userTier=1;G.initWizard();
 var t1flow=G._wizFlow();
-check('_wizFlow: peps-only has 6 steps', t1flow.length===6, 'got '+t1flow.length);
+check('_wizFlow: peps-only has 7 steps', t1flow.length===7, 'got '+t1flow.length);
 check('_wizFlow: peps-only step[0]=cycle',  t1flow[0]==='cycle');
-check('_wizFlow: peps-only step[5]=review', t1flow[5]==='review');
+check('_wizFlow: peps-only step[6]=review', t1flow[6]==='review');
+check('_wizFlow: peps-only has nutrition',  t1flow.includes('nutrition'));
 check('_wizFlow: peps-only has no trt',     !t1flow.includes('trt'));
 check('_wizFlow: peps-only has no enhanced',!t1flow.includes('enhanced'));
 check('_wizFlow: peps-only has no validate',!t1flow.includes('validate'));
 // _wizFlow: TRT-only (T2, trt enabled, no pep goals)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 var trtOnlyFlow=G._wizFlow();
-check('_wizFlow: TRT-only has 4 steps', trtOnlyFlow.length===4, 'got '+trtOnlyFlow.length);
-check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,review'));
+check('_wizFlow: TRT-only has 5 steps', trtOnlyFlow.length===5, 'got '+trtOnlyFlow.length);
+check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,nutrition,review'));
 // _wizFlow: Peps + TRT (T2, trt enabled, pep goal selected)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 var pepTrtFlow=G._wizFlow();
-check('_wizFlow: peps+TRT has 8 steps', pepTrtFlow.length===8, 'got '+pepTrtFlow.length);
+check('_wizFlow: peps+TRT has 9 steps', pepTrtFlow.length===9, 'got '+pepTrtFlow.length);
 check('_wizFlow: peps+TRT has validate', pepTrtFlow.includes('validate'));
 check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='review');
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 var trtEnhFlow=G._wizFlow();
-check('_wizFlow: TRT+enhanced has 7 steps', trtEnhFlow.length===7, 'got '+trtEnhFlow.length);
-check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,review'));
+check('_wizFlow: TRT+enhanced has 8 steps', trtEnhFlow.length===8, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'));
 check('_wizFlow: advise precedes enhanced', trtEnhFlow.indexOf('advise')===trtEnhFlow.indexOf('enhanced')-1);
 // _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
 var allFlow=G._wizFlow();
-check('_wizFlow: peps+TRT+enhanced has 10 steps', allFlow.length===10, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has 11 steps', allFlow.length===11, 'got '+allFlow.length);
 check('_wizFlow: peps+TRT+enhanced has advise', allFlow.includes('advise'));
 check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
 check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
@@ -427,6 +428,20 @@ check('wizStepAdvise result: shows headline', _advB2.innerHTML.includes('Add ONE
 check('wizStepAdvise result: shows Best addition', _advB2.innerHTML.includes('Best addition') && _advB2.innerHTML.includes('Best pick'));
 check('wizStepAdvise result: shows Save for a later cycle', _advB2.innerHTML.includes('Save for a later cycle'));
 check('wizStepAdvise result: shows On-cycle support (HCG)', _advB2.innerHTML.includes('On-cycle support') && _advB2.innerHTML.includes('HCG'));
+// Recommendation cards are TAPPABLE (the reported bug: could not pick a different compound)
+check('wizStepAdvise result: recommendation cards are tappable', _advB2.innerHTML.includes('wizAdviseToggleCompound'));
+// Tap-to-select actually toggles the protocol store, and default-select pre-ticks base + best
+G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
+G.ENHANCEMENT_COMPOUNDS=[{id:'test_e',name:'Testosterone Enanthate',cls:'base',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#e05050'},{id:'primo',name:'Primobolan',cls:'dht',defaultDose:500,unit:'mg/week',defaultDays:[1,4],dot:'#3cffa0'},{id:'deca',name:'Deca',cls:'19nor',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#888'}];
+G._wiz.advise=G._wizAdviseState();
+G._wiz.advise.result={headline:'h',base:{id:'test_e',name:'Testosterone Enanthate'},best_addition:{id:'primo',name:'Primobolan'},primary:[{id:'primo',name:'Primobolan'}],consider:[{id:'deca',name:'Deca'}],save_for_later:[],avoid:[],on_cycle:[]};
+var _advB3={innerHTML:''},_advF3={innerHTML:''};
+G.wizStepAdvise(_advB3,_advF3); // triggers default-select
+var _ids=function(){return ((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).map(function(c){return c.id;});};
+check('advisor default-selects base + best addition', _ids().indexOf('test_e')>=0 && _ids().indexOf('primo')>=0);
+G.wizAdviseToggleCompound('deca'); check('tapping a different compound adds it', _ids().indexOf('deca')>=0);
+G.wizAdviseToggleCompound('primo'); check('tapping the best pick removes it', _ids().indexOf('primo')<0);
+check('after swapping, deca is still selected (choice sticks)', _ids().indexOf('deca')>=0);
 G.initWizard();
 // wizNext / wizBack
 G._userTier=1;G.initWizard();
@@ -435,28 +450,29 @@ G.wizNext();check('wizNext: 0→1', G._wiz.step===1);
 G.wizNext();check('wizNext: 1→2', G._wiz.step===2);
 G._wiz.step=2;G.wizBack();check('wizBack: 2→1', G._wiz.step===1);
 // peps-only: wizNext from last step stays clamped
-G._userTier=1;G.initWizard();G._wiz.step=5;G.wizNext();
-check('wizNext: peps-only does not exceed step 5', G._wiz.step===5);
-// TRT-only: step through all 4 steps
+G._userTier=1;G.initWizard();G._wiz.step=6;G.wizNext();
+check('wizNext: peps-only does not exceed step 6', G._wiz.step===6);
+// TRT-only: step through all 5 steps (cycle,goals,trt,nutrition,review)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
-G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT-only after 3 calls = step 3 (review)', G._wiz.step===3);
-G.wizNext();check('wizNext: TRT-only does not exceed step 3', G._wiz.step===3);
-G.wizBack();check('wizBack: TRT-only 3→2 (trt)', G._wiz.step===2);
-// TRT+Enhanced (no peps): step through — flow is cycle,goals,trt,advise,enhanced,validate,review
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
+G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
+// TRT+Enhanced (no peps): flow is cycle,goals,trt,advise,enhanced,validate,nutrition,review
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT+enhanced after 6 calls = step 6 (review)', G._wiz.step===6);
-G.wizNext();check('wizNext: TRT+enhanced does not exceed step 6', G._wiz.step===6);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT+enhanced after 7 calls = step 7 (review)', G._wiz.step===7);
+G.wizNext();check('wizNext: TRT+enhanced does not exceed step 7', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT+enhanced 7→6 (nutrition)', G._wiz.step===6);
 G.wizBack();check('wizBack: TRT+enhanced 6→5 (validate)', G._wiz.step===5);
 G.wizBack();check('wizBack: TRT+enhanced 5→4 (enhanced)', G._wiz.step===4);
 G.wizBack();check('wizBack: TRT+enhanced 4→3 (advise)', G._wiz.step===3);
 G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
 // Peps+TRT: validate step appears
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: peps+TRT after 7 calls = step 7 (review)', G._wiz.step===7);
-G.wizBack();check('wizBack: peps+TRT 7→6 (validate)', G._wiz.step===6);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: peps+TRT after 8 calls = step 8 (review)', G._wiz.step===8);
+G.wizBack();check('wizBack: peps+TRT 8→7 (nutrition)', G._wiz.step===7);
 G._userTier=1; // restore
 G.wizSetStackName('My New Stack');
 check('wizSetStackName updates _wiz', G._wiz.stackName==='My New Stack');
@@ -2074,7 +2090,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 1: Peps only (T1)
   G._userTier=1;G.initWizard();
   var f1=G._wizFlow();
-  check('flow peps-only: 6 steps', f1.length===6, 'got '+f1.length);
+  check('flow peps-only: 7 steps', f1.length===7, 'got '+f1.length);
   check('flow peps-only: last=review', f1[f1.length-1]==='review');
   check('flow peps-only: no trt', !f1.includes('trt'));
   check('flow peps-only: no validate', !f1.includes('validate'));
@@ -2082,7 +2098,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 2: TRT only (T2, trt.enabled=true, no pep goals)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
   var f2=G._wizFlow();
-  check('flow TRT-only: 4 steps', f2.length===4, 'got '+f2.length);
+  check('flow TRT-only: 5 steps', f2.length===5, 'got '+f2.length);
   check('flow TRT-only: has trt', f2.includes('trt'));
   check('flow TRT-only: no peptides step', !f2.includes('peptides'));
   check('flow TRT-only: no validate', !f2.includes('validate'));
@@ -2090,7 +2106,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 3: Peps + TRT (T2, trt.enabled, pep goal)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
   var f3=G._wizFlow();
-  check('flow peps+TRT: 8 steps', f3.length===8, 'got '+f3.length);
+  check('flow peps+TRT: 9 steps', f3.length===9, 'got '+f3.length);
   check('flow peps+TRT: has peptides', f3.includes('peptides'));
   check('flow peps+TRT: has trt', f3.includes('trt'));
   check('flow peps+TRT: has validate', f3.includes('validate'));
@@ -2098,7 +2114,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
   var f4=G._wizFlow();
-  check('flow TRT+enhanced: 7 steps', f4.length===7, 'got '+f4.length);
+  check('flow TRT+enhanced: 8 steps', f4.length===8, 'got '+f4.length);
   check('flow TRT+enhanced: has advise before enhanced', f4.indexOf('advise')===f4.indexOf('enhanced')-1);
   check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
   check('flow TRT+enhanced: has validate', f4.includes('validate'));
@@ -2107,7 +2123,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
   var f5=G._wizFlow();
-  check('flow peps+TRT+enhanced: 10 steps', f5.length===10, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: 11 steps', f5.length===11, 'got '+f5.length);
   check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
   check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
 
@@ -2707,7 +2723,7 @@ console.log('\n── Source-code structural assertions ────────
   check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,4000}/);return m&&m[0].includes("id=\"trt-guide-");})());
+  check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,5200}/);return m&&m[0].includes("id=\"trt-guide-");})());
   check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('trt-guide-');})());
 
   // _refreshTRTGuide logic: correct weekly dose calculation
@@ -5138,6 +5154,37 @@ check('Labs in TAB_DEFAULTS',           /TAB_DEFAULTS=[^;]*labs:true/.test(html)
 check('Labs dispatched in switchTab',   html.includes("if(id==='labs')buildLabs()"));
 check('tab-labs.js script included',    html.includes('tab-labs.js'));
 check('lab-markers catalogue synced on init', html.includes('syncLabMarkersFromAgent()'));
+
+// Session/auth diagnostic readout (Settings → Account).
+if(typeof G._fmtTokExp==='function'){
+  if(typeof G.atob!=='function')G.atob=function(s){return Buffer.from(s,'base64').toString('binary');};
+  var _futTok='h.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+3600})).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_')+'.s';
+  var _fe=G._fmtTokExp(_futTok);
+  check('_fmtTokExp decodes JWT exp → ~60m left', !!_fe && _fe.leftMin>=59 && _fe.leftMin<=61, _fe?String(_fe.leftMin):'null');
+  check('_fmtTokExp returns null for junk', G._fmtTokExp('not-a-jwt')===null);
+  check('_renderAuthDebug defined; Session row present', typeof G._renderAuthDebug==='function' && html.includes('id="s-session"'));
+}
+// One-Tap must not fire while a valid backend session token exists (the fix for the
+// Google prompt popping up ~1h after login once the redundant Google ID token expires).
+if(typeof G._hasValidSession==='function'){
+  if(typeof G.atob!=='function')G.atob=function(s){return Buffer.from(s,'base64').toString('binary');};
+  var _mkSess=function(sec){return 'h.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+sec})).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_')+'.s';};
+  G.localStorage.setItem('session_token',_mkSess(3600));
+  check('_hasValidSession: true for a live session token', G._hasValidSession()===true);
+  G.localStorage.setItem('session_token',_mkSess(-60));
+  check('_hasValidSession: false once the session token has expired', G._hasValidSession()===false);
+  G.localStorage.setItem('session_token','');
+  check('_hasValidSession: false when absent', G._hasValidSession()===false);
+  check('One-Tap prompt gated behind !_hasValidSession() at sign-in init', html.includes('if(!_hasValidSession())google.accounts.id.prompt()'));
+  check('One-Tap refresh interval gated behind !_hasValidSession()', html.includes('<300000&&!_hasValidSession()&&window.google'));
+}
+
+// Macros moved into the Today primary group as a sub-tab; visible by default.
+check('Macros is a Today sub-tab (primaryOf)', typeof G.primaryOf==='function' && G.primaryOf('macros')==='today');
+check('Macros in the Today group, not More (source)', /today:\[[^\]]*'macros'[^\]]*\]/.test(html) && !/more:\[[^\]]*'macros'/.test(html));
+check('Macros visible by default', /TAB_DEFAULTS=[^;]*macros:true/.test(html));
+// Daily Check-in card removed from Today.
+check('Daily Check-in card removed from Today', !html.includes('today-checkin-card') && !html.includes('toggleTodayCheckIn()'));
 {
   const labsSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
   check('tab-labs.js has no raw parseFloat', !labsSrc.includes('parseFloat('));
@@ -5493,10 +5540,10 @@ if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') 
   // Regression: legacy per-tab settings that hid EVERY sub-tab in a group must not
   // leave the primary empty/unreachable — it falls back to the whole group.
   var _svVis = G._tabVis;
-  G._tabVis = { blood:false, tcalc:false }; _cap = null; G._lastSub = {};
+  G._tabVis = { blood:false, tcalc:false, thist:false }; _cap = null; G._lastSub = {};
   G.switchPrimary('levels'); check('switchPrimary: all sub-tabs hidden → still opens the group (fallback)', _cap === 'blood');
   if (typeof G._groupVisibleSubs === 'function') {
-    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 2);
+    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 3);
   }
   G._tabVis = _svVis;
   G.switchTab = _origSwitch;
@@ -5983,6 +6030,208 @@ console.log('\n── SI units (µg not mcg) + % topical unit ──────
     check('unit dropdown never renders an mcg option', !/>mcg<|value="mcg"/.test(pepHtml));
     check('unit dropdown offers µg', /value="µg"/.test(pepHtml));
   }
+}
+
+// ── Caliper (skinfold) BF% ─────────────────────────────────────────────────
+console.log('\n── Caliper (skinfold) BF% ─────────────────────────────────');
+if(typeof G.caliperBF==='function'){
+  check('JP3 male sites = chest/abdomen/thigh', JSON.stringify(G._bcCalSites('jp3','male'))===JSON.stringify(['chest','abdomen','thigh']));
+  check('JP3 female sites = triceps/suprailiac/thigh', JSON.stringify(G._bcCalSites('jp3','female'))===JSON.stringify(['triceps','suprailiac','thigh']));
+  check('JP7 has 7 sites (both sexes)', G._bcCalSites('jp7','male').length===7 && G._bcCalSites('jp7','female').length===7);
+  check('DW4 has 4 sites, identical both sexes', G._bcCalSites('dw4','male').length===4 && JSON.stringify(G._bcCalSites('dw4','male'))===JSON.stringify(G._bcCalSites('dw4','female')));
+  check('Siri 1.05 g/ml ≈ 21.43%', Math.abs(G._siriBF(1.05)-21.4286)<0.01, String(G._siriBF(1.05)));
+  // Worked examples — expected values hand-computed from the published equations (±0.3 tol)
+  var _jp3=G.caliperBF('jp3','male',30,{chest:10,abdomen:18,thigh:14});
+  check('JP3 male worked example ≈12.7%', _jp3!==null && Math.abs(_jp3-12.7)<0.3, String(_jp3));
+  var _jp7=G.caliperBF('jp7','male',30,{chest:10,axilla:10,triceps:10,subscapular:10,abdomen:10,suprailiac:10,thigh:10});
+  check('JP7 male worked example ≈10.2%', _jp7!==null && Math.abs(_jp7-10.2)<0.3, String(_jp7));
+  var _dw4=G.caliperBF('dw4','male',25,{biceps:5,triceps:10,subscapular:12,suprailiac:13});
+  check('DW4 male 20-29 worked example ≈16.2%', _dw4!==null && Math.abs(_dw4-16.2)<0.3, String(_dw4));
+  check('DW4 age band selection changes result', G.caliperBF('dw4','male',45,{biceps:5,triceps:10,subscapular:12,suprailiac:13})!==_dw4);
+  check('BF rises with skinfold sum', G.caliperBF('jp3','male',30,{chest:20,abdomen:30,thigh:24})>G.caliperBF('jp3','male',30,{chest:8,abdomen:12,thigh:10}));
+  check('missing required site returns null', G.caliperBF('jp3','male',30,{chest:10,abdomen:18})===null);
+  check('sex changes JP3 result', G.caliperBF('jp3','female',30,{triceps:12,suprailiac:14,thigh:16})!==G.caliperBF('jp3','male',30,{chest:12,abdomen:14,thigh:16}));
+}
+if(typeof G._bcEntryDetail==='function'){
+  check('entry detail: tape entry shows Neck', /Neck/.test(G._bcEntryDetail({method:'navy',neck:42,belly:94})));
+  check('entry detail: caliper entry shows method label', /Jackson-Pollock 3-site/.test(G._bcEntryDetail({method:'jp3',skinfolds:{chest:10,abdomen:18,thigh:14}})));
+}
+
+// ── Injection pharmacology stamp (_injPkMeta) ──────────────────────────────
+if(typeof G._injPkMeta==='function'){
+  console.log('\n── Injection pharmacology stamp ───────────────────────────');
+  var _mE=G._injPkMeta('trt','enanthate');
+  check('_injPkMeta trt enanthate: ester parsed + numeric half-life', _mE.ester==='enanthate' && _mE.half_life_days>0, JSON.stringify(_mE));
+  var _mN=G._injPkMeta('trt','nebido');
+  check('_injPkMeta trt nebido: undecanoate ester', _mN.ester==='undecanoate', JSON.stringify(_mN));
+  var _mP=G._injPkMeta('peptide','ipamorelin');
+  check('_injPkMeta peptide: null ester + null half-life (not PK-modelled)', _mP.ester===null && _mP.half_life_days===null, JSON.stringify(_mP));
+}
+
+// ── T-Historical (free-T loaded from backend; captured by the T-Calc model) ──
+console.log('\n── T-Historical (backend-persisted free-T) ────────────────');
+
+// _thLoggedTrt / _thMergedPastLog: the injection source the capture computes from.
+if(typeof G._thLoggedTrt==='function'){
+  var _ltRows=[
+    {compound_id:'enanthate',dose:'125',date:'2026-02-01',tier:'trt',logged:true},
+    {compound_id:'enanthate',dose:'0',date:'2026-02-08',tier:'trt',logged:true},      // zero dose
+    {compound_id:'enanthate',dose:'100',date:'2026-02-15',tier:'trt',logged:false},   // unchecked
+    {compound_id:'ipamorelin',dose:'200',date:'2026-02-01',tier:'peptide',logged:true} // non-T
+  ];
+  var _lt=G._thLoggedTrt(_ltRows);
+  check('_thLoggedTrt: only logged TRT with dose>0 → 1, mapped to {compId,doseMg,date}',
+        _lt.length===1 && _lt[0].compId==='enanthate' && _lt[0].doseMg===125 && _lt[0].date==='2026-02-01', JSON.stringify(_lt));
+}
+if(typeof G._thMergedPastLog==='function'){
+  var _mlSaveTcp=G._tcp, _mlSaveInj=G._thInjections;
+  G._tcp={manualLog:[{compId:'enanthate',doseMg:100,date:'2026-01-01'}]};
+  G._thInjections=[
+    {compound_id:'enanthate',dose:'100',date:'2026-01-01',tier:'trt',logged:true},   // dup of manualLog → deduped
+    {compound_id:'enanthate',dose:'120',date:'2026-01-08',tier:'trt',logged:true},   // new
+    {compound_id:'enanthate',dose:'100',date:'2999-01-01',tier:'trt',logged:true}    // future → excluded
+  ];
+  var _ml=G._thMergedPastLog();
+  check('_thMergedPastLog: manualLog ∪ logged-trt, deduped, past-only, sorted → 2',
+        _ml.length===2 && _ml[0].date==='2026-01-01' && _ml[1].date==='2026-01-08', JSON.stringify(_ml.map(function(x){return x.date;})));
+  G._tcp=_mlSaveTcp; G._thInjections=_mlSaveInj;
+}
+
+// _thSeries: builds the render series from STORED plasma rows (no PK math here).
+if(typeof G._thSeries==='function'){
+  var _sSaveData=G._thData, _sSaveInj=G._thInjections;
+  G._thInjections=[];
+  G._thData=[
+    {date:'2026-03-01',marker:'free_t',value:300,unit:'pmol/L'},
+    {date:'2026-03-03',marker:'free_t',value:500,unit:'pmol/L'},   // gap on 03-02 → interpolated
+    {date:'2026-03-04',marker:'free_t',value:450,unit:'pmol/L'}
+  ];
+  var _s=G._thSeries();
+  check('_thSeries: spans first→last stored day (totalDays=3)', !!_s && _s.totalDays===3, _s?String(_s.totalDays):'null');
+  check('_thSeries: calibrated flag from stored unit (pmol/L)', !!_s && _s.calibrated===true);
+  check('_thSeries: plots the stored values (ft[0]=300, ft[3]=450)', !!_s && _s.ft[0]===300 && _s.ft[3]===450, _s?(_s.ft[0]+','+_s.ft[3]):'null');
+  check('_thSeries: gaps interpolated (ft[1] between 300 and 500)', !!_s && _s.ft[1]>300 && _s.ft[1]<500, _s?String(_s.ft[1]):'null');
+  check('_thSeries: maxFt = peak stored value', !!_s && _s.maxFt===500, _s?String(_s.maxFt):'null');
+  G._thData=[];
+  check('_thSeries: empty store → null (drives empty state)', G._thSeries()===null);
+  G._thData=_sSaveData; G._thInjections=_sSaveInj;
+}
+
+// _thZoomLevels: always W/M/Y/All (fixed windows, never hidden).
+if(typeof G._thZoomLevels==='function'){
+  check('_thZoomLevels: always Week/Month/Year/All', G._thZoomLevels().map(function(z){return z.id;}).join(',')==='week,month,year,all');
+}
+// _thWindow: each period is EXACTLY 1 week / 1 month / 1 year wide, ending at the
+// as-of day, and may extend before the first data point on short histories.
+if(typeof G._thWindow==='function'){
+  var _wW=G._thWindow('week',27,27);
+  check('_thWindow week: exactly 7 days wide', (_wW.winEnd-_wW.winStart)===7, (_wW.winEnd-_wW.winStart)+'');
+  var _wM=G._thWindow('month',27,27);
+  check('_thWindow month: exactly 30 days even when history is shorter', (_wM.winEnd-_wM.winStart)===30 && _wM.winStart===-3 && _wM.winEnd===27, JSON.stringify(_wM));
+  var _wY=G._thWindow('year',27,27);
+  check('_thWindow year: exactly 365 days', (_wY.winEnd-_wY.winStart)===365, (_wY.winEnd-_wY.winStart)+'');
+  var _wA=G._thWindow('all',27,27);
+  check('_thWindow all: full history span', _wA.winStart===0 && _wA.winEnd===27);
+  var _wMid=G._thWindow('month',50,120);
+  check('_thWindow month: ends at the as-of day, still exactly 30 wide', _wMid.winEnd===50 && _wMid.winStart===20);
+}
+
+// ── Capture MUST reproduce the T-Calc curve and NEVER blow up ────────────────
+// Hard regression for the ~50× / 9,345 pmol/L explosions. The capture computes the
+// per-day free-T with the exact T-Calc model (no anchor override) — the value that
+// gets stored and plotted. It must stay physiological in every calibration state,
+// especially the pre-cycle baseline blood test case that used to explode.
+console.log('\n── Free-T capture reproduces T-Calc, bounded ──────────────');
+if(typeof G._thComputeFreeT==='function'){
+  var _coFT=G._tcp&&G._tcp.measuredFT, _coDose=G._tcp&&G._tcp.currentDoseMgWk, _coBw=G._tcBwEntries, _coBY=G._tcp&&G._tcp.birthYear, _coInj=G._thInjections, _coML=G._tcp&&G._tcp.manualLog;
+  G._tcp=G._tcp||{}; G._tcp.manualLog=[];
+  var _coRows=[]; for(var _ci=0;_ci<10;_ci++){ var _cd=new Date(new Date('2026-01-05').getTime()+_ci*3.5*86400000);
+    _coRows.push({compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:_cd.getFullYear()+'-'+String(_cd.getMonth()+1).padStart(2,'0')+'-'+String(_cd.getDate()).padStart(2,'0')}); }
+  G._tcp.measuredFT='217'; G._tcp.currentDoseMgWk=''; G._tcp.birthYear='1990'; G._thInjections=_coRows;
+  G._tcBwEntries=null;
+  var _coLastDate=_coRows[_coRows.length-1].date;
+  var _cNo=G._thComputeFreeT();
+  check('capture no-bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cNo && _cNo.maxV>0 && _cNo.maxV<1500, _cNo?String(Math.round(_cNo.maxV)):'null');
+  check('capture: curve ends AT the last injection — nothing plotted past it', !!_cNo && _cNo.entries[_cNo.entries.length-1].date===_coLastDate, _cNo?(_cNo.entries[_cNo.entries.length-1].date+' vs '+_coLastDate):'null');
+  check('capture: entries carry marker=free_t and a date', !!_cNo && _cNo.entries[0].marker==='free_t' && /^\d{4}-\d{2}-\d{2}$/.test(_cNo.entries[0].date));
+  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];   // pre-cycle baseline draw — the case that exploded
+  var _cBw=G._thComputeFreeT();
+  check('capture with pre-cycle bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cBw && _cBw.maxV>0 && _cBw.maxV<1500, _cBw?String(Math.round(_cBw.maxV)):'null');
+  check('capture with pre-cycle bloodwork: rises above the 217 baseline (on-cycle > baseline)', !!_cBw && _cBw.maxV>217, _cBw?String(Math.round(_cBw.maxV)):'null');
+  G._tcp.manualLog=[]; G._thInjections=[]; G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
+  check('capture: no injections → null (nothing to store)', G._thComputeFreeT()===null);
+  if(G._tcp){G._tcp.measuredFT=_coFT; G._tcp.currentDoseMgWk=_coDose; G._tcp.birthYear=_coBY; G._tcp.manualLog=_coML;} G._tcBwEntries=_coBw; G._thInjections=_coInj;
+}
+
+// Capture persists via DELETE(clear marker)+POST(batch) to /plasma-history.
+if(typeof G._captureFreeTHistory==='function'){
+  var _pcSaveInj=G._thInjections, _pcSaveFetch=G.fetch, _pcSaveBw=G._tcBwEntries, _pcSaveML=G._tcp&&G._tcp.manualLog;
+  G._tcp=G._tcp||{}; G._tcp.manualLog=[]; G._tcp.measuredFT='217'; G._tcp.birthYear='1990';
+  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
+  G._thInjections=[{compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-01'},
+                   {compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-08'}];
+  var _pcCalls=[];
+  G.fetch=async function(url,opt){ _pcCalls.push({url:url,method:(opt&&opt.method)||'GET',body:opt&&opt.body}); return {ok:true,json:async function(){return {ok:true};}}; };
+  G._captureFreeTHistory().then(function(){
+    var _del=_pcCalls.find(function(c){return c.method==='DELETE'&&/plasma-history/.test(c.url);});
+    var _post=_pcCalls.find(function(c){return c.method==='POST'&&/plasma-history\/batch/.test(c.url);});
+    check('capture persist: clears the free_t marker (DELETE) before writing', !!_del && /marker=free_t/.test(_del.url));
+    check('capture persist: POSTs a non-empty batch of free_t entries', !!_post && (function(){try{var b=JSON.parse(_post.body);return b.entries&&b.entries.length>0&&b.entries[0].marker==='free_t';}catch(e){return false;}})());
+    G._thInjections=_pcSaveInj; G.fetch=_pcSaveFetch; G._tcBwEntries=_pcSaveBw; if(G._tcp)G._tcp.manualLog=_pcSaveML;
+  });
+}
+
+// Add-a-past-injection modal: catalogue wiring + validation surface.
+if(typeof G._piCat==='function'){
+  check('_piCat trt → TRT_CAT list', Array.isArray(G._piCat('trt')) && G._piCat('trt').length>0);
+  check('_piCat peptide → PEPTIDE_CAT list', Array.isArray(G._piCat('peptide')) && G._piCat('peptide').length>0);
+  check('_piDefaultUnit: peptide µg, trt mg', G._piDefaultUnit('peptide')==='µg' && G._piDefaultUnit('trt')==='mg');
+}
+
+// ── Compound-aware macros (Batch 2) ────────────────────────────────────────
+console.log('\n── Compound-aware macros ──────────────────────────────────');
+if(typeof G.calcMacros==='function'){
+  var _mOff=G.calcMacros(90,'recomp',false);
+  var _mOn =G.calcMacros(90,'recomp',true);
+  check('calcMacros protein = 2.2 g/kg in a non-cut phase', _mOff.protein===Math.round(90*2.2), String(_mOff.protein));
+  check('calcMacros fat lower on injected androgens', _mOn.fat < _mOff.fat, _mOn.fat+' vs '+_mOff.fat);
+  check('calcMacros carbs energy-balanced & non-negative', _mOn.carbs>=0 && _mOff.carbs>=0);
+  check('calcMacros cut < recomp kcal', G.calcMacros(90,'cut',true).kcal < G.calcMacros(90,'recomp',true).kcal);
+  check('calcMacros flags onAndrogens through', G.calcMacros(90,'recomp',true).onAndrogens===true && _mOff.onAndrogens===false);
+  // Phase-aware protein: a cut raises protein (deficit preserves muscle — Helms 2014),
+  // and being on androgens does NOT raise it further (nitrogen retention is already better).
+  check('calcMacros cut protein = 2.5 g/kg (raised for the deficit)', G.calcMacros(90,'cut',false).protein===Math.round(90*2.5), String(G.calcMacros(90,'cut',false).protein));
+  check('calcMacros cut protein > recomp protein', G.calcMacros(90,'cut',false).protein > G.calcMacros(90,'recomp',false).protein);
+  check('calcMacros protein independent of androgens within a phase', G.calcMacros(90,'cut',true).protein===G.calcMacros(90,'cut',false).protein);
+  if(typeof G._macrosFatNote==='function'){
+    check('_macrosFatNote cut mentions the raised protein + Helms', /2\.5 g\/kg/.test(G._macrosFatNote(false,'cut')) && /Helms 2014/.test(G._macrosFatNote(false,'cut')));
+    check('_macrosFatNote non-cut keeps 2.2 g/kg', /2\.2 g\/kg/.test(G._macrosFatNote(false,'recomp')));
+  }
+  // Calorie target is intake-only: ~31 kcal/kg ± phase, and NOT affected by the
+  // measured training burn (which is presented separately).
+  check('calcMacros recomp kcal = 31 kcal/kg + 100 (training not folded in)', G.calcMacros(90,'recomp',false).kcal===Math.round(90*31)+100, String(G.calcMacros(90,'recomp',false).kcal));
+  check('calcMacros returns no maintenance/train fields (target is training-independent)', G.calcMacros(90,'recomp',false).trainKcal===undefined && G.calcMacros(90,'recomp',false).maint===undefined);
+  // Training burn is shown separately via _macrosBurnCard, driven by _macrosTrainKcal.
+  if(typeof G._macrosBurnCard==='function'){
+    G._macrosTrainKcal=270;
+    check('_macrosBurnCard shows the burn kcal and marks it separate from the target', /270/.test(G._macrosBurnCard()) && /not added to the calorie target/i.test(G._macrosBurnCard()));
+    G._macrosTrainKcal=0;
+    check('_macrosBurnCard with no data prompts to log workouts, not zero-burn scare', /log your workouts/i.test(G._macrosBurnCard()));
+  }
+}
+if(typeof G._macrosOnAndrogens==='function'){
+  G._userStacks=[{trt:{enabled:true,compounds:[{id:'enanthate'}]},enhanced:{compounds:[]}}]; G._activeStackIndices=[0];
+  check('_macrosOnAndrogens: true when TRT enabled', G._macrosOnAndrogens()===true);
+  G._userStacks=[{trt:{enabled:false,compounds:[]},enhanced:{compounds:[{id:'nandrolone'}]}}]; G._activeStackIndices=[0];
+  check('_macrosOnAndrogens: true when Enhanced present', G._macrosOnAndrogens()===true);
+  G._userStacks=[{trt:{enabled:false,compounds:[]},enhanced:{compounds:[]},peptides:[{id:'cjc-ipa'}]}]; G._activeStackIndices=[0];
+  check('_macrosOnAndrogens: false for peptide-only', G._macrosOnAndrogens()===false);
+}
+if(typeof G._wizFlow==='function'){
+  G._wiz={goals:[],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]}};
+  var _nf=G._wizFlow();
+  check('_wizFlow includes the nutrition (macros) step', _nf.indexOf('nutrition')>=0);
+  check('nutrition step precedes review', _nf.indexOf('nutrition') < _nf.indexOf('review'));
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
