@@ -394,13 +394,13 @@ check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 var trtEnhFlow=G._wizFlow();
-check('_wizFlow: TRT+enhanced has 8 steps', trtEnhFlow.length===8, 'got '+trtEnhFlow.length);
-check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'));
+check('_wizFlow: TRT+enhanced has 9 steps', trtEnhFlow.length===9, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,base,advise,enhanced,validate,nutrition,review'));
 check('_wizFlow: advise precedes enhanced', trtEnhFlow.indexOf('advise')===trtEnhFlow.indexOf('enhanced')-1);
 // _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
 var allFlow=G._wizFlow();
-check('_wizFlow: peps+TRT+enhanced has 11 steps', allFlow.length===11, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has 12 steps', allFlow.length===12, 'got '+allFlow.length);
 check('_wizFlow: peps+TRT+enhanced has advise', allFlow.includes('advise'));
 check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
 check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
@@ -458,15 +458,16 @@ G.wizNext();G.wizNext();G.wizNext();G.wizNext();
 check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
 G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
 G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
-// TRT+Enhanced (no peps): flow is cycle,goals,trt,advise,enhanced,validate,nutrition,review
+// TRT+Enhanced (no peps): flow is cycle,goals,trt,base,advise,enhanced,validate,nutrition,review
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT+enhanced after 7 calls = step 7 (review)', G._wiz.step===7);
-G.wizNext();check('wizNext: TRT+enhanced does not exceed step 7', G._wiz.step===7);
-G.wizBack();check('wizBack: TRT+enhanced 7→6 (nutrition)', G._wiz.step===6);
-G.wizBack();check('wizBack: TRT+enhanced 6→5 (validate)', G._wiz.step===5);
-G.wizBack();check('wizBack: TRT+enhanced 5→4 (enhanced)', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT+enhanced 4→3 (advise)', G._wiz.step===3);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT+enhanced after 8 calls = step 8 (review)', G._wiz.step===8);
+G.wizNext();check('wizNext: TRT+enhanced does not exceed step 8', G._wiz.step===8);
+G.wizBack();check('wizBack: TRT+enhanced 8→7 (nutrition)', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT+enhanced 7→6 (validate)', G._wiz.step===6);
+G.wizBack();check('wizBack: TRT+enhanced 6→5 (enhanced)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT+enhanced 5→4 (advise)', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT+enhanced 4→3 (base)', G._wiz.step===3);
 G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
 // Peps+TRT: validate step appears
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
@@ -2114,7 +2115,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
   var f4=G._wizFlow();
-  check('flow TRT+enhanced: 8 steps', f4.length===8, 'got '+f4.length);
+  check('flow TRT+enhanced: 9 steps', f4.length===9, 'got '+f4.length);
   check('flow TRT+enhanced: has advise before enhanced', f4.indexOf('advise')===f4.indexOf('enhanced')-1);
   check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
   check('flow TRT+enhanced: has validate', f4.includes('validate'));
@@ -2123,7 +2124,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
   var f5=G._wizFlow();
-  check('flow peps+TRT+enhanced: 11 steps', f5.length===11, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: 12 steps', f5.length===12, 'got '+f5.length);
   check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
   check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
 
@@ -2332,10 +2333,16 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     check('editSetEnhAmPm: sets amPm=false', G._editBuf.enhanced.compounds[0].amPm===false);
     // Edit view surfaces the Split AM / PM toggle row and honours the per-compound flag
     var enhEditOn=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose_am:'2',dose_pm:'1',unit:'IU/day',days:[1],amPm:true}]});
-    check('_renderEditEnhanced: shows Split AM / PM toggle', enhEditOn.includes('Split AM / PM'));
-    check('_renderEditEnhanced amPm on: shows AM Dose + PM Dose rows', enhEditOn.includes('AM Dose')&&enhEditOn.includes('PM Dose'));
+    check('_renderEditEnhanced: shows the split toggle', enhEditOn.includes('Split across AM / Pre-GYM / PM'));
+    // Dose rows now follow the selected schedule rather than always showing all three.
+    // This fixture has no `times`, so it infers AM+PM from its populated doses.
+    check('_renderEditEnhanced amPm on: rows follow the selected schedule',
+      enhEditOn.includes('AM Dose')&&enhEditOn.includes('PM Dose')&&!enhEditOn.includes('Pre-GYM Dose'));
+    check('_renderEditEnhanced amPm on: offers all three timing chips',
+      enhEditOn.includes('>AM</div>')&&enhEditOn.includes('>Pre-GYM</div>')&&enhEditOn.includes('>PM</div>'));
     var enhEditOff=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose:'250',unit:'mg/week',days:[1],amPm:false}]});
-    check('_renderEditEnhanced amPm off: single Dose row, no AM Dose', enhEditOff.includes('Split AM / PM')&&!enhEditOff.includes('AM Dose'));
+    check('_renderEditEnhanced amPm off: single Dose row, no per-slot rows',
+      enhEditOff.includes('Split across AM / Pre-GYM / PM')&&!enhEditOff.includes('AM Dose')&&!enhEditOff.includes('Pre-GYM Dose'));
 
     G.editToggleEnhancedCompound(testId2);
     check('editToggleEnhancedCompound: removes compound on second call', G._editBuf.enhanced.compounds.length===0);
@@ -6140,45 +6147,83 @@ if(typeof G._thWindow==='function'){
 // Hard regression for the ~50× / 9,345 pmol/L explosions. The capture computes the
 // per-day free-T with the exact T-Calc model (no anchor override) — the value that
 // gets stored and plotted. It must stay physiological in every calibration state,
-// especially the pre-cycle baseline blood test case that used to explode.
-console.log('\n── Free-T capture reproduces T-Calc, bounded ──────────────');
-if(typeof G._thComputeFreeT==='function'){
-  var _coFT=G._tcp&&G._tcp.measuredFT, _coDose=G._tcp&&G._tcp.currentDoseMgWk, _coBw=G._tcBwEntries, _coBY=G._tcp&&G._tcp.birthYear, _coInj=G._thInjections, _coML=G._tcp&&G._tcp.manualLog;
-  G._tcp=G._tcp||{}; G._tcp.manualLog=[];
-  var _coRows=[]; for(var _ci=0;_ci<10;_ci++){ var _cd=new Date(new Date('2026-01-05').getTime()+_ci*3.5*86400000);
-    _coRows.push({compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:_cd.getFullYear()+'-'+String(_cd.getMonth()+1).padStart(2,'0')+'-'+String(_cd.getDate()).padStart(2,'0')}); }
-  G._tcp.measuredFT='217'; G._tcp.currentDoseMgWk=''; G._tcp.birthYear='1990'; G._thInjections=_coRows;
-  G._tcBwEntries=null;
-  var _coLastDate=_coRows[_coRows.length-1].date;
-  var _cNo=G._thComputeFreeT();
-  check('capture no-bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cNo && _cNo.maxV>0 && _cNo.maxV<1500, _cNo?String(Math.round(_cNo.maxV)):'null');
-  check('capture: curve ends AT the last injection — nothing plotted past it', !!_cNo && _cNo.entries[_cNo.entries.length-1].date===_coLastDate, _cNo?(_cNo.entries[_cNo.entries.length-1].date+' vs '+_coLastDate):'null');
-  check('capture: entries carry marker=free_t and a date', !!_cNo && _cNo.entries[0].marker==='free_t' && /^\d{4}-\d{2}-\d{2}$/.test(_cNo.entries[0].date));
-  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];   // pre-cycle baseline draw — the case that exploded
-  var _cBw=G._thComputeFreeT();
-  check('capture with pre-cycle bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cBw && _cBw.maxV>0 && _cBw.maxV<1500, _cBw?String(Math.round(_cBw.maxV)):'null');
-  check('capture with pre-cycle bloodwork: rises above the 217 baseline (on-cycle > baseline)', !!_cBw && _cBw.maxV>217, _cBw?String(Math.round(_cBw.maxV)):'null');
-  G._tcp.manualLog=[]; G._thInjections=[]; G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
-  check('capture: no injections → null (nothing to store)', G._thComputeFreeT()===null);
-  if(G._tcp){G._tcp.measuredFT=_coFT; G._tcp.currentDoseMgWk=_coDose; G._tcp.birthYear=_coBY; G._tcp.manualLog=_coML;} G._tcBwEntries=_coBw; G._thInjections=_coInj;
+// ── T-History capture: explicit, from the displayed curve, no blow-up ─────────
+// History is WRITTEN only by tcSaveHistoryFromCurve (the "Update saved history"
+// button), and only ever the plasma curve exactly as displayed (cached in _tcDrawnFT
+// during a calibrated draw). No re-derivation, no auto-capture. These tests pin: the
+// draw caches a bounded series (calibrated to bloodwork — the case that used to read
+// ~10x high), and the writer clears-then-writes, refuses garbage, and no-ops with
+// nothing to save.
+console.log('\n── T-History capture (explicit, bounded) ──────────────────');
+if (typeof G._tcDrawManualChart === 'function' && typeof G.tcSaveHistoryFromCurve === 'function') {
+  var _svFT=G._tcp.measuredFT, _svDose=G._tcp.currentDoseMgWk, _svBw=G._tcBwEntries, _svFetch=G.fetch;
+
+  // Calibrated draw: a real blood draw during the cycle → curve anchors to it.
+  G._tcp.measuredFT='497'; G._tcp.currentDoseMgWk='';
+  G._tcBwEntries=[{date:'2026-07-20', free_t:497}];
+  G._tcDrawnFT=null;
+  var _dl=[]; for(var _di=0;_di<12;_di++){ var _dd=new Date(new Date('2026-06-26').getTime()+_di*2*86400000);
+    _dl.push({compId:'testoviron',doseMg:'125',date:_dd.getFullYear()+'-'+String(_dd.getMonth()+1).padStart(2,'0')+'-'+String(_dd.getDate()).padStart(2,'0')}); }
+  try { G._tcDrawManualChart('tc-main-chart', _dl); } catch(e){}
+  check('a calibrated draw caches the displayed series', !!(G._tcDrawnFT && G._tcDrawnFT.values && G._tcDrawnFT.values.length));
+  var _mx = G._tcDrawnFT ? Math.max.apply(null, G._tcDrawnFT.values.concat([0])) : 0;
+  check('cached series is bounded — no 10x blow-up (anchored to bloodwork)', _mx>0 && _mx<1500, 'max '+Math.round(_mx));
+  check('cached series ends at the last injection (no future tail)',
+    !!G._tcDrawnFT && G._tcDrawnFT.values.length === Math.round((new Date(_dl[_dl.length-1].date)-new Date(_dl[0].date))/86400000)+1);
+
+  // A scheduled FUTURE dose must NOT extend history into the future — it ends at the
+  // last injection actually taken (date on or before today).
+  var _fToday = new Date();
+  var _fStart = new Date(_fToday.getTime() - 20*86400000);
+  var _fMid   = new Date(_fToday.getTime() -  4*86400000);   // last TAKEN shot
+  var _fFut   = new Date(_fToday.getTime() + 14*86400000);   // scheduled, not taken
+  var _fmt = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  G._tcDrawnFT=null;
+  try { G._tcDrawManualChart('tc-main-chart', [
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fStart)},
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fMid)},
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fFut)} ]); } catch(e){}
+  var _fLastDay = !!G._tcDrawnFT ? (G._tcDrawnFT.values.length - 1) : -1;
+  var _fExpect  = Math.round((_fMid - _fStart)/86400000);
+  check('history stops at the last TAKEN injection, not a scheduled future dose',
+    !!G._tcDrawnFT && _fLastDay === _fExpect, 'lastDay '+_fLastDay+' expected '+_fExpect);
+  check('no stored history point is dated in the future',
+    !!G._tcDrawnFT && (G._tcDrawnFT.firstMs + _fLastDay*86400000) <= Date.now());
+  check('cached entries would carry the pmol/L unit', !!G._tcDrawnFT && G._tcDrawnFT.unit==='pmol/L');
+
+  // Writer guards — synchronous (fetch is only called when it actually writes):
+  var _calls; var _mockFetch=function(){ _calls=[]; return function(u,o){ _calls.push({url:u,method:(o&&o.method)||'GET',body:o&&o.body}); return Promise.resolve({ok:true,json:function(){return Promise.resolve({});}}); }; };
+
+  // no cached curve → writes nothing
+  G._tcDrawnFT=null; G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer with no cached curve calls no endpoint', _calls.length===0);
+
+  // an absurd curve is refused before any write
+  G._tcDrawnFT={firstMs:Date.now(),unit:'pmol/L',values:[100,7000]}; G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer refuses an absurdly-high curve (>6000) — no write', _calls.length===0);
+
+  // a normal curve clears the marker (DELETE) first, then writes
+  G._tcDrawnFT={firstMs:new Date('2026-06-26T00:00:00Z').getTime(),unit:'pmol/L',values:[210,240,300,420,497]};
+  G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer clears the free_t marker (DELETE) before writing',
+    _calls.length>=1 && _calls[0].method==='DELETE' && /plasma-history/.test(_calls[0].url) && /marker=free_t/.test(_calls[0].url));
+
+  G._tcp.measuredFT=_svFT; G._tcp.currentDoseMgWk=_svDose; G._tcBwEntries=_svBw; G.fetch=_svFetch;
 }
 
-// Capture persists via DELETE(clear marker)+POST(batch) to /plasma-history.
-if(typeof G._captureFreeTHistory==='function'){
-  var _pcSaveInj=G._thInjections, _pcSaveFetch=G.fetch, _pcSaveBw=G._tcBwEntries, _pcSaveML=G._tcp&&G._tcp.manualLog;
-  G._tcp=G._tcp||{}; G._tcp.manualLog=[]; G._tcp.measuredFT='217'; G._tcp.birthYear='1990';
-  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
-  G._thInjections=[{compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-01'},
-                   {compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-08'}];
-  var _pcCalls=[];
-  G.fetch=async function(url,opt){ _pcCalls.push({url:url,method:(opt&&opt.method)||'GET',body:opt&&opt.body}); return {ok:true,json:async function(){return {ok:true};}}; };
-  G._captureFreeTHistory().then(function(){
-    var _del=_pcCalls.find(function(c){return c.method==='DELETE'&&/plasma-history/.test(c.url);});
-    var _post=_pcCalls.find(function(c){return c.method==='POST'&&/plasma-history\/batch/.test(c.url);});
-    check('capture persist: clears the free_t marker (DELETE) before writing', !!_del && /marker=free_t/.test(_del.url));
-    check('capture persist: POSTs a non-empty batch of free_t entries', !!_post && (function(){try{var b=JSON.parse(_post.body);return b.entries&&b.entries.length>0&&b.entries[0].marker==='free_t';}catch(e){return false;}})());
-    G._thInjections=_pcSaveInj; G.fetch=_pcSaveFetch; G._tcBwEntries=_pcSaveBw; if(G._tcp)G._tcp.manualLog=_pcSaveML;
+// No path in the app captures history automatically — the button is the only writer.
+{
+  var _files = ['tab-tcalc.js','tab-thist.js','tab-today.js'];
+  var _autoOk = _files.every(function(f){
+    var src = fs.readFileSync(path.join(dir,f),'utf8');
+    // The dead auto-capture helpers must be gone entirely (comments excepted).
+    var codeOnly = src.replace(/\/\/[^\n]*/g,'').replace(/\/\*[\s\S]*?\*\//g,'');
+    return codeOnly.indexOf('_captureFreeTHistory') < 0 && codeOnly.indexOf('_thComputeFreeT') < 0;
   });
+  check('no automatic history capture remains in any tab', _autoOk);
+  var _tcSrc = fs.readFileSync(path.join(dir,'tab-tcalc.js'),'utf8');
+  check('saving the T-Calc profile does not capture history',
+    _tcSrc.slice(_tcSrc.indexOf('function _tcSaveProfile'), _tcSrc.indexOf('function _tcSaveProfile')+900).indexOf('SaveHistoryFromCurve') < 0);
 }
 
 // Add-a-past-injection modal: catalogue wiring + validation surface.
@@ -6254,12 +6299,522 @@ console.log('\n── HGH default timing (AM-fasted nudge) ───────
   const _hi = html.indexOf("id:'hgh'");
   check('peptide-tier HGH entry present', _hi >= 0);
   if (_hi >= 0) {
-    const _seg = html.slice(_hi, _hi + 1600);
+    const _seg = html.slice(_hi, _hi + 3200);
     const _dfltM = _seg.match(/dflt:\{times:\[([^\]]*)\]/);
     check('HGH default times is AM-only (no PM by default)',
       !!_dfltM && /'AM'/.test(_dfltM[1]) && !/'PM'/.test(_dfltM[1]),
       _dfltM ? _dfltM[1] : 'no dflt match');
     check('HGH protocol still says inject fasted', /Inject fasted/i.test(_seg));
+  }
+}
+
+
+// ── Third intra-day dose slot: MID / "Pre-GYM" ────────────────────────────────
+// Exogenous HGH is commonly split into 2-3 fasted micro-doses, so a compound must be
+// able to schedule three doses in one day. MID sits between AM and PM everywhere:
+// slot constants, the stack/wizard editors, injection generation and the day ordering.
+// Backend counterpart: _TIME_SLOTS in routers/injections.py.
+console.log('\n── Third dose slot (AM / Pre-GYM / PM) ────────────────────');
+{
+  check('TIME_SLOTS is AM, MID, PM in chronological order',
+    Array.isArray(G.TIME_SLOTS) && G.TIME_SLOTS.join(',')==='AM,MID,PM');
+  check('MID is labelled "Pre-GYM" in the UI', G._slotLabel('MID')==='Pre-GYM');
+  check('AM/PM labels unchanged', G._slotLabel('AM')==='AM' && G._slotLabel('PM')==='PM');
+  check('_slotKey maps a slot to its field suffix',
+    G._slotKey('MID')==='mid' && G._slotKey('AM')==='am' && G._slotKey('PM')==='pm');
+  check('MID sorts between AM and PM',
+    G.TIME_RANK.AM < G.TIME_RANK.MID && G.TIME_RANK.MID < G.TIME_RANK.PM);
+
+  // Editor renders a dose row per selected slot, and only for selected slots.
+  var _p3={id:'hgh',name:'HGH',dot:'#3cffa0',times:['AM','MID','PM'],days:[1,2,3,4,5],
+           dose_am:'2',dose_mid:'2',dose_pm:'2',unit_am:'IU',unit_mid:'IU',unit_pm:'IU',active:true};
+  var _ed3=G._renderEditPep(_p3,0);
+  check('editor: three slots selected → three dose rows',
+    _ed3.includes('AM Dose')&&_ed3.includes('Pre-GYM Dose')&&_ed3.includes('PM Dose'));
+  check('editor: Pre-GYM input bound to dose_mid', _ed3.includes('dose_mid=this.value'));
+  var _ed1=G._renderEditPep({id:'hgh',name:'HGH',times:['AM'],days:[1],dose_am:'2',unit_am:'IU',active:true},0);
+  check('editor: AM-only → no Pre-GYM row', _ed1.includes('AM Dose')&&!_ed1.includes('Pre-GYM Dose'));
+
+  // GH-axis compounds carry the fasted-window qualifier Henrik specified.
+  check('GH-axis: fasted hint names all three windows',
+    _ed3.includes('AM (fasted)')&&_ed3.includes('Pre-GYM (2 h fasted)')&&_ed3.includes('PM (2 h fasted)'));
+  var _edRet=G._renderEditPep({id:'retatrutide',name:'Retatrutide',times:['AM'],days:[0],dose_am:'3',unit_am:'mg',active:true},0);
+  check('non-GH compound gets no fasted hint', !_edRet.includes('(fasted)'));
+
+  // A slot with no catalogue unit inherits the compound's unit, not a generic mg.
+  var _hghCat=G.PEPTIDE_CAT.find(function(c){return c.id==='hgh';});
+  check('slot unit inherits compound unit (IU, not mg)',
+    G._slotFieldsFromDflt(_hghCat.dflt).unit_mid==='IU');
+
+  // buildWeeklyFromProtocol surfaces all three doses.
+  var _wk3=G.buildWeeklyFromProtocol({peptides:[_p3]});
+  var _mid=_wk3.filter(function(e){return e.time==='MID';});
+  check('weekly view emits a MID entry', _mid.length>0);
+  check('weekly MID entry carries its own dose', _mid.length>0 && /2/.test(_mid[0].detail||''));
+
+  // Today ordering puts Pre-GYM between AM and PM.
+  var _doses=[{time_of_day:'PM'},{time_of_day:'MID'},{time_of_day:'AM'}];
+  _doses.sort(function(a,b){return (G.TIME_RANK[a.time_of_day]??2)-(G.TIME_RANK[b.time_of_day]??2);});
+  check('today ordering is AM → Pre-GYM → PM',
+    _doses.map(function(d){return d.time_of_day;}).join(',')==='AM,MID,PM');
+
+  // The HGH default is untouched by this change — still a single fasted AM dose.
+  check('HGH default is still AM-only (3-split stays opt-in)',
+    _hghCat.dflt.times.length===1 && _hghCat.dflt.times[0]==='AM');
+  check('HGH protocol documents the three fasted micro-doses',
+    /Pre-GYM/.test(_hghCat.protocol) && /2 \+ 2 \+ 2 IU/.test(_hghCat.protocol));
+  check('HGH protocol labels the 3-split as not trial-backed',
+    /rather than trial-backed/.test(_hghCat.protocol));
+}
+
+
+// ── Dose inputs must raise a numeric keypad on iOS ────────────────────────────
+// A bare type="text" input opens the QWERTY keyboard on iOS, so entering a dose
+// meant switching to the 123 layer every time. Dose fields are numeric (and may be
+// decimal: 0.09 ml, 2.5 mg), so every one carries inputmode="decimal". type="number"
+// is deliberately not used — it adds spinners and fights locale decimal separators.
+// Covers all three tiers: peptide, TRT and enhanced, editor and wizard alike.
+console.log('\n── Dose inputs: numeric keypad ────────────────────────────');
+{
+  const _stackSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+  const _textDose = _stackSrc.match(/class="dose-in" type="text"(?! inputmode="decimal")/g) || [];
+  check('every text dose input declares inputmode="decimal"', _textDose.length===0,
+    _textDose.length+' dose input(s) missing inputmode');
+  const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
+  check('all 9 dose inputs are covered', _withMode.length===9, 'found '+_withMode.length);
+
+  // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
+  // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
+  var _prevEnhCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
+    dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
+    amPm:true,defaultDoseAm:2,defaultDosePm:0}];
+  var _enhHtml = G._renderEditEnhanced({enabled:true,compounds:[
+    {id:'hgh',name:'HGH',dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});
+  var _enhInputs = (_enhHtml.match(/<input class="dose-in"[^>]*>/g)||[]);
+  check('enhanced tier renders dose inputs', _enhInputs.length>0);
+  check('every rendered enhanced dose input has the numeric keypad',
+    _enhInputs.length>0 && _enhInputs.every(function(t){return t.indexOf('inputmode="decimal"')>=0;}));
+  check('enhanced tier renders one dose input per slot', _enhInputs.length===3, 'got '+_enhInputs.length);
+  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
+}
+
+
+// ── Fasted-window labels reach the Enhanced tier ──────────────────────────────
+// HGH is reachable from BOTH the peptide catalogue and the backend enhanced
+// catalogue, and it is the enhanced tier that users actually configure it from.
+// The per-slot fasted qualifier — AM (fasted) / Pre-GYM (2 h fasted) / PM (2 h
+// fasted) — must therefore render in the enhanced editor and wizard too, not just
+// the peptide ones. Enhanced catalogue entries carry no `cg` array, so _isGhAxis
+// resolves them by cls/group instead.
+console.log('\n── Enhanced tier: fasted-window labels ────────────────────');
+{
+  const _prevCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [
+    {id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',dot:'#e8a020',
+     defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],amPm:true,defaultDoseAm:2,defaultDosePm:0},
+    {id:'test_e',name:'Testosterone Enanthate',group:'Base',cls:'base',dot:'#e05050',
+     defaultDose:300,unit:'mg/week',defaultDays:[1,4],amPm:true,defaultDoseAm:150,defaultDosePm:150}];
+
+  check('_isGhAxis resolves an enhanced-catalogue GH compound', G._isGhAxis('hgh')===true);
+  check('_isGhAxis is false for a non-GH enhanced compound', G._isGhAxis('test_e')===false);
+
+  var _mk=function(id){return G._renderEditEnhanced({enabled:true,compounds:[
+    {id:id,name:id,dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});};
+  var _hghHtml=_mk('hgh'), _tHtml=_mk('test_e');
+
+  check('enhanced editor names all three fasted windows',
+    _hghHtml.indexOf('AM (fasted)')>=0 && _hghHtml.indexOf('Pre-GYM (2 h fasted)')>=0
+      && _hghHtml.indexOf('PM (2 h fasted)')>=0);
+  check('enhanced editor explains why (low-insulin window)',
+    _hghHtml.indexOf('low-insulin window')>=0);
+  check('non-GH enhanced compound gets no fasted hint',
+    _tHtml.indexOf('(fasted)')<0);
+
+  G.ENHANCEMENT_COMPOUNDS = _prevCat;
+}
+
+
+// ── Enhanced tier: schedule chips ─────────────────────────────────────────────
+// The enhanced tier used to express its schedule implicitly — all three dose rows
+// were always shown and you skipped a slot by leaving it blank. It now has the same
+// AM / Pre-GYM / PM chips as the peptide tier, backed by a `times` array.
+//
+// The delicate part is back-compat: stacks saved before `times` existed must keep the
+// schedule they already had. _enhTimes infers it from which slot doses are populated,
+// which is precisely what used to decide whether a slot generated an injection.
+console.log('\n── Enhanced tier: schedule chips ──────────────────────────');
+{
+  const _prev = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
+    dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
+    amPm:true,defaultDoseAm:2,defaultDosePm:0}];
+
+  // back-compat: no `times` field
+  check('legacy AM+PM stack keeps AM+PM',
+    G._enhTimes({id:'hgh',amPm:true,dose_am:'2',dose_pm:'2'}).join('+')==='AM+PM');
+  check('legacy AM-only stack keeps AM',
+    G._enhTimes({id:'hgh',amPm:true,dose_am:'2',dose_pm:'0'}).join('+')==='AM');
+  check('legacy stack with no doses falls back to AM+PM',
+    G._enhTimes({id:'hgh',amPm:true}).join('+')==='AM+PM');
+
+  // explicit times wins, and is normalised to chronological order
+  check('explicit times overrides inference',
+    G._enhTimes({id:'hgh',amPm:true,times:['AM','PM'],dose_am:'2',dose_mid:'9',dose_pm:'2'}).join('+')==='AM+PM');
+  check('times is returned in chronological order',
+    G._enhTimes({id:'hgh',amPm:true,times:['PM','AM','MID']}).join('+')==='AM+MID+PM');
+  check('a deselected slot does not inflate the daily total',
+    G._enhSplitTotal({id:'hgh',amPm:true,times:['AM','PM'],dose_am:'2',dose_mid:'9',dose_pm:'2'})===4);
+
+  // chip toggling, including the never-empty guard
+  G._editBuf={cycle_start:'2026-07-01',peptides:[],enhanced:{enabled:true,compounds:[
+    {id:'hgh',name:'HGH',amPm:true,dose_am:'2',dose_pm:'2',unit:'IU/day',days:[1]}]}};
+  var _cur=function(){return G._enhTimes(G._editBuf.enhanced.compounds[0]).join('+');};
+  G.editToggleEnhTime('hgh','MID');
+  check('selecting Pre-GYM adds it in order', _cur()==='AM+MID+PM');
+  G.editToggleEnhTime('hgh','PM');
+  check('deselecting PM removes it', _cur()==='AM+MID');
+  G.editToggleEnhTime('hgh','AM'); G.editToggleEnhTime('hgh','MID');
+  check('the last remaining slot cannot be deselected', _cur()==='MID');
+
+  // rendered rows follow the chips
+  G._editBuf.enhanced.compounds[0].times=['AM','PM'];
+  var _h2=G._renderEditEnhanced(G._editBuf.enhanced);
+  check('AM+PM selected renders no Pre-GYM row',
+    _h2.indexOf('AM Dose')>=0 && _h2.indexOf('PM Dose')>=0 && _h2.indexOf('Pre-GYM Dose')<0);
+  check('the unselected Pre-GYM chip is still offered', _h2.indexOf('>Pre-GYM</div>')>=0);
+  G._editBuf.enhanced.compounds[0].times=['AM','MID','PM'];
+  check('all three selected renders all three rows',
+    G._renderEditEnhanced(G._editBuf.enhanced).indexOf('Pre-GYM Dose')>=0);
+
+  // the split toggle itself is untouched — it still distinguishes a single untimed
+  // daily dose from per-slot dosing, and must not disappear now that chips exist
+  var _off=G._renderEditEnhanced({enabled:true,compounds:[
+    {id:'hgh',name:'HGH',amPm:false,dose:'6',unit:'IU/day',days:[1]}]});
+  check('split OFF still gives one untimed Dose row',
+    _off.indexOf('>Dose</div>')>=0 && _off.indexOf('AM Dose')<0);
+  check('the split toggle is still present when off',
+    _off.indexOf('Split across AM / Pre-GYM / PM')>=0);
+
+  // seeding a fresh entry from the catalogue
+  var _seed={};
+  G._enhSeedSlots(_seed,G.ENHANCEMENT_COMPOUNDS[0]);
+  check('a newly added HGH seeds an AM-only schedule (split stays opt-in)',
+    (_seed.times||[]).join('+')==='AM');
+
+  G.ENHANCEMENT_COMPOUNDS = _prev;
+}
+
+
+// ── Wizard: mandatory testosterone-base step ──────────────────────────────────
+// The advisor used to present Testosterone Enanthate as "required base (always
+// included)" — the only ester on offer. Every enhanced cycle runs on a testosterone
+// base and the ester decides injection frequency for the whole cycle, so it is now
+// picked explicitly on its own step, before any other compound. Esters come from the
+// backend catalogue (cls==='base'); nothing is hardcoded in the frontend.
+console.log('\n── Wizard: testosterone base step ─────────────────────────');
+{
+  const _prevCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [
+    {id:'test_e',name:'Testosterone Enanthate',cls:'base',dot:'#e05050',defaultDose:300,unit:'mg/week',defaultDays:[1,4],
+     cadence:{rec:'2×/week',halfLife:'~7 days',note:'Twice-weekly smooths peak-to-trough.'}},
+    {id:'test_p',name:'Testosterone Propionate',cls:'base',dot:'#e05050',defaultDose:350,unit:'mg/week',defaultDays:[1,3,5],
+     cadence:{rec:'EOD or daily',halfLife:'~0.8 days',note:'Short ester — inject EOD.'}},
+    {id:'test_u',name:'Testosterone Undecanoate (Nebido)',cls:'base',dot:'#e05050',defaultDose:100,unit:'mg/week',defaultDays:[1],
+     cadence:{rec:'1000 mg every 10–14 weeks',halfLife:'~34 days',note:'Ultra-long ester.'}},
+    {id:'primo',name:'Primobolan',cls:'dht',dot:'#3b9eff',defaultDose:400,unit:'mg/week',defaultDays:[1,4]}];
+
+  G.initWizard(); G._wiz.goals=['enhanced'];
+  var _flow=G._wizFlow();
+  check('enhanced flow includes a base step', _flow.indexOf('base')>=0);
+  check('the base step comes before guidance', _flow.indexOf('base')<_flow.indexOf('advise'));
+  check('the base step comes before the enhanced compound list',
+    _flow.indexOf('base')<_flow.indexOf('enhanced'));
+
+  var _b={innerHTML:''}, _f={innerHTML:''};
+  G.wizStepBase(_b,_f);
+  check('every base ester in the catalogue is offered',
+    _b.innerHTML.indexOf('Testosterone Enanthate')>=0 && _b.innerHTML.indexOf('Testosterone Propionate')>=0
+      && _b.innerHTML.indexOf('Testosterone Undecanoate')>=0);
+  check('non-base compounds are not offered as a base', _b.innerHTML.indexOf('Primobolan')<0);
+  check('the recommended ester is badged, not forced', _b.innerHTML.indexOf('RECOMMENDED')>=0);
+  check('the step is mandatory — Next is gated until an ester is picked',
+    _f.innerHTML.indexOf('disabled')>=0);
+
+  G.wizSetBaseEster('test_p');
+  check('picking an ester records it as the base', G._wizBaseId()==='test_p');
+  check('the picked ester is added to the protocol',
+    ((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).some(function(c){return c.id==='test_p';}));
+  G.wizStepBase(_b,_f);
+  check('Next is enabled once an ester is picked', _f.innerHTML.indexOf('disabled')<0);
+  check('the chosen ester shows its own cadence note', _b.innerHTML.indexOf('Short ester')>=0);
+
+  // switching must swap the base, never stack two testosterones
+  G._wizAdviseAdd('primo');
+  G.wizSetBaseEster('test_u');
+  var _ids=((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).map(function(c){return c.id;});
+  check('switching ester replaces the old base', _ids.indexOf('test_p')<0 && _ids.indexOf('test_u')>=0);
+  check('switching ester leaves non-base compounds alone', _ids.indexOf('primo')>=0);
+  check('only ever one testosterone base in the protocol',
+    _ids.filter(function(i){return ['test_e','test_p','test_u'].indexOf(i)>=0;}).length===1);
+
+  check('the chosen ester is sent to the advisor', G._wizAdviseInputs().base_id==='test_u');
+
+  // the guidance step no longer calls the base "always included"
+  const _stackSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+  check('guidance no longer labels the base "always included"',
+    _stackSrc.indexOf('Required base (always included)')<0);
+
+  G.ENHANCEMENT_COMPOUNDS = _prevCat;
+}
+
+
+// ── Depot-ester PK: corrected half-life + uncertainty band ────────────────────
+// T-Calc modelled testosterone undecanoate at ~34 d, parsed from the hardcoded
+// TRT_GUIDE string. That is the fitted SINGLE-DOSE terminal half-life for castor-oil
+// TU — real, but the wrong figure for projecting months of accumulation, which it
+// under-predicts by ~1.65x in steady-state level. The backend now serves 56 d central —
+// the mean of the plateau-equivalents derived from BOTH primaries (CCDS 42/17 -> 53.6 d,
+// UK SmPC 37/16 -> 57.8 d) — with a 37-75 d band that is the published inter-individual
+// spread (CV 34% on trough), i.e. an individual prediction interval. See the backend's
+// docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). _tcCompInfo already
+// prefers /trt-catalog over the hardcoded fallback, so the correction flows through.
+console.log('\n── Depot-ester PK band ────────────────────────────────────');
+{
+  const _prevExtra = G._tcExtraCatalog;
+  G._tcExtraCatalog = [{id:'nebido',name:'Nebido (Testosterone Undecanoate)',dot:'#e8a020',
+    halfLife:'~56 days plateau-equivalent (37-75 d individual range)',
+    halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75}];
+
+  var _ci = G._tcCompInfo('nebido');
+  check('backend PK override reaches T-Calc (56 d, not the hardcoded 34)', _ci.halfLifeDays===56);
+  check('half-life band is exposed', _ci.halfLifeDaysLow===37 && _ci.halfLifeDaysHigh===75);
+
+  // A compound with no declared range must not produce a spurious band.
+  G._tcExtraCatalog = [];
+  var _plain = G._tcCompInfo('testoviron');
+  check('without a declared range, low == high == central',
+    _plain.halfLifeDaysLow===_plain.halfLifeDays && _plain.halfLifeDaysHigh===_plain.halfLifeDays);
+
+  G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e8a020',
+    halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75}];
+
+  // Frequent micro-dosing — the regimen the single-exponential model fits best, since
+  // dosing far inside the half-life drives peak-to-trough toward 1.
+  var _log=[], _t0=new Date('2026-01-01');
+  for (var _d=0; _d<420; _d+=2) {
+    _log.push({date:new Date(_t0.getTime()+_d*86400000).toISOString().slice(0,10),
+               compId:'nebido', doseMg:'100'});
+  }
+  var _S = G._tcFreeTSeries(_log, {});
+  check('a declared range switches the band on', _S.hasPkBand===true);
+  check('band arrays are returned', !!_S.totalLo && !!_S.totalHi);
+
+  var _wk = function(w){ return Math.min(Math.round(w*7), _S.totalDays); };
+  check('band brackets the central curve throughout',
+    [8,16,26,33,52].every(function(w){
+      var t=_wk(w);
+      return _S.totalLo[t] <= _S.total[t]+1e-9 && _S.total[t] <= _S.totalHi[t]+1e-9;
+    }));
+  check('a slower half-life accumulates to a higher level',
+    _S.totalHi[_wk(52)] > _S.total[_wk(52)] && _S.total[_wk(52)] > _S.totalLo[_wk(52)]);
+
+  // The clinically important consequence: on the corrected model, an early plateau is
+  // an illusion — week 8 is roughly halfway to where a constant dose is heading.
+  // Measure the RISE from day 0, not the absolute level: any additive endogenous
+  // baseline cancels in the difference, so this isolates the injection-driven
+  // accumulation the claim is actually about.
+  var _base  = _S.total[0];
+  var _rise  = function(w){ return _S.total[_wk(w)] - _base; };
+  var _full  = _rise(60);
+  check('week 8 covers only about half the eventual rise (accumulation lag is real)',
+    _rise(8)/_full < 0.62, 'got '+(_rise(8)/_full).toFixed(2));
+  check('still climbing at week 26', _rise(26)/_full < 0.95,
+    'got '+(_rise(26)/_full).toFixed(2));
+
+  // Washout must be sized off the SLOWEST plausible half-life or the band's tail clips.
+  check('washout window covers the high half-life',
+    _S.totalDays >= Math.round(420 + 4.3*75) - 2, 'got '+_S.totalDays);
+
+
+  // The band is anchored, not free-floating: all three series are calibrated to pass
+  // through the measured bloodwork value, so the band pinches at the anchor and widens
+  // away from it. What is known is the level at the draw; what is uncertain is the path.
+  check('per-series calibration factors are returned',
+    typeof _S.calFTPkLo === 'number' && typeof _S.calFTPkHi === 'number');
+  check('a slower half-life needs a smaller calibration factor',
+    !(_S.calFTPkLo > 0 && _S.calFTPkHi > 0) || _S.calFTPkHi <= _S.calFTPkLo);
+
+  G._tcExtraCatalog = _prevExtra;
+}
+
+
+// ── T-Calc x-axis label density ───────────────────────────────────────────────
+// The label-spacing ladder topped out at one label per 28 days. That was fine while
+// the widest span was a few months, but a slow depot ester now carries a washout tail
+// sized off its half-life, so the visible span can exceed a year — at which point
+// 28-day spacing packs ~14 labels into room for ~8 and they overlap into a smear.
+// Spacing now widens when labels genuinely would not fit, scoped to the >84 d regime
+// so every shorter window keeps its previous spacing exactly.
+console.log('\n── T-Calc x-axis label density ────────────────────────────');
+{
+  // Mirror of the in-chart calculation (the draw path needs a live canvas).
+  // Mirror of the in-chart calculation. Density is measured against the VISIBLE span,
+  // not the total series length — zoomed to a month the window is ~30 days even when the
+  // whole series runs past a year, and sizing off the total pushed the step beyond the
+  // window so only the leftmost label drew.
+  var _spacing = function(winDays, xDays, cW){
+    var e = winDays <= 7 ? 1 : winDays <= 30 ? 5 : winDays <= 28 ? 7 : winDays <= 84 ? 14 : 28;
+    if (winDays > 84) {
+      var maxL = Math.max(2, Math.floor(cW / 44));
+      while (Math.floor(winDays / e) + 1 > maxL) e *= 2;
+    }
+    var cap = Math.max(1, Math.floor(winDays / 2));
+    if (e > cap) e = cap;
+    return e;
+  };
+  var _count = function(xDays, e){ return Math.floor(xDays / e) + 1; };
+  var _W = 330;                       // representative phone chart width
+  var _fits = Math.floor(_W / 44);
+
+  check('short and medium spans keep their previous spacing',
+    _spacing(7,7,_W)===1 && _spacing(30,30,_W)===5 && _spacing(84,84,_W)===14);
+  // The regression Henrik hit: zoomed to a month over a year-long series, the step was
+  // sized off the 390-day total and exceeded the 30-day window, so only "10 Jul" drew.
+  check('month zoom over a long series still labels the window',
+    _count(30, _spacing(30, 390, _W)) >= 4, 'got '+_count(30,_spacing(30,390,_W))+' labels');
+  check('zoomed spacing never exceeds half the visible window',
+    [4,7,30,84,146,390].every(function(w){ return _spacing(w,500,_W) <= Math.max(1,Math.floor(w/2)); }));
+  check('today and week zooms still label every day',
+    _spacing(4,390,_W)===1 && _spacing(7,390,_W)===1);
+  check('a 146 d span still uses the ladder top (28 d)', _spacing(146,146,_W)===28);
+  check('a year-long depot span widens past the ladder', _spacing(390,390,_W) > 28);
+  check('labels fit at every span up to 500 d',
+    [90,146,232,390,500].every(function(x){ return _count(x,_spacing(x,x,_W)) <= _fits; }));
+  check('the old 28 d spacing would NOT have fit at 390 d (regression is real)',
+    _count(390,28) > _fits, 'old gave '+_count(390,28)+' labels, room for '+_fits);
+  check('spacing never collapses to zero or negative',
+    [7,30,84,146,232,390,500,900].every(function(x){ return _spacing(x,x,_W) >= 1; }));
+  check('a wider canvas is allowed more labels',
+    _spacing(390,390,900) <= _spacing(390,390,300));
+}
+
+
+// ── Enhanced tier: dose and cadence are independent ───────────────────────────
+// Weekly dose and injection schedule are separate concerns. The enhanced tier could
+// only express weekdays, which is meaningless for a long-ester depot (every 10-14
+// weeks) and cannot express EOD either. Cadence is now weekday OR interval, and the
+// interval range spans daily through multi-week for EVERY compound — nothing is
+// special-cased by id, because a long-ester depot can legitimately be micro-dosed daily.
+console.log('\n── Enhanced cadence: dose vs schedule ─────────────────────');
+{
+  var _cs = new Date('2026-01-01');
+  var _hits = function(c, days){
+    var n = 0;
+    for (var i = 0; i < (days||84); i++) {
+      if (G._enhHitsDay(c, new Date(_cs.getTime() + i*86400000), _cs)) n++;
+    }
+    return n;
+  };
+
+  // back-compat: entries saved before cadence existed must behave exactly as before
+  check('legacy weekday entry is unchanged', _hits({id:'x',days:[1,4]})===24);
+  check('legacy entry with no days still means every day', _hits({id:'x'})===84);
+  check('legacy entry reports as weekday mode', G._enhCadence({id:'x',days:[1,4]})==='days');
+
+  // the full range Henrik asked for: daily through multi-week
+  check('every 1 day', _hits({id:'x',cadence:'interval',freqVal:1,freqUnit:'days'})===84);
+  check('every 2 days (EOD micro-dosing)', _hits({id:'x',cadence:'interval',freqVal:2,freqUnit:'days'})===42);
+  check('every 1 week', _hits({id:'x',cadence:'interval',freqVal:1,freqUnit:'weeks'})===12);
+  check('every 12 weeks (depot label interval)',
+    _hits({id:'x',cadence:'interval',freqVal:12,freqUnit:'weeks'})===1);
+
+  // no compound is special-cased — the same interval works whatever the id
+  check('interval is not gated on compound id',
+    _hits({id:'nebido',cadence:'interval',freqVal:2,freqUnit:'days'})
+      === _hits({id:'test_p',cadence:'interval',freqVal:2,freqUnit:'days'}));
+
+  // guards: a bad frequency must never divide by zero or schedule nothing
+  check('freqVal 0 / negative / non-numeric falls back to daily',
+    ['0',-3,'abc',null,undefined].every(function(v){
+      return _hits({id:'x',cadence:'interval',freqVal:v,freqUnit:'days'})===84;
+    }));
+  check('interval with no cycle start does not crash or fire',
+    G._enhHitsDay({id:'x',cadence:'interval',freqVal:2}, new Date(), null)===false);
+
+  // switching mode must not destroy the other configuration
+  G._editBuf={cycle_start:'2026-01-01',peptides:[],enhanced:{enabled:true,compounds:[
+    {id:'x',name:'X',days:[1,4],unit:'mg/week',dose:'250'}]}};
+  var _c0=function(){return G._editBuf.enhanced.compounds[0];};
+  G.editSetEnhCadence('x','interval');
+  G.editSetEnhFreqVal('x','2');
+  check('switching to interval keeps the weekday selection',
+    (_c0().days||[]).join(',')==='1,4');
+  G.editSetEnhCadence('x','days');
+  check('switching back restores weekday mode', G._enhCadence(_c0())==='days');
+  check('and remembers the interval for next time', parseInt(_c0().freqVal,10)===2);
+
+  // labels
+  check('interval label reads naturally',
+    G._enhCadenceLabel({id:'x',cadence:'interval',freqVal:2,freqUnit:'days'})==='Every 2 days' &&
+    G._enhCadenceLabel({id:'x',cadence:'interval',freqVal:1,freqUnit:'weeks'})==='Every week');
+  check('weekday label keeps its previous rendering',
+    G._enhCadenceLabel({id:'x',days:[0,1,2,3,4,5,6]})==='Every day');
+}
+
+
+// ── T-History reads and plots; it never calculates ────────────────────────────
+// The history view loads /plasma-history and draws it. Writing is owned by T-Calc,
+// which is where the PK model lives. buildTHist used to backfill when the store looked
+// empty or the tail looked stale — so opening the tab recomputed the whole series with
+// whatever the client model was and wrote it back OVER the stored values. A model bug
+// then silently rewrote saved history, and the view disagreed with its own source of
+// truth. These tests exist so that cannot come back.
+console.log('\n── T-History: read-only view ──────────────────────────────');
+{
+  const _th = fs.readFileSync(path.join(dir,'tab-thist.js'),'utf8');
+  const _fn = _th.slice(_th.indexOf('function buildTHist()'), _th.indexOf('function _thRender('));
+  check('buildTHist exists', _fn.length > 0);
+  check('buildTHist never captures/persists', _fn.indexOf('_captureFreeTHistory') < 0);
+  check('buildTHist never recomputes the series', _fn.indexOf('_thComputeFreeT') < 0);
+  check('buildTHist never re-derives via the PK model', _fn.indexOf('_tcFreeTSeries') < 0);
+  check('buildTHist has no staleness/backfill heuristic',
+    _fn.indexOf('stale') < 0 && _fn.indexOf('backfill') < 0);
+  check('buildTHist reads /plasma-history', _fn.indexOf('/plasma-history') >= 0);
+
+  // The render path must be equally pure.
+  const _rd = _th.slice(_th.indexOf('function _thRender('), _th.indexOf('function _thRender(')+4000);
+  check('_thRender never captures or recomputes',
+    _rd.indexOf('_captureFreeTHistory') < 0 && _rd.indexOf('_thComputeFreeT') < 0);
+
+  // The view no longer contains ANY capture path — writing moved entirely to T-Calc.
+  check('the view file has no capture function at all',
+    _th.indexOf('function _captureFreeTHistory') < 0 && _th.indexOf('function _thComputeFreeT') < 0);
+  const _tc = fs.readFileSync(path.join(dir,'tab-tcalc.js'),'utf8');
+  check('T-Calc owns the write path (tcSaveHistoryFromCurve)',
+    _tc.indexOf('function tcSaveHistoryFromCurve') >= 0);
+
+  check('the file states the read-only rule for the next reader',
+    _th.indexOf('THIS VIEW READS AND PLOTS. IT NEVER CALCULATES') >= 0);
+
+  // The view never plots a future-dated point — history is the past. This also cleans up
+  // any future points an older build stored, without a re-capture or backend edit.
+  if (typeof G._thSeries === 'function') {
+    var _thSave = G._thData;
+    var _t = new Date();
+    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    var _past1 = new Date(_t.getTime()-10*86400000), _past2 = new Date(_t.getTime()-2*86400000);
+    var _future = new Date(_t.getTime()+200*86400000);
+    G._thData = [
+      {marker:'free_t', date:_mk(_past1), value:300, unit:'pmol/L'},
+      {marker:'free_t', date:_mk(_past2), value:480, unit:'pmol/L'},
+      {marker:'free_t', date:_mk(_future), value:1200, unit:'pmol/L'} ];
+    var _ser = G._thSeries();
+    check('the view drops future-dated stored points', !!_ser &&
+      (_ser.firstMs + _ser.lastDay*86400000) <= _t.getTime() + 86400000, 'lastDay maps past today');
+    check('the surviving series ends at the last PAST point (no Feb-2027 tail)',
+      !!_ser && _mk(new Date(_ser.firstMs + _ser.lastDay*86400000)) === _mk(_past2));
+    G._thData = _thSave;
   }
 }
 
