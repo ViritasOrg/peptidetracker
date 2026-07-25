@@ -1,10 +1,28 @@
 /* ── T-HISTORICAL ──────────────────────────────────────────────────────────
- * Historical free-T view. The curve is NOT re-derived here — it is loaded
- * straight from the backend (`/plasma-history`, marker `free_t`) and plotted.
- * The per-day free-T value is computed once, elsewhere, by the exact T-Calc PK
- * model and persisted (`_captureFreeTHistory`), so this view carries zero
- * calibration logic. A date slider scrubs the as-of day; week / month / year /
- * all zoom levels frame the window; injection ticks annotate the shots.
+ * Historical free-T view.
+ *
+ * ⚠️ THIS VIEW READS AND PLOTS. IT NEVER CALCULATES. ⚠️
+ * The curve is loaded straight from the backend (`/plasma-history`, marker
+ * `free_t`) and drawn. It must never re-derive, recompute, backfill or
+ * re-capture the series on load — not "just once", not "only when the store
+ * looks empty or stale". If the backend has no data the view shows an empty
+ * state and says where the data comes from.
+ *
+ * Writing is owned by T-Calc, which is where the PK model lives, and it happens
+ * ONLY on an explicit user action: the "Update saved history" button
+ * (`tcSaveHistoryFromCurve`) stores the plasma curve verbatim as displayed.
+ * Nothing captures automatically — not on load, not on profile save, not even
+ * when a past injection is logged. Stored history stays exactly as the user last
+ * saved it until they choose to refresh it.
+ *
+ * Why the rule exists: buildTHist used to backfill when the store looked empty
+ * or the tail looked stale. Opening the History tab therefore recomputed the
+ * whole series with whatever the client model happened to be and wrote it back
+ * over the stored values — so a model bug silently rewrote saved history, and
+ * the view disagreed with the source of truth it was supposed to be showing.
+ *
+ * A date slider scrubs the as-of day; week / month / year / all zoom levels
+ * frame the window; injection ticks annotate the shots.
  *
  * This file also owns the "add a past injection" modal (reachable from the
  * Today view and T-Calc) that onboards a user already mid-cycle: it records a
@@ -58,60 +76,11 @@ function _thUtcDateStr(ms) {
   var d = new Date(ms); return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
 }
 
-// Pure computation: the per-day free-T series from the merged past log, using the
-// EXACT T-Calc model (no anchor override — identical math to the plasma chart).
-// Returns { entries:[{date,marker,value,unit}], maxV, unit } or null. No I/O, so
-// it is directly testable. `entries` runs from the first injection to the last —
-// nothing is emitted past the latest injection (no decay tail).
-function _thComputeFreeT() {
-  if (typeof _tcFreeTSeries !== 'function') return null;
-  // Make sure the calibration profile (measured FT, birth year) is hydrated even
-  // if the T-Calc tab was never opened this session.
-  if (typeof _tcp !== 'undefined' && _tcp && !(parseDec(_tcp.measuredFT) > 0)) {
-    try { var c = getData('tc-profile'); if (c) Object.assign(_tcp, JSON.parse(c)); } catch(e) {}
-  }
-  var sorted = _thMergedPastLog();
-  if (!sorted.length) return null;
-  var _S;
-  try { _S = _tcFreeTSeries(sorted, {}); } catch(e) { return null; }
-  if (!_S || !_S.total || !_S.firstDate) return null;
-  var firstMs    = _S.firstDate.getTime();
-  var lastMs     = new Date(sorted[sorted.length-1].date).getTime();
-  var lastInjDay = Math.round((lastMs - firstMs) / 86400000);
-  var horizon    = Math.max(0, Math.min(_S.totalDays, lastInjDay + _TH_TAIL_DAYS));
-  var unit       = _S.unitLabel || 'pmol/L';
-  var entries = [], maxV = 0;
-  for (var k = 0; k <= horizon; k++) {
-    var v = _S.total[k] * (_S.calFT_arr ? _S.calFT_arr[k] : _S.scale);
-    if (!isFinite(v) || v < 0) v = 0;
-    if (v > maxV) maxV = v;
-    entries.push({ date: _thUtcDateStr(firstMs + k*86400000), marker: _TH_MARKER,
-                   value: Math.round(v*1000)/1000, unit: unit });
-  }
-  return { entries: entries, maxV: maxV, unit: unit };
-}
-
-// Compute the free-T history (via _thComputeFreeT) and persist it to
-// /plasma-history so the history view can just load & plot. Idempotent: it clears
-// the free_t marker and re-writes the whole current series, so removing an
-// injection is reflected too. Never stores a mis-calibrated (absurd) curve.
-// Returns a Promise that always resolves.
-function _captureFreeTHistory() {
-  if (typeof AGENT_URL === 'undefined') return Promise.resolve();
-  var out = _thComputeFreeT();
-  if (!out || !out.entries.length) return Promise.resolve();
-  var entries = out.entries;
-  // Guard: a calibrated curve that peaks absurdly high means the model could not
-  // anchor (e.g. a completed cycle with no blood test). Don't persist garbage —
-  // the view then prompts the user to add a blood test to calibrate.
-  if (out.unit === 'pmol/L' && out.maxV > _TH_MAX_SANE) return Promise.resolve();
-  var hdrs = authHeaders({ 'Content-Type': 'application/json' });
-  return fetch(AGENT_URL + '/plasma-history?marker=' + _TH_MARKER, { method: 'DELETE', headers: hdrs })
-    .then(function(){ return fetch(AGENT_URL + '/plasma-history/batch', {
-        method: 'POST', headers: hdrs, body: JSON.stringify({ entries: entries }) }); })
-    .then(function(r){ if (r && !r.ok && typeof _logHttp === 'function') _logHttp('captureFT', r.status, '/plasma-history/batch'); })
-    .catch(function(e){ if (typeof _logErr === 'function') _logErr('captureFT', e); });
-}
+// Free-T history is WRITTEN elsewhere — by T-Calc (which owns the PK model), only on an
+// explicit user action (the "Update saved history" button → tcSaveHistoryFromCurve).
+// This file does not compute or persist the curve. It fetches and plots. Deliberately no
+// _thComputeFreeT / _captureFreeTHistory here — see the header and the HISTORY VIEWS rule
+// in CLAUDE.md for why re-deriving in the view is a bug.
 
 /* ── history view (fetch & plot) ────────────────────────────────────────── */
 
@@ -141,8 +110,14 @@ function _thWindow(zoom, focusDay, totalDays) {
 // Build the render series from the stored free-T values — no PK math. Returns
 // {firstMs,totalDays,lastDay,ft:[pmol/L per day],maxFt,injections[],calibrated,unit} or null.
 function _thSeries() {
+  // History is the PAST. A stored point dated after today is never valid history — drop
+  // it before plotting. This is a display-integrity guard, not a calculation: it renders
+  // fewer of the stored points, it never invents or recomputes any. (Belt-and-braces with
+  // the capture cap in T-Calc, which no longer WRITES future points; this also cleans up
+  // any future points an older build already stored, without touching the backend.)
+  var _thToday = _thTodayStr();
   var rows = (_thData || [])
-    .filter(function(e){ return (e.marker || 'free_t') === _TH_MARKER && e.date && isFinite(e.value); })
+    .filter(function(e){ return (e.marker || 'free_t') === _TH_MARKER && e.date && isFinite(e.value) && e.date <= _thToday; })
     .sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   if (!rows.length) return null;
   var firstMs = new Date(rows[0].date + 'T12:00:00').getTime();
@@ -180,6 +155,12 @@ function _thSeries() {
 // Fetch stored free-T history and injections, then render. If the store is empty
 // but the user has injections/history, capture once (backfill) and re-fetch —
 // this self-onboards an existing user's data without any manual step.
+// Fetch stored free-T history and injections, then render. READ ONLY — this view
+// loads what the backend has and plots it. It must never compute, re-derive, backfill
+// or re-capture the curve: writing is owned by T-Calc, which is where the PK model
+// lives. An earlier version backfilled from here when the store looked empty or stale,
+// which meant opening the History tab silently recomputed the whole series with the
+// current client model and wrote it back over the stored values.
 function buildTHist() {
   var host = document.getElementById('thist-body');
   if (!host) return;
@@ -193,25 +174,6 @@ function buildTHist() {
   ]).then(function(res){
     _thData       = Array.isArray(res[0]) ? res[0] : [];
     _thInjections = Array.isArray(res[1]) ? res[1] : [];
-    var mergedLog = _thMergedPastLog();
-    var haveInjections = mergedLog.length > 0;
-    // Stored data is stale if it was written by an older build (e.g. the curve
-    // extends past the last injection — the removed decay tail). Re-capture so the
-    // history matches the current model without any manual step.
-    var lastInjDate = haveInjections ? mergedLog[mergedLog.length-1].date : '';
-    var storedMax = '';
-    _thData.forEach(function(e){ if ((e.marker||'free_t') === _TH_MARKER && e.date > storedMax) storedMax = e.date; });
-    var staleTail = haveInjections && storedMax && storedMax > lastInjDate;
-    var haveHistory = _thData.length > 0 && !staleTail;
-    if (!haveHistory && haveInjections) {
-      _captureFreeTHistory().then(function(){
-        return fetch(AGENT_URL + '/plasma-history?marker=' + _TH_MARKER, { headers: hdrs }).then(function(r){ return r.ok ? r.json() : []; });
-      }).then(function(rows){
-        _thData = Array.isArray(rows) ? rows : [];
-        if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); }
-      }).catch(function(){ if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); } });
-      return;
-    }
     if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); }
   });
 }
@@ -352,7 +314,10 @@ function _piHtml() {
   var compOpts = comps.map(function(c){ return '<option value="'+_esc(c.id)+'"'+(c.id===d.compId?' selected':'')+'>'+_esc(c.name)+'</option>'; }).join('');
   var units = ['mg','ml','IU','µg','%'];
   var unitOpts = units.map(function(u){ return '<option'+(u===d.unit?' selected':'')+'>'+u+'</option>'; }).join('');
-  var times = [{id:'',label:'—'},{id:'AM',label:'AM'},{id:'PM',label:'PM'}];
+  var times = [{id:'',label:'—'}].concat(
+    (typeof TIME_SLOTS!=='undefined'?TIME_SLOTS:['AM','PM']).map(function(t){
+      return {id:t,label:(typeof _slotLabel==='function')?_slotLabel(t):t};
+    }));
   var timeBtns = times.map(function(tm){
     var sel = (d.time||'') === tm.id;
     return '<button onclick="_piSetField(\'time\',\''+tm.id+'\')" style="flex:1;background:'+(sel?'rgba(224,80,80,0.22)':'none')+';color:'+(sel?'#e05050':'var(--muted2)')+';border:1px solid '+(sel?'#e0505066':'var(--border)')+';border-radius:8px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+tm.label+'</button>';
@@ -434,8 +399,11 @@ function savePastInjection() {
       if (typeof buildToday === 'function') buildToday();
       if (typeof buildWeekStrip === 'function') buildWeekStrip();
       if (typeof buildSchedule === 'function') buildSchedule();
-      // Recompute & persist the free-T history, then refresh the view if open.
-      _captureFreeTHistory().then(function(){ if (_currentTab === 'thist') buildTHist(); });
+      // Do NOT auto-write history here. Logging a past injection changes the underlying
+      // data, but stored history only updates when the user explicitly asks (the
+      // "Update saved history" button in T-Calc). Refresh the view so the new injection
+      // tick shows; the stored curve is left exactly as the user last saved it.
+      if (_currentTab === 'thist') buildTHist();
     })
     .catch(function(e){ if (typeof _logErr === 'function') _logErr('savePastInj', e); if (err) err.textContent = 'Network error — try again.'; });
 }

@@ -59,8 +59,10 @@ function _wizFlow(){
   var steps=['cycle','goals'];
   if(hasPeps){steps.push('peptides');steps.push('check');steps.push('configure');}
   if(hasTRT)steps.push('trt');
-  // 'advise' (guided recommendation) precedes the raw Enhanced compound list.
-  if(hasEnhanced){steps.push('advise');steps.push('enhanced');}
+  // Testosterone base is chosen first — every enhanced cycle runs on one, and which
+  // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
+  // recommendation), then the raw Enhanced compound list.
+  if(hasEnhanced){steps.push('base');steps.push('advise');steps.push('enhanced');}
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
   var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
@@ -68,8 +70,8 @@ function _wizFlow(){
   steps.push('review');
   return steps;
 }
-var _WIZ_STEP_LABELS={advise:'GUIDANCE',nutrition:'MACROS'};
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
+var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS'};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -140,7 +142,7 @@ function openTemplatePicker(preferGoals){
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;display:flex;align-items:flex-end;justify-content:center';
   ov.onclick=function(e){if(e.target===ov)_closeTemplatePicker();};
   var cards=tpl.map(function(t){
-    var comps=[].concat((t.peptides||[]).map(function(p){return {name:p.name,dot:p.dot,dose:(p.dose_am||'')+(p.unit_am?' '+p.unit_am:'')};}),
+    var comps=[].concat((t.peptides||[]).map(function(p){var _u=_slotFirstUnit(p);return {name:p.name,dot:p.dot,dose:_slotFirstDose(p)+(_u?' '+_u:'')};}),
       ((t.trt&&t.trt.compounds)||[]).map(function(c){return {name:c.name,dot:c.dot,dose:(c.dose||'')+(c.unit?' '+c.unit:'')};}),
       ((t.enhanced&&t.enhanced.compounds)||[]).map(function(c){return {name:c.name,dot:c.dot,dose:(c.dose||'')+(c.unit?' '+c.unit:'')};}));
     var rows=comps.map(function(c){return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="width:7px;height:7px;border-radius:50%;background:'+(c.dot||'#888')+';flex-shrink:0"></span><span style="font-size:13px;color:var(--text);flex:1">'+_esc(c.name)+'</span><span style="font-size:12px;color:var(--muted2);font-family:var(--font-mono)">'+_esc(c.dose)+'</span></div>';}).join('');
@@ -171,7 +173,7 @@ async function useTemplate(tid){
   if(_userStacks.length>=4){alert('You already have 4 protocols — remove one first.');return;}
   var _t0=new Date(NOW);_t0.setHours(0,0,0,0);
   var proto={name:t.name,cycle_length:t.cycle_length||12,cycle_start:dateKey(_t0),
-    peptides:(t.peptides||[]).map(function(p){return {id:p.id,name:p.name,dot:p.dot,times:(p.times||['AM']).slice(),days:(p.days||[0,1,2,3,4,5,6]).slice(),dose_am:p.dose_am||'',dose_pm:p.dose_pm||'',unit_am:p.unit_am||'',unit_pm:p.unit_pm||'',active:true};}),
+    peptides:(t.peptides||[]).map(function(p){var _e={id:p.id,name:p.name,dot:p.dot,times:(p.times||['AM']).slice(),days:(p.days||[0,1,2,3,4,5,6]).slice(),active:true};TIME_SLOTS.forEach(function(tm){var k=_slotKey(tm);_e['dose_'+k]=p['dose_'+k]||'';_e['unit_'+k]=p['unit_'+k]||'';});return _e;}),
     trt:(t.trt&&t.trt.compounds&&t.trt.compounds.length)?{enabled:true,compounds:t.trt.compounds.map(function(c){return {id:c.id,name:c.name,dot:c.dot,dose:c.dose,unit:c.unit,freqVal:c.freqVal,freqUnit:c.freqUnit,days:(c.days||[1]).slice()};})}:{},
     enhanced:(t.enhanced&&t.enhanced.compounds&&t.enhanced.compounds.length)?{enabled:true,compounds:t.enhanced.compounds.map(function(c){return {id:c.id,name:c.name,dot:c.dot,dose:c.dose,unit:c.unit,days:(c.days||[0,1,2,3,4,5,6]).slice()};})}:{}
   };
@@ -213,10 +215,11 @@ function _collectEditInputs(){
   delete _editBuf.end_date;
   (_editBuf.peptides||[]).forEach(function(p,pi){
     var el;
-    if((el=document.getElementById('ed-dam-'+pi)))p.dose_am=el.value;
-    if((el=document.getElementById('ed-dpm-'+pi)))p.dose_pm=el.value;
-    if((el=document.getElementById('ed-uam-'+pi)))p.unit_am=el.value;
-    if((el=document.getElementById('ed-upm-'+pi)))p.unit_pm=el.value;
+    TIME_SLOTS.forEach(function(t){
+      var k=_slotKey(t);
+      if((el=document.getElementById('ed-d'+k+'-'+pi)))p['dose_'+k]=el.value;
+      if((el=document.getElementById('ed-u'+k+'-'+pi)))p['unit_'+k]=el.value;
+    });
     if((el=document.getElementById('ed-note-'+pi)))p.note=el.value;
     if((el=document.getElementById('ed-sd-'+pi))){if(el.value)p.start_date=el.value;else delete p.start_date;}
   });
@@ -279,8 +282,11 @@ function renderStackEditor(){
           html+='<button class="info-btn" onclick="showPeptideCard(\''+p.id+'\')">ℹ</button>';
           html+='</div>';
           var doseStr='';
-          if(p.dose_am)doseStr+='AM: '+_esc(_doseLabel(p.id,p.dose_am,p.unit_am||'µg'));
-          if(p.dose_pm)doseStr+=(doseStr?' · ':'')+'PM: '+_esc(_doseLabel(p.id,p.dose_pm,p.unit_pm||'µg'));
+          TIME_SLOTS.forEach(function(t){
+            var k=_slotKey(t);
+            if(!p['dose_'+k])return;
+            doseStr+=(doseStr?' · ':'')+_slotLabel(t)+': '+_esc(_doseLabel(p.id,p['dose_'+k],p['unit_'+k]||'µg'));
+          });
           if(doseStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+doseStr+'</div>';
           if(daysStr)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">'+_esc(daysStr)+'</div>';
           if(p.start_date)html+='<div style="font-size:12px;color:var(--muted2);padding-left:16px;">Start: '+_esc(p.start_date)+'</div>';
@@ -340,10 +346,6 @@ function renderStackEditor(){
 }
 function _renderEditPep(p,pi){
   var eff=_effectiveDose(p,_editBuf.cycle_start);
-  var dispAmDose=eff?String(eff.dose):(p.dose_am||'');
-  var dispPmDose=eff?String(eff.dose):(p.dose_pm||'');
-  var dispAmUnit=_canonUnit(eff?eff.unit:(p.unit_am||'mg'));
-  var dispPmUnit=_canonUnit(eff?eff.unit:(p.unit_pm||'mg'));
   var dot=p.dot||'#888';
   var html='<div class="cfg-block" style="margin-bottom:8px;">';
   html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">';
@@ -353,20 +355,19 @@ function _renderEditPep(p,pi){
   html+='<button onclick="_collectEditInputs();editRemovePeptide('+pi+')" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;padding:0;line-height:1;">×</button>';
   html+='</div>';
   html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">';
-  ['AM','PM'].forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="editToggleTime('+pi+',\''+t+'\')">'+t+'</div>';});
+  TIME_SLOTS.forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="editToggleTime('+pi+',\''+t+'\')">'+_slotLabel(t)+'</div>';});
   html+='</div></div>';
-  if(p.times&&p.times.includes('AM')){
-    html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row">';
-    html+='<input id="ed-dam-'+pi+'" class="dose-in" type="text" value="'+_esc(dispAmDose)+'" oninput="_editBuf.peptides['+pi+'].dose_am=this.value" placeholder="0">';
-    html+='<select id="ed-uam-'+pi+'" class="unit-sel" onchange="_editBuf.peptides['+pi+'].unit_am=this.value">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===dispAmUnit?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select>';
+  TIME_SLOTS.forEach(function(t){
+    if(!(p.times&&p.times.includes(t)))return;
+    var k=_slotKey(t);
+    var dispDose=eff?String(eff.dose):(p['dose_'+k]||'');
+    var dispUnit=_canonUnit(eff?eff.unit:(p['unit_'+k]||_slotFirstUnit(p)||'mg'));
+    html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row">';
+    html+='<input id="ed-d'+k+'-'+pi+'" class="dose-in" type="text" inputmode="decimal" value="'+_esc(dispDose)+'" oninput="_editBuf.peptides['+pi+'].dose_'+k+'=this.value" placeholder="0">';
+    html+='<select id="ed-u'+k+'-'+pi+'" class="unit-sel" onchange="_editBuf.peptides['+pi+'].unit_'+k+'=this.value">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===dispUnit?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select>';
     html+='</div></div>';
-  }
-  if(p.times&&p.times.includes('PM')){
-    html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row">';
-    html+='<input id="ed-dpm-'+pi+'" class="dose-in" type="text" value="'+_esc(dispPmDose)+'" oninput="_editBuf.peptides['+pi+'].dose_pm=this.value" placeholder="0">';
-    html+='<select id="ed-upm-'+pi+'" class="unit-sel" onchange="_editBuf.peptides['+pi+'].unit_pm=this.value">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===dispPmUnit?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select>';
-    html+='</div></div>';
-  }
+  });
+  html+=_renderSlotTimingHint(p.id,p.times);
   html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
   DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="editToggleDay(this,'+pi+','+di+')">'+d+'</div>';});
   html+='</div></div>';
@@ -397,7 +398,7 @@ function editToggleDay(el,pi,di){
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
 function editToggleTRT(){if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
 function editToggleTRTCompound(id){if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
-function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -431,7 +432,7 @@ function editAddPeptide(){
 function editPickPeptide(id){
   var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});if(!cat)return;
   var d=cat.dflt;
-  _editBuf.peptides.push({id:cat.id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),dose_am:d.doseAm,dose_pm:d.dosePm,unit_am:d.unitAm,unit_pm:d.unitPm,note:'',active:true});
+  _editBuf.peptides.push(Object.assign({id:cat.id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),note:'',active:true},_slotFieldsFromDflt(d)));
   if(window._addPepOverlay){try{document.body.removeChild(window._addPepOverlay);}catch(e){}window._addPepOverlay=null;}
   renderStackEditor();
 }
@@ -442,9 +443,10 @@ async function saveEditBuf(){
     if(!p.dose_phases||!p.dose_phases.length)return;
     var eff=_effectiveDose(p,_editBuf.cycle_start);
     if(!eff)return;
-    var amChg=p.times&&p.times.includes('AM')&&String(p.dose_am||'')!==String(eff.dose);
-    var pmChg=p.times&&p.times.includes('PM')&&String(p.dose_pm||'')!==String(eff.dose);
-    if(amChg||pmChg)delete p.dose_phases;
+    var chg=TIME_SLOTS.some(function(t){
+      return p.times&&p.times.includes(t)&&String(p['dose_'+_slotKey(t)]||'')!==String(eff.dose);
+    });
+    if(chg)delete p.dose_phases;
   });
   var _oldProtoCids=_getProtocolCompoundIds(_userStacks[_editIdx]||{});
   _userStacks[_editIdx]=_editBuf;
@@ -481,7 +483,7 @@ function wizStep4(body,footer){
   html+='<div class="wiz-section">Summary</div>';
   if(_wiz.peptides.length){
     _wiz.peptides.forEach(function(p){
-      var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));
+      var dose=_slotDoseSummary(p,'/',false)||'?';
       var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'× / week':'?';
       html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';
     });
@@ -500,19 +502,20 @@ function wizSetStackName(val){_wiz.stackName=val;}
 function _synthesizeProtocol(weekly){
   var seen={};var peptides=[];
   weekly.forEach(function(w){
-    var baseId=w.id.replace(/-am$|-pm$/,'');
+    var baseId=w.id.replace(/-am$|-mid$|-pm$/,'');
     var pn=(w.name||'').toLowerCase().replace(/\s*\(.*$/,'').trim();
     var catM=PEPTIDE_CAT.find(function(c){var cn=c.name.toLowerCase().replace(/\s*\(.*$/,'').trim();return pn===cn||cn.startsWith(pn)||pn.startsWith(cn);});
     var pepId=catM?catM.id:baseId;
-    if(!seen[pepId]){seen[pepId]={id:pepId,name:w.name,dot:w.dot,days:w.dow.slice(),times:[],dose_am:'',dose_pm:'',unit_am:'mg',unit_pm:'mg',note:'',active:true};peptides.push(seen[pepId]);}
+    if(!seen[pepId]){var _ne={id:pepId,name:w.name,dot:w.dot,days:w.dow.slice(),times:[],note:'',active:true};TIME_SLOTS.forEach(function(tm){var k=_slotKey(tm);_ne['dose_'+k]='';_ne['unit_'+k]='mg';});seen[pepId]=_ne;peptides.push(_ne);}
     var e=seen[pepId];
     w.dow.forEach(function(d){if(!e.days.includes(d))e.days.push(d);});
     var t=w.time||'AM';
     if(!e.times.includes(t))e.times.push(t);
     var rawPart=w.detail?w.detail.split('—')[0].trim():'';
     var dm=rawPart.match(/^([\d.]+)\s*(mg|mcg|µg|IU|ml)?$/);
-    if(dm){if(t==='AM'){e.dose_am=dm[1];e.unit_am=dm[2]||'mg';}else{e.dose_pm=dm[1];e.unit_pm=dm[2]||'mg';}}
-    else{if(t==='AM')e.dose_am=rawPart;else e.dose_pm=rawPart;}
+    var _k=_slotKey(TIME_SLOTS.indexOf(t)>=0?t:'AM');
+    if(dm){e['dose_'+_k]=dm[1];e['unit_'+_k]=dm[2]||'mg';}
+    else{e['dose_'+_k]=rawPart;}
     if(!w.startDate&&!w.endDate){e._permanentDose=true;}
     else if(!e._permanentDose){var _fmt=function(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};if(w.startDate&&!e.start_date)e.start_date=_fmt(w.startDate);if(w.endDate&&!e.end_date)e.end_date=_fmt(w.endDate);}
   });
@@ -598,7 +601,7 @@ function showPeptideCard(id){
   var userPep=_userProtocol&&_userProtocol.peptides?_userProtocol.peptides.find(function(p){return p.id===id;}):null;
   var myDoseHtml='';
   if(userPep){
-    var parts=[];if(userPep.dose_am)parts.push('AM: '+_doseLabel(userPep.id,userPep.dose_am,userPep.unit_am||'µg'));if(userPep.dose_pm)parts.push('PM: '+_doseLabel(userPep.id,userPep.dose_pm,userPep.unit_pm||'µg'));
+    var parts=[];TIME_SLOTS.forEach(function(t){var k=_slotKey(t);if(userPep['dose_'+k])parts.push(_slotLabel(t)+': '+_doseLabel(userPep.id,userPep['dose_'+k],userPep['unit_'+k]||'µg'));});
     if(parts.length)myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:4px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div><div style="font-size:13px;color:var(--text);">'+parts.join(' · ')+'</div></div>';
   }
   var benefitsHtml=(cat.benefits||[]).map(function(b){return'<li>'+b+'</li>';}).join('');
@@ -645,8 +648,8 @@ function showEnhancedCard(id){
     var parts=[];
     var eCat=(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===id;});
     var isAmPm=userComp.amPm||(eCat&&eCat.amPm);
-    activeDose=isAmPm?(parseDec(userComp.dose_am||0)+parseDec(userComp.dose_pm||0)):parseDec(userComp.dose||0);
-    if(isAmPm){if(userComp.dose_am)parts.push('AM: '+userComp.dose_am+' '+(userComp.unit?(userComp.unit.split('/')[0]):''));if(userComp.dose_pm)parts.push('PM: '+userComp.dose_pm+' '+(userComp.unit?(userComp.unit.split('/')[0]):''));}
+    activeDose=isAmPm?_enhSplitTotal(userComp):parseDec(userComp.dose||0);
+    if(isAmPm){_enhTimes(userComp).forEach(function(t){var k=_slotKey(t);if(userComp['dose_'+k])parts.push(_slotLabel(t)+': '+userComp['dose_'+k]+' '+(userComp.unit?(userComp.unit.split('/')[0]):''));});}
     else if(userComp.dose)parts.push(userComp.dose+(userComp.unit?' '+userComp.unit:''));
     if(parts.length)myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div><div style="font-size:13px;color:var(--text);">'+parts.join(' · ')+'</div></div>';
   }
@@ -658,6 +661,162 @@ function showEnhancedCard(id){
 // ── Wizard ────────────────────────────────────────────────────────────────────
 var GOAL_DEFS=[{id:'muscle',label:'Muscle & Recovery',icon:'💪'},{id:'recovery',label:'Injury & Healing',icon:'🩹'},{id:'skin',label:'Skin & Anti-aging',icon:'✨'},{id:'fat',label:'Fat Loss',icon:'🔥'},{id:'cognitive',label:'Cognitive',icon:'🧠'},{id:'antiaging',label:'Longevity',icon:'⏳'},{id:'enhanced',label:'Enhanced Cycle',icon:'💉'}];
 var UNITS=['mg','µg','IU','ml','%'];var UNIT_LABELS={mcg:'µg'};
+// Intra-day dose slot constants (TIME_SLOTS / TIME_LABELS / TIME_RANK / _slotLabel /
+// _slotKey) are defined in index.html, which loads before every tab file.
+// Fasted-window qualifier per slot, shown for GH-axis compounds only. GH's lipolytic
+// action is opposed by insulin, so each dose wants a low-insulin window: AM rides the
+// overnight fast, the other two need ~2 h clear of the last meal. Not shown for other
+// groups, where "fasted" is not the documented instruction.
+var SLOT_FASTED_HINT={AM:'fasted',MID:'2 h fasted',PM:'2 h fasted'};
+function _isGhAxis(id){
+  var cat=(typeof PEPTIDE_CAT!=='undefined')?PEPTIDE_CAT.find(function(c){return c.id===id;}):null;
+  if(cat&&cat.cg&&(cat.cg.indexOf('hgh')>=0||cat.cg.indexOf('ghrh')>=0||cat.cg.indexOf('ghrp')>=0))return true;
+  // Enhanced-tier compounds come from the backend catalogue and carry no `cg` array —
+  // identify them by their class/group instead. HGH is reachable from both tiers, so
+  // the fasted guidance must resolve from either catalogue.
+  var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;}):null;
+  if(eCat&&(eCat.cls==='ghaxis'||eCat.group==='GH Axis'))return true;
+  return false;
+}
+// Build the per-slot dose/unit fields of a stack peptide item from a PEPTIDE_CAT
+// `dflt` block. Catalogue keys are camelCase per slot (doseAm/doseMid/dosePm).
+function _slotFieldsFromDflt(d){
+  var o={};
+  TIME_SLOTS.forEach(function(t){
+    var k=_slotKey(t),C=k.charAt(0).toUpperCase()+k.slice(1);
+    o['dose_'+k]=d['dose'+C]||'';
+    // A slot the catalogue has no explicit unit for (e.g. MID) inherits the
+    // compound's unit rather than falling back to a generic 'mg'.
+    o['unit_'+k]=d['unit'+C]||d.unitAm||d.unitPm||'';
+  });
+  return o;
+}
+// "AM: 2 IU · Pre-GYM: 2 IU · PM: 2 IU" — used by every stack/wizard summary so all
+// three slots surface consistently.
+function _slotDoseSummary(p,sep,withLabel){
+  return TIME_SLOTS.filter(function(t){return p['dose_'+_slotKey(t)];})
+    .map(function(t){var k=_slotKey(t);
+      return(withLabel?_slotLabel(t)+': ':'')+p['dose_'+k]+(p['unit_'+k]||'');})
+    .join(sep||' · ');
+}
+// First populated slot's dose/unit, in chronological order — for the single-value
+// contexts (dose guidance, ramp seeding) that need one representative figure.
+function _slotFirstDose(p){
+  for(var i=0;i<TIME_SLOTS.length;i++){var v=p['dose_'+_slotKey(TIME_SLOTS[i])];if(v)return v;}
+  return '';
+}
+function _slotFirstUnit(p){
+  for(var i=0;i<TIME_SLOTS.length;i++){var v=p['unit_'+_slotKey(TIME_SLOTS[i])];if(v)return v;}
+  return '';
+}
+// ── Enhanced-tier cadence ─────────────────────────────────────────────────────
+// Weekly dose and injection schedule are independent. A compound is scheduled either by
+// weekday ("Mon + Thu") or by interval ("every 2 days", "every 12 weeks") — the ester
+// decides which is meaningful, and the range must span daily through multi-week for
+// every compound. Nothing is special-cased by id: a long-ester depot can be micro-dosed
+// daily and a short ester can be run on fixed weekdays, and the app must express both.
+//
+// Back-compat: entries saved before this existed have no `cadence`, so they default to
+// 'days' and behave exactly as before.
+function _enhCadence(c){ return c&&c.cadence==='interval' ? 'interval' : 'days'; }
+function _enhFreqDays(c){
+  var n=parseInt(c&&c.freqVal,10); if(!(n>0))n=1;
+  return (c&&c.freqUnit==='weeks') ? n*7 : n;
+}
+// Does this compound inject on date d? cycleStart anchors interval counting.
+function _enhHitsDay(c,d,cycleStart){
+  if(_enhCadence(c)==='interval'){
+    var step=_enhFreqDays(c);
+    if(!(step>0)||!cycleStart)return false;
+    var since=Math.floor((d-cycleStart)/86400000);
+    return since>=0 && since%step===0;
+  }
+  return !(c.days&&c.days.length) || c.days.includes(d.getDay());
+}
+// Renders the schedule control: mode chips, then either weekday chips or an interval
+// input. `pfx` is 'edit' or 'wiz' so the same markup drives both the stack editor and
+// the wizard — they had duplicate day-chip blocks before this.
+function _renderEnhCadence(c,selData,pfx){
+  var mode=_enhCadence(selData);
+  var h='<div class="cfg-row"><div class="cfg-lbl">Schedule</div><div class="time-chips">'
+    +[['days','Weekly days'],['interval','Every…']].map(function(m){
+        return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'+pfx+'SetEnhCadence(\''+c.id+'\',\''+m[0]+'\')">'+m[1]+'</div>';
+      }).join('')
+    +'</div></div>';
+  if(mode==='interval'){
+    var n=parseInt(selData.freqVal,10); if(!(n>0))n=1;
+    var u=(selData.freqUnit==='weeks')?'weeks':'days';
+    h+='<div class="cfg-row"><div class="cfg-lbl">Inject every</div><div class="dose-row">'
+      +'<input class="dose-in" type="number" min="1" inputmode="numeric" value="'+n+'" oninput="'+pfx+'SetEnhFreqVal(\''+c.id+'\',this.value)" style="max-width:70px;">'
+      +'<select class="unit-sel" onchange="'+pfx+'SetEnhFreqUnit(\''+c.id+'\',this.value)">'
+      +['days','weeks'].map(function(x){return '<option'+(x===u?' selected':'')+'>'+x+'</option>';}).join('')
+      +'</select></div></div>';
+  }else{
+    h+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'
+      +DAYS_ORDER.map(function(di){
+        return '<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="'+pfx+'SetEnhDays(\''+c.id+'\','+di+')">'+DAYS_SHORT[di]+'</div>';
+      }).join('')
+      +'</div></div>';
+  }
+  return h;
+}
+// Human-readable schedule, for summaries.
+function _enhCadenceLabel(c){
+  if(_enhCadence(c)==='interval'){
+    var n=parseInt(c.freqVal,10); if(!(n>0))n=1;
+    var u=(c.freqUnit==='weeks')?'week':'day';
+    return n===1 ? ('Every '+u) : ('Every '+n+' '+u+'s');
+  }
+  var ds=c.days||[];
+  if(!ds.length||ds.length===7)return 'Every day';
+  // Keep the existing weekday rendering ("M/Th") — only the interval mode is new.
+  return DAYS_ORDER.filter(function(di){return ds.includes(di);}).map(function(di){return DAYS_SHORT[di];}).join('/');
+}
+// Which intra-day slots a split enhanced compound is scheduled in, in chronological
+// order. `amPm` is the legacy field name for "this compound is split across intra-day
+// slots" — kept as-is so existing stored stacks keep working; it now covers three
+// slots, not two, and `times` says which of them are actually used.
+//
+// Back-compat: stacks saved before `times` existed have no such field. For those the
+// schedule is inferred from which slot doses are populated — which is exactly what
+// used to decide whether a slot generated an injection, so an existing stack keeps
+// the schedule it already had. If none are populated, fall back to AM+PM, the pair
+// that was always rendered before.
+function _enhTimes(c){
+  if(Array.isArray(c.times)&&c.times.length)
+    return TIME_SLOTS.filter(function(t){return c.times.indexOf(t)>=0;});
+  var inferred=TIME_SLOTS.filter(function(t){
+    var v=c['dose_'+_slotKey(t)];
+    return v&&parseDec(v)!==0;
+  });
+  return inferred.length?inferred:['AM','PM'];
+}
+// Total daily dose of a split enhanced compound — only slots it is scheduled in, so a
+// deselected slot's leftover value never inflates the total shown in dose guidance.
+function _enhSplitTotal(c){
+  var n=0;
+  _enhTimes(c).forEach(function(t){n+=parseDec(c['dose_'+_slotKey(t)]||0)||0;});
+  return n;
+}
+// Seed a stack entry's per-slot doses from the enhanced catalogue defaults
+// (defaultDoseAm / defaultDoseMid / defaultDosePm), and set the initial schedule to
+// whichever slots the catalogue actually gives a dose for.
+function _enhSeedSlots(e,cat){
+  TIME_SLOTS.forEach(function(t){
+    var k=_slotKey(t),C=k.charAt(0).toUpperCase()+k.slice(1);
+    e['dose_'+k]=String(cat['defaultDose'+C]||'');
+  });
+  var seeded=TIME_SLOTS.filter(function(t){return parseDec(e['dose_'+_slotKey(t)]||0)!==0;});
+  e.times=seeded.length?seeded:['AM'];
+}
+function _renderSlotTimingHint(id,times){
+  if(!_isGhAxis(id)||!times||!times.length)return'';
+  var parts=TIME_SLOTS.filter(function(t){return times.indexOf(t)>=0;})
+    .map(function(t){return _slotLabel(t)+' ('+SLOT_FASTED_HINT[t]+')';});
+  if(!parts.length)return'';
+  return'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin:2px 0 6px">'
+    +'Dose in a low-insulin window — '+_esc(parts.join(' · '))+'.</div>';
+}
 var DAYS_SHORT=['S','M','T','W','T','F','S'];
 var DAYS_ORDER=[1,2,3,4,5,6,0]; // display order: Mon first (Sun last)
 
@@ -757,7 +916,7 @@ function wizTogglePep(id){
     var cat=PEPTIDE_CAT.find(function(c){return c.id===id;});
     if(!cat)return;
     var d=cat.dflt;
-    _wiz.peptides.push({id:id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),dose_am:d.doseAm,dose_pm:d.dosePm,unit_am:d.unitAm,unit_pm:d.unitPm,note:'',active:true});
+    _wiz.peptides.push(Object.assign({id:id,name:cat.name,dot:cat.dot,times:d.times.slice(),days:d.days.slice(),note:'',active:true},_slotFieldsFromDflt(d)));
   } else {
     _wiz.peptides.splice(idx,1);
   }
@@ -849,7 +1008,7 @@ function _renderRampSection(p,pi){
     return'<div style="display:flex;align-items:center;gap:5px;margin-bottom:5px">'
       +'<span style="font-size:11px;color:var(--muted2);white-space:nowrap;min-width:30px">Wk</span>'
       +'<input class="dose-in" type="number" min="0" value="'+ph.w+'" oninput="wizSetPhase('+pi+','+phi+',\'w\',+this.value)" style="width:44px;text-align:center;">'
-      +'<input class="dose-in" type="text" value="'+String(ph.d||'')+'" oninput="wizSetPhase('+pi+','+phi+',\'d\',this.value)" placeholder="dose" style="width:60px;">'
+      +'<input class="dose-in" type="text" inputmode="decimal" value="'+String(ph.d||'')+'" oninput="wizSetPhase('+pi+','+phi+',\'d\',this.value)" placeholder="dose" style="width:60px;">'
       +'<select class="unit-sel" onchange="wizSetPhase('+pi+','+phi+',\'u\',this.value)">'+uOpts+'</select>'
       +'<button onclick="wizRemovePhase('+pi+','+phi+')" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'
       +'</div>';
@@ -868,14 +1027,18 @@ function wizStepConfig(body,footer){
     var dot=p.dot||(cat?cat.dot:'#888');
     html+='<div class="cfg-block"><div class="cfg-name"><div style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex-shrink:0"></div>'+p.name+'<button class="info-btn" style="margin-left:auto;" onclick="showPeptideCard(\''+p.id+'\')">ℹ</button></div>';
     html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">';
-    ['AM','PM'].forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="wizToggleTime('+pi+',\''+t+'\')">'+t+'</div>';});
+    TIME_SLOTS.forEach(function(t){html+='<div class="time-chip'+(p.times&&p.times.includes(t)?' sel':'')+'" onclick="wizToggleTime('+pi+',\''+t+'\')">'+_slotLabel(t)+'</div>';});
     html+='</div></div>';
-    if(p.times&&p.times.includes('AM')){html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_am||'')+'" oninput="wizSetDose('+pi+',\'am\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'am\',this.value)">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===_canonUnit(p.unit_am||'mg')?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select></div></div>';}
-    if(p.times&&p.times.includes('PM')){html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(p.dose_pm||'')+'" oninput="wizSetDose('+pi+',\'pm\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\'pm\',this.value)">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===_canonUnit(p.unit_pm||'mg')?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select></div></div>';}
+    TIME_SLOTS.forEach(function(t){
+      if(!(p.times&&p.times.includes(t)))return;
+      var k=_slotKey(t);
+      html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(p['dose_'+k]||'')+'" oninput="wizSetDose('+pi+',\''+k+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\''+k+'\',this.value)">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===_canonUnit(p['unit_'+k]||_slotFirstUnit(p)||'mg')?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select></div></div>';
+    });
+    html+=_renderSlotTimingHint(p.id,p.times);
     html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
     DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
     html+='</div></div><div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
-    html+=_renderDoseGuide(p.id,parseDec(p.dose_am||p.dose_pm||0)||0);
+    html+=_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0);
     html+=_renderRampSection(p,pi);
     html+='</div>';
   });
@@ -885,8 +1048,8 @@ function wizStepConfig(body,footer){
 
 function wizToggleTime(pi,t){var p=_wiz.peptides[pi];if(!p)return;if(!p.times)p.times=[];var i=p.times.indexOf(t);if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function wizToggleDay(pi,di){var p=_wiz.peptides[pi];if(!p)return;if(!p.days)p.days=[];var i=p.days.indexOf(di);if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.dose_am=val;else p.dose_pm=val;}
-function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;if(slot==='am')p.unit_am=val;else p.unit_pm=val;}
+function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['dose_'+_slotKey(slot)]=val;}
+function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['unit_'+_slotKey(slot)]=val;}
 function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
 function wizToggleRamp(pi){
   var p=_wiz.peptides[pi];if(!p)return;
@@ -896,7 +1059,7 @@ function wizToggleRamp(pi){
     // Pre-populate with DEFAULT_PHASES for this compound, or a single phase at current dose
     var def=DEFAULT_PHASES&&DEFAULT_PHASES[p.id];
     if(def){p.dose_phases=def.map(function(ph){return{w:ph.w,d:ph.d,u:ph.u};});}
-    else{var u=p.unit_am||p.unit_pm||'mg';p.dose_phases=[{w:0,d:p.dose_am||p.dose_pm||'',u:u}];}
+    else{var u=_slotFirstUnit(p)||'mg';p.dose_phases=[{w:0,d:_slotFirstDose(p),u:u}];}
   }
   wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
@@ -1278,7 +1441,7 @@ function _getDynamicEnhancedDoses(d,withIds){
       if(st.cycle_length&&daysDiff>=st.cycle_length*7)return;
     }
     (st.enhanced.compounds||[]).forEach(function(c){
-      if(c.days&&c.days.length&&!c.days.includes(d.getDay()))return;
+      if(!_enhHitsDay(c,d,st.cycle_start?parseLocalDate(st.cycle_start):null))return;
       var key=c.id+'_'+si;
       if(seenIds[key])return;
       seenIds[key]=true;
@@ -1288,16 +1451,13 @@ function _getDynamicEnhancedDoses(d,withIds){
       var eCat=(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;});
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
       if(isAmPm){
-        if(c.dose_am&&parseDec(c.dose_am)!==0){
-          var amEntry={name:c.name,detail:c.dose_am+(baseUnit?' '+baseUnit:''),time:'AM',dot:dot,compId:c.id};
-          if(withIds)amEntry.id=c.id+'_'+si+'_am_'+dateKey(d);
-          result.push(amEntry);
-        }
-        if(c.dose_pm&&parseDec(c.dose_pm)!==0){
-          var pmEntry={name:c.name,detail:c.dose_pm+(baseUnit?' '+baseUnit:''),time:'PM',dot:dot,compId:c.id};
-          if(withIds)pmEntry.id=c.id+'_'+si+'_pm_'+dateKey(d);
-          result.push(pmEntry);
-        }
+        _enhTimes(c).forEach(function(t){
+          var k=_slotKey(t);
+          if(!c['dose_'+k]||parseDec(c['dose_'+k])===0)return;
+          var slotEntry={name:c.name,detail:c['dose_'+k]+(baseUnit?' '+baseUnit:''),time:t,dot:dot,compId:c.id};
+          if(withIds)slotEntry.id=c.id+'_'+si+'_'+k+'_'+dateKey(d);
+          result.push(slotEntry);
+        });
       }else{
         var entry={name:c.name,detail:(c.dose?c.dose+unitLabel:''),time:null,dot:dot,compId:c.id};
         if(withIds)entry.id=c.id+'_'+si+'_'+dateKey(d);
@@ -1369,7 +1529,7 @@ function wizStepTRT(body,footer){
       if(!isNebido&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}
       else{var freqDays=(selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1);weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}
       html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-      html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+      html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
       if(!isNebido){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}
       else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
@@ -1407,14 +1567,67 @@ function editToggleEnhancedCompound(id){
   if(!_editBuf.enhanced.compounds)_editBuf.enhanced.compounds=[];
   var idx=_editBuf.enhanced.compounds.findIndex(function(c){return c.id===id;});
   if(idx!==-1){_editBuf.enhanced.compounds.splice(idx,1);}
-  else{var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});if(cat){var _eEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_eEntry.amPm=true;_eEntry.dose_am=String(cat.defaultDoseAm||'');_eEntry.dose_pm=String(cat.defaultDosePm||'');}_editBuf.enhanced.compounds.push(_eEntry);}}
+  else{var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});if(cat){var _eEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_eEntry.amPm=true;_enhSeedSlots(_eEntry,cat);}_editBuf.enhanced.compounds.push(_eEntry);}}
   _editBuf.enhanced.enabled=_editBuf.enhanced.compounds.length>0;
   renderStackEditor();
 }
 function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0));}}
 function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
-function editSetEnhDoseAm(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_am=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(c.dose_am||0)+parseDec(c.dose_pm||0));}}
-function editSetEnhDosePm(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_pm=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(c.dose_am||0)+parseDec(c.dose_pm||0));}}
+function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
+// Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
+// the peptide tier, including the guard that the last remaining slot cannot be removed.
+// A deselected slot keeps its dose value so re-selecting it restores what was typed.
+// Switching schedule mode keeps BOTH configurations intact — the weekday selection and
+// the interval survive a round-trip, so toggling to compare and back loses nothing.
+function editSetEnhCadence(id,mode){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  c.cadence=(mode==='interval')?'interval':'days';
+  if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  _collectEditInputs();renderStackEditor();
+}
+function editSetEnhFreqVal(id,v){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+}
+function editSetEnhFreqUnit(id,v){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_collectEditInputs();renderStackEditor();
+}
+function wizSetEnhCadence(id,mode){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  c.cadence=(mode==='interval')?'interval':'days';
+  if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizSetEnhFreqVal(id,v){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+}
+function wizSetEnhFreqUnit(id,v){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function editToggleEnhTime(id,t){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  var cur=_enhTimes(c).slice();
+  var i=cur.indexOf(t);
+  if(i===-1)cur.push(t); else if(cur.length>1)cur.splice(i,1);
+  c.times=TIME_SLOTS.filter(function(x){return cur.indexOf(x)>=0;});
+  _collectEditInputs();renderStackEditor();
+}
+function wizToggleEnhTime(id,t){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  var cur=_enhTimes(c).slice();
+  var i=cur.indexOf(t);
+  if(i===-1)cur.push(t); else if(cur.length>1)cur.splice(i,1);
+  c.times=TIME_SLOTS.filter(function(x){return cur.indexOf(x)>=0;});
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
 function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
 function _renderEditEnhanced(enh){
@@ -1435,17 +1648,25 @@ function _renderEditEnhanced(enh){
         // the catalogue amPm flag). The injection builder already honours selData.amPm.
         var _amPm=(selData.amPm!==undefined?!!selData.amPm:!!c.amPm);
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-        html+='<div class="cfg-row" style="display:flex;align-items:center;justify-content:space-between"><div class="cfg-lbl" style="margin:0">Split AM / PM</div><div onclick="editSetEnhAmPm(\''+c.id+'\','+(!_amPm)+')" style="cursor:pointer"><div class="toggle-sw'+(_amPm?' on':'')+'"></div></div></div>';
+        html+='<div class="cfg-row" style="display:flex;align-items:center;justify-content:space-between"><div class="cfg-lbl" style="margin:0">Split across AM / Pre-GYM / PM</div><div onclick="editSetEnhAmPm(\''+c.id+'\','+(!_amPm)+')" style="cursor:pointer"><div class="toggle-sw'+(_amPm?' on':'')+'"></div></div></div>';
         if(_amPm){
           var _eUnit=(c.unit||'IU').split('/')[0];
-          html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_am||'')+'" oninput="editSetEnhDoseAm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_pm||'')+'" oninput="editSetEnhDosePm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          var _eTimes=_enhTimes(selData);
+          html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">'
+            +TIME_SLOTS.map(function(t){
+              return '<div class="time-chip'+(_eTimes.indexOf(t)>=0?' sel':'')+'" onclick="editToggleEnhTime(\''+c.id+'\',\''+t+'\')">'+_slotLabel(t)+'</div>';
+            }).join('')
+            +'</div></div>';
+          _eTimes.forEach(function(t){var k=_slotKey(t);
+            html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="editSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
+          });
+          html+=_renderSlotTimingHint(c.id,_eTimes);
+          html+=_renderEnhCadence(c,selData,'edit');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_renderEnhCadence(c,selData,'edit');
         }
-        html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?(parseDec(selData.dose_am||0)+parseDec(selData.dose_pm||0)):parseDec(selData.dose||0))+'</div>';
+        html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
         html+='</div>';
       }
     });
@@ -1461,11 +1682,11 @@ function _renderEnhancedViewTab(st){
   }else{
     compounds.forEach(function(c){
       var dot=c.dot||'var(--accent2)';
-      var days=c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):null;
+      var days=_enhCadenceLabel(c)||null;
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name||c.id)+'</div>';
-      var doseStr=c.amPm?([(c.dose_am?c.dose_am+' AM':''),( c.dose_pm?c.dose_pm+' PM':'')].filter(Boolean).join(' / ')+' '+(c.unit||'IU').split('/')[0]+(days?' · '+days:'')):((c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:''));
+      var doseStr=c.amPm?(_enhTimes(c).filter(function(t){return c['dose_'+_slotKey(t)];}).map(function(t){return c['dose_'+_slotKey(t)]+' '+_slotLabel(t);}).join(' / ')+' '+(c.unit||'IU').split('/')[0]+(days?' · '+days:'')):((c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:''));
       html+='<div style="font-size:12px;color:var(--muted2);">'+doseStr+'</div>';
       html+='</div>';
     });
@@ -1546,13 +1767,85 @@ function _wizAdviseState(){
   }
   return _wiz.advise;
 }
+// ── Wizard step: testosterone base ────────────────────────────────────────────
+// Every enhanced cycle runs on a testosterone base, and the ester decides injection
+// frequency for the whole cycle (propionate EOD vs undecanoate every 10-14 weeks), so
+// it is chosen explicitly before any other compound rather than assumed. Esters come
+// from the backend catalogue (cls==='base') — never hardcoded here.
+function _wizBaseList(){
+  return (typeof ENHANCEMENT_COMPOUNDS!=='undefined'?(ENHANCEMENT_COMPOUNDS||[]):[])
+    .filter(function(c){return c.cls==='base';});
+}
+// The base currently in the protocol, if any — the stack is the source of truth so a
+// user who swapped esters on a later step still sees the right one selected here.
+function _wizBaseId(){
+  var comps=(_wiz&&_wiz.enhanced&&_wiz.enhanced.compounds)||[];
+  var ids=_wizBaseList().map(function(c){return c.id;});
+  var hit=comps.find(function(c){return ids.indexOf(c.id)>=0;});
+  return hit?hit.id:'';
+}
+// Selecting an ester REPLACES any base already in the protocol — a cycle runs on one
+// testosterone, so switching must swap rather than stack. Non-base compounds are left
+// untouched. The advisor result is invalidated so guidance re-fetches for the new base.
+function wizSetBaseEster(id){
+  if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
+  if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
+  var baseIds=_wizBaseList().map(function(c){return c.id;});
+  if(_wizBaseId()===id)return;
+  _wiz.enhanced.compounds=_wiz.enhanced.compounds.filter(function(c){return baseIds.indexOf(c.id)<0;});
+  _wizAdviseAdd(id);
+  _wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
+  var st=_wizAdviseState();
+  if(st){st.result=null;st.fetched=false;st._seeded=false;st._autoSel=false;}
+  wizStepBase(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizStepBase(body,footer){
+  var list=_wizBaseList();
+  var sel=_wizBaseId();
+  var recId='test_e';
+  var st=_wizAdviseState();
+  if(st&&st.result&&st.result.base&&st.result.base.recommended_id)recId=st.result.base.recommended_id;
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.5;">'
+    +'Every enhanced cycle runs on a testosterone base. The ester sets how often you inject '
+    +'and how fast a dose change shows up — pick the one that fits how you want to run the cycle.</div>';
+  if(!list.length){
+    html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'
+      +'Compound catalogue not loaded yet — reopen this step in a moment.</div>';
+    body.innerHTML=html;
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+    return;
+  }
+  list.forEach(function(c){
+    var isSel=(c.id===sel);
+    var cad=c.cadence||{};
+    html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizSetBaseEster(\''+c.id+'\')" '
+      +'style="margin-bottom:'+(isSel?'0':'8px')+';align-items:flex-start;'
+      +(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'">'
+      +'<div class="pep-dot-sm" style="background:'+(c.dot||'#e05050')+';margin-top:4px;"></div>'
+      +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)
+      +(c.id===recId?'<span style="font-size:9px;font-weight:700;letter-spacing:1px;color:#0a0a0a;background:var(--accent);border-radius:8px;padding:2px 6px;margin-left:6px;vertical-align:middle;">RECOMMENDED</span>':'')
+      +'</div>'
+      +'<div class="pep-meta">'+_esc(cad.rec||'')+(cad.halfLife?' · '+_esc(cad.halfLife):'')+'</div></div>'
+      +'<div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div>'
+      +'</div>';
+    if(isSel&&cad.note){
+      html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:10px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);font-size:11px;color:var(--muted2);line-height:1.5;">'
+        +_esc(cad.note)+'</div>';
+    }
+  });
+  html+=_renderSafetyNote('enhanced');
+  body.innerHTML=html;
+  var canNext=!!_wizBaseId();
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1"'+(canNext?'':' disabled')+' onclick="wizNext()">Next →</button>'
+    +(canNext?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Pick a testosterone base to continue.</div>');
+}
 function _wizAdviseInputs(){
   var st=_wizAdviseState();
   var prof=(typeof getData==='function')?getData('pep-profile',null):null;
   var sex=(prof&&prof.sex)||(typeof _userProfile==='function'&&_userProfile().sex)||'male';
   var bfEntry=(typeof _latestBodyFat==='function')?_latestBodyFat():null;
   var bf=(bfEntry&&typeof bfEntry.bf==='number')?bfEntry.bf:(typeof bfEntry==='number'?bfEntry:null);
-  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{}};
+  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId()};
 }
 function wizAdviseSetExperience(v){
   var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
@@ -1613,7 +1906,7 @@ function wizAdviseToggleCompound(id){
   var idx=_wiz.enhanced.compounds.findIndex(function(c){return c.id===id;});
   if(idx!==-1){_wiz.enhanced.compounds.splice(idx,1);}
   else{var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;});
-    if(cat){var e={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){e.amPm=true;e.dose_am=String(cat.defaultDoseAm||'');e.dose_pm=String(cat.defaultDosePm||'');}_wiz.enhanced.compounds.push(e);}}
+    if(cat){var e={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){e.amPm=true;_enhSeedSlots(e,cat);}_wiz.enhanced.compounds.push(e);}}
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
@@ -1622,7 +1915,7 @@ function _wizAdviseAdd(id){
   if(_wiz.enhanced.compounds.some(function(c){return c.id===id;}))return;
   var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;});if(!cat)return;
   var e={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};
-  if(cat.amPm){e.amPm=true;e.dose_am=String(cat.defaultDoseAm||'');e.dose_pm=String(cat.defaultDosePm||'');}
+  if(cat.amPm){e.amPm=true;_enhSeedSlots(e,cat);}
   _wiz.enhanced.compounds.push(e);
 }
 // Default selection when a fresh recommendation loads: keep the base, and pre-tick
@@ -1650,7 +1943,7 @@ function wizApplyAdviseRecommendations(){
     var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;});
     if(!cat)return;
     var e={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};
-    if(cat.amPm){e.amPm=true;e.dose_am=String(cat.defaultDoseAm||'');e.dose_pm=String(cat.defaultDosePm||'');}
+    if(cat.amPm){e.amPm=true;_enhSeedSlots(e,cat);}
     _wiz.enhanced.compounds.push(e);
   });
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
@@ -1696,7 +1989,7 @@ function wizStepAdvise(body,footer){
     // Selection is live here — tap to add/remove.
     if((res.primary&&res.primary.length)||(res.consider&&res.consider.length)||res.best_addition){
       html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:10px;line-height:1.5;">Tap a compound to add or remove it — ✓ means it\'s in your protocol. Your picks carry to the next step.</div>';}
-    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Required base (always included)</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
     // Best addition (the single top pick), then the rest of primary — all tappable.
     var bestId=res.best_addition&&res.best_addition.id;
     var restPrimary=(res.primary||[]).filter(function(p){return p.id!==bestId;});
@@ -1742,7 +2035,7 @@ function wizStepEnhanced(body,footer){
       if(match&&!(_wiz.enhanced.compounds||[]).some(function(c){return c.id===match.id;})){
         if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
         var _pfEntry={id:match.id,name:match.name,dose:String(tc.dose||match.defaultDose||''),unit:tc.unit||match.unit||'mg',days:tc.days?tc.days.slice():(match.defaultDays?match.defaultDays.slice():[0,1,2,3,4,5,6]),dot:match.dot};
-        if(match.amPm){_pfEntry.amPm=true;_pfEntry.dose_am=String(tc.dose_am||match.defaultDoseAm||'');_pfEntry.dose_pm=String(tc.dose_pm||match.defaultDosePm||'');}
+        if(match.amPm){_pfEntry.amPm=true;TIME_SLOTS.forEach(function(t){var k=_slotKey(t),C=k.charAt(0).toUpperCase()+k.slice(1);_pfEntry['dose_'+k]=String(tc['dose_'+k]||match['defaultDose'+C]||'');});}
         _wiz.enhanced.compounds.push(_pfEntry);
       }
     });
@@ -1766,14 +2059,22 @@ function wizStepEnhanced(body,footer){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
         if(c.amPm){
           var _wUnit=(c.unit||'IU').split('/')[0];
-          html+='<div class="cfg-row"><div class="cfg-lbl">AM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_am||'')+'" oninput="wizSetEnhDoseAm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">PM Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose_pm||'')+'" oninput="wizSetEnhDosePm(\''+c.id+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          var _wTimes=_enhTimes(selData);
+          html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">'
+            +TIME_SLOTS.map(function(t){
+              return '<div class="time-chip'+(_wTimes.indexOf(t)>=0?' sel':'')+'" onclick="wizToggleEnhTime(\''+c.id+'\',\''+t+'\')">'+_slotLabel(t)+'</div>';
+            }).join('')
+            +'</div></div>';
+          _wTimes.forEach(function(t){var k=_slotKey(t);
+            html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="wizSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
+          });
+          html+=_renderSlotTimingHint(c.id,_wTimes);
+          html+=_renderEnhCadence(c,selData,'wiz');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_renderEnhCadence(c,selData,'wiz');
         }
-        html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?(parseDec(selData.dose_am||0)+parseDec(selData.dose_pm||0)):parseDec(selData.dose||0))+'</div>';
+        html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
         html+='</div>';
       }
     });
@@ -1796,15 +2097,14 @@ function wizToggleEnhancedCompound(id){
     _wiz.enhanced.compounds.splice(idx,1);
   }else{
     var cat=ENHANCEMENT_COMPOUNDS.find(function(c){return c.id===id;});
-    if(cat){var _wEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_wEntry.amPm=true;_wEntry.dose_am=String(cat.defaultDoseAm||'');_wEntry.dose_pm=String(cat.defaultDosePm||'');}_wiz.enhanced.compounds.push(_wEntry);}
+    if(cat){var _wEntry={id:cat.id,name:cat.name,dose:String(cat.defaultDose||''),unit:cat.unit||'mg',days:cat.defaultDays?cat.defaultDays.slice():[0,1,2,3,4,5,6],dot:cat.dot};if(cat.amPm){_wEntry.amPm=true;_enhSeedSlots(_wEntry,cat);}_wiz.enhanced.compounds.push(_wEntry);}
   }
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0));}}
 function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
-function wizSetEnhDoseAm(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_am=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(c.dose_am||0)+parseDec(c.dose_pm||0));}}
-function wizSetEnhDosePm(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose_pm=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(c.dose_am||0)+parseDec(c.dose_pm||0));}}
+function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
 function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function wizStepValidate(body,footer){
   var g=(_wiz&&_wiz.goals)||[];
@@ -1862,14 +2162,14 @@ function wizStepReview(body,footer){
   var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…">';
   html+='<div class="wiz-section" style="margin-top:16px">Summary</div>';
   var _reviewFlow=_wizFlow();
-  if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=p.times&&p.times.includes('AM')&&p.times.includes('PM')?(p.dose_am||'?')+(p.unit_am||'')+'/'+(p.dose_pm||'?')+(p.unit_pm||''):(p.times&&p.times.includes('AM')?(p.dose_am||'?')+(p.unit_am||''):(p.dose_pm||'?')+(p.unit_pm||''));var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
+  if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=_slotDoseSummary(p,'/',false)||'?';var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
   else if(_reviewFlow.includes('peptides')){html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
   _trtCompounds(_wiz.trt).forEach(function(c){var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week':(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((c.dose?c.dose+(c.unit||'mg')+' · ':'')+days)+'</div></div>';});
   if((_wiz.goals||[]).includes('enhanced')){
     html+='<div class="wiz-section" style="margin-top:16px">Enhancement Compounds</div>';
     if(_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
       _wiz.enhanced.compounds.forEach(function(c){
-        var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week':'';
+        var days=_enhCadenceLabel(c)||'';
         var doseLabel=(c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:'');
         html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(doseLabel)+'</div></div>';
       });
@@ -1964,17 +2264,16 @@ function _genInjBatches(stack,cycleId,fromDate){
       if(pEnd&&d>pEnd)continue;
       var eff=_effectiveDoseAt(p,stack.cycle_start,d);
       var dk=dateKey(d);
-      if(times.includes('AM')&&times.includes('PM')){
-        var dAm=eff?eff.dose:(p.dose_am||p.dose||'');var uAm=eff?eff.unit:(p.unit_am||'');
-        var dPm=eff?eff.dose:(p.dose_pm||p.dose||'');var uPm=eff?eff.unit:(p.unit_pm||'');
-        if(dAm)compEntries.push({cycle_id:cycleId,date:dk,compound_id:p.id,compound_name:p.name,tier:'peptide',dose:dAm,unit:uAm,dot:dot,time_of_day:'AM',active:true,logged:false});
-        if(dPm)compEntries.push({cycle_id:cycleId,date:dk,compound_id:p.id,compound_name:p.name,tier:'peptide',dose:dPm,unit:uPm,dot:dot,time_of_day:'PM',active:true,logged:false});
-      }else{
-        var t=times[0]||'AM';
-        var dose=eff?eff.dose:(t==='AM'?(p.dose_am||p.dose||''):(p.dose_pm||p.dose||''));
-        var unit=eff?eff.unit:(t==='AM'?(p.unit_am||''):(p.unit_pm||''));
+      // One entry per selected slot (AM / MID / PM). A single-slot compound still
+      // falls back to the flat p.dose/p.unit so legacy items keep generating.
+      var sel=TIME_SLOTS.filter(function(t){return times.includes(t);});
+      if(!sel.length)sel=['AM'];
+      sel.forEach(function(t){
+        var k=_slotKey(t);
+        var dose=eff?eff.dose:(p['dose_'+k]||p.dose||'');
+        var unit=eff?eff.unit:(p['unit_'+k]||'');
         if(dose)compEntries.push({cycle_id:cycleId,date:dk,compound_id:p.id,compound_name:p.name,tier:'peptide',dose:dose,unit:unit,dot:dot,time_of_day:t,active:true,logged:false});
-      }
+      });
     }
     if(compEntries.length)batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
   });
@@ -2008,11 +2307,12 @@ function _genInjBatches(stack,cycleId,fromDate){
       var baseUnit=c.unit?(c.unit.split('/')[0]):'';
       var compEntries=[];
       for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
-        if(c.days&&c.days.length&&!c.days.includes(d.getDay()))continue;
+        if(!_enhHitsDay(c,d,cycleStart))continue;
         var dk=dateKey(d);
         if(isAmPm){
-          if(c.dose_am&&parseDec(c.dose_am)!==0)compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c.dose_am,unit:baseUnit,dot:dot,time_of_day:'AM',active:true,logged:false});
-          if(c.dose_pm&&parseDec(c.dose_pm)!==0)compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c.dose_pm,unit:baseUnit,dot:dot,time_of_day:'PM',active:true,logged:false});
+          _enhTimes(c).forEach(function(t){var k=_slotKey(t);
+            if(c['dose_'+k]&&parseDec(c['dose_'+k])!==0)compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c['dose_'+k],unit:baseUnit,dot:dot,time_of_day:t,active:true,logged:false});
+          });
         }else{
           compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c.dose||'',unit:c.unit||'',dot:dot,time_of_day:null,active:true,logged:false});
         }

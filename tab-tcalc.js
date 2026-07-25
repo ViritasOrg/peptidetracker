@@ -28,6 +28,8 @@ var _tcAgeMissing     = false; // true when user-settings returned but no user_a
 var _tcBwOpen         = false; // whether the bloodwork panel is expanded
 var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] = loaded
 var _tcBwLoading      = false;
+var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
+                              // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
 var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
 var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
@@ -194,9 +196,9 @@ function _tcSaveProfile() {
     headers: Object.assign({'Content-Type':'application/json'}, h),
     body: JSON.stringify(_tcp)
   }).catch(function(){});
-  // The T-Calc manual log or calibration just changed — recompute & persist the
-  // free-T history so the (fetch-and-plot) T-History view stays in sync.
-  if (typeof _captureFreeTHistory === 'function') _captureFreeTHistory();
+  // NOTE: saving the profile/log does NOT touch stored T-History. History is written
+  // only by an explicit user action (tcUpdateSavedHistory, the "Update saved history"
+  // button) so it never changes on its own. See the HISTORY VIEWS rule in CLAUDE.md.
 }
 
 // Saturating Emax dose-response for SHBG suppression: effMaxSupp(dose) = emax·dose/(dose+ed50).
@@ -232,8 +234,11 @@ function _tcSuppDailyDose(inter, kind, obj) {
   var nativeDaily = 0, nativeUnit = '';
   if (kind === 'peptide') {
     var times = obj.times || ['AM'];
-    var per = (times.indexOf('AM') >= 0 ? (parseDec(obj.dose_am) || 0) : 0) +
-              (times.indexOf('PM') >= 0 ? (parseDec(obj.dose_pm) || 0) : 0);
+    var _slots = (typeof TIME_SLOTS!=='undefined') ? TIME_SLOTS : ['AM','PM'];
+    var per = _slots.reduce(function(sum, t){
+      if (times.indexOf(t) < 0) return sum;
+      return sum + (parseDec(obj['dose_' + t.toLowerCase()]) || 0);
+    }, 0);
     var dpw = (obj.days || [0, 1, 2, 3, 4, 5, 6]).length;
     nativeDaily = per * dpw / 7;
     nativeUnit = obj.unit_am || obj.unit_pm || 'µg';
@@ -337,6 +342,13 @@ function _tcCompInfo(compId) {
       name:            extra.name,
       dot:             extra.dot,
       halfLifeDays:    extra.halfLifeDays || 1,
+      // Depot esters have a genuinely wide half-life range — the backend serves low/high
+      // where the literature spread is material (see the backend's
+      // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). Absent an explicit
+      // range, low == high == central and no band is drawn.
+      halfLifeDaysLow:  extra.halfLifeDaysLow  || extra.halfLifeDays || 1,
+      halfLifeDaysHigh: extra.halfLifeDaysHigh || extra.halfLifeDays || 1,
+      halfLifeNote:    extra.halfLifeNote || '',
       halfLifeStr:     extra.halfLife || '',
       bioavailability: extra.bioavailability || 1,
       maxDailyDoseMg:  extra.maxDailyDoseMg || null,
@@ -351,6 +363,9 @@ function _tcCompInfo(compId) {
     name:         cat   ? cat.name  : compId,
     dot:          cat   ? cat.dot   : '#e8a020',
     halfLifeDays: hl,
+    halfLifeDaysLow:  hl,
+    halfLifeDaysHigh: hl,
+    halfLifeNote: '',
     halfLifeStr:  guide ? guide.halfLife : ''
   };
 }
@@ -1118,24 +1133,42 @@ function _tcFreeTSeries(sorted, hooks) {
 
   var maxHL = 1;
   sorted.forEach(function(e) {
-    var hl = (_tcCompInfo(e.compId).halfLifeDays) || 1;
+    var _ci = _tcCompInfo(e.compId);
+    // Size the washout window off the slowest plausible half-life, or a wide band's
+    // tail gets clipped before it has decayed.
+    var hl = (_ci.halfLifeDaysHigh || _ci.halfLifeDays) || 1;
     if (hl > maxHL) maxHL = hl;
   });
   var washoutDays = Math.ceil(4.3 * maxHL);
 
   var totalDays = Math.ceil((lastDate - firstDate) / 86400000) + washoutDays + 1;
   var total = new Float64Array(totalDays + 1);
+  // PK uncertainty band. Depot esters are flip-flop kinetic — the apparent half-life is
+  // the oil depot releasing, not testosterone clearing — and the published range is wide
+  // enough that steady-state level differs >2x across it. Where the backend declares a
+  // range we project the low and high series alongside the central estimate so callers
+  // can show a band rather than a line implying precision the data does not support.
+  var totalLo = new Float64Array(totalDays + 1);
+  var totalHi = new Float64Array(totalDays + 1);
+  var hasPkBand = false;
 
   sorted.forEach(function(e) {
     var cd    = _tcCompInfo(e.compId);
     var hl    = cd.halfLifeDays || 1;
+    var hlLo  = cd.halfLifeDaysLow  || hl;
+    var hlHi  = cd.halfLifeDaysHigh || hl;
+    if (hlLo !== hl || hlHi !== hl) hasPkBand = true;
     var bioav = cd.bioavailability || 1;
-    var ke    = Math.LN2 / hl;
-    var ka    = _tcKa(hl);
     var injectDay = Math.round((new Date(e.date) - firstDate) / 86400000);
     var absorbed  = parseDec(e.doseMg) * bioav;
-    for (var t = injectDay; t <= totalDays; t++) {
-      total[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
+    var series = [[hl, total], [hlLo, totalLo], [hlHi, totalHi]];
+    for (var si = 0; si < series.length; si++) {
+      var _hl = series[si][0], arr = series[si][1];
+      var ke  = Math.LN2 / _hl;
+      var ka  = _tcKa(_hl);
+      for (var t = injectDay; t <= totalDays; t++) {
+        arr[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
+      }
     }
   });
 
@@ -1312,6 +1345,9 @@ function _tcFreeTSeries(sorted, hooks) {
       }
       for (var _blt = 0; _blt <= totalDays; _blt++) {
         total[_blt] += _p2Baseline;
+        // Endogenous baseline is not half-life dependent — add it to the band series too
+        // so they stay directly comparable to the central curve.
+        if (hasPkBand) { totalLo[_blt] += _p2Baseline; totalHi[_blt] += _p2Baseline; }
       }
     }
   }
@@ -1326,6 +1362,15 @@ function _tcFreeTSeries(sorted, hooks) {
   // schedule, so appending injections lowered calFT and dragged the peak down.
   if (calFT && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays && total[_anchorDay] > 0) {
     calFT = _mftNum / total[_anchorDay];
+  }
+  // Anchor the PK band the same way. Each series gets its OWN calibration so all three
+  // pass through the measured value at the anchor — what is known is the level at the
+  // blood draw; what is uncertain is where it goes from there. The band therefore
+  // pinches to nothing at the anchor and widens away from it, which is the honest shape.
+  var _calFTPkLo = calFT, _calFTPkHi = calFT;
+  if (hasPkBand && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays) {
+    if (totalLo[_anchorDay] > 0) _calFTPkLo = _mftNum / totalLo[_anchorDay];
+    if (totalHi[_anchorDay] > 0) _calFTPkHi = _mftNum / totalHi[_anchorDay];
   }
   if (hooks.calFT) hooks.calFT(calFT);
 
@@ -1534,8 +1579,46 @@ function _tcFreeTSeries(sorted, hooks) {
   // starts at the baseline and rises — not below it.
   if (hooks.start) hooks.start(total[0] * (calFT_arr ? calFT_arr[0] : scale));
   return { firstDate: firstDate, totalDays: totalDays, total: total, calFT: calFT, scale: scale,
+           totalLo: totalLo, totalHi: totalHi, hasPkBand: hasPkBand,
+           calFTPkLo: _calFTPkLo, calFTPkHi: _calFTPkHi,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
+}
+
+// ── Free-T history: the single, explicit writer ──────────────────────────────
+// Persists /plasma-history EXACTLY as the plasma curve is currently displayed
+// (from _tcDrawnFT). This is the ONLY thing in the app that writes free-T history,
+// and it runs ONLY on an explicit user action — the "Update saved history" button.
+// Nothing captures automatically: the history view fetches and plots, and stays put
+// until the user chooses to refresh it. Returns Promise<bool> (true = written).
+function tcSaveHistoryFromCurve() {
+  if (typeof AGENT_URL === 'undefined') return Promise.resolve(false);
+  var d = _tcDrawnFT;
+  if (!d || !d.values || !d.values.length) return Promise.resolve(false);
+  var maxV = 0;
+  var entries = d.values.map(function(v, k){
+    if (v > maxV) maxV = v;
+    var dt = new Date(d.firstMs + k * 86400000);
+    var ds = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth()+1).padStart(2,'0') + '-' + String(dt.getUTCDate()).padStart(2,'0');
+    return { date: ds, marker: 'free_t', value: v, unit: d.unit };
+  });
+  // Never persist an absurdly-high curve — that means a mis-calibration slipped through.
+  if (d.unit === 'pmol/L' && maxV > 6000) return Promise.resolve(false);
+  var hdrs = authHeaders({ 'Content-Type': 'application/json' });
+  return fetch(AGENT_URL + '/plasma-history?marker=free_t', { method: 'DELETE', headers: hdrs })
+    .then(function(){ return fetch(AGENT_URL + '/plasma-history/batch', {
+        method: 'POST', headers: hdrs, body: JSON.stringify({ entries: entries }) }); })
+    .then(function(r){ return !!(r && r.ok); })
+    .catch(function(){ return false; });
+}
+// Button handler: capture once, with inline feedback on the button itself.
+function tcUpdateSavedHistory(btnId) {
+  var b = btnId && document.getElementById(btnId);
+  if (b) { b.disabled = true; b.textContent = 'Saving\u2026'; }
+  return tcSaveHistoryFromCurve().then(function(ok){
+    if (b) { b.disabled = false; b.textContent = ok ? '\u2713 Saved history' : 'Could not save \u2014 try again'; }
+    return ok;
+  });
 }
 
 function _tcDrawManualChart(canvasId, log, zoom3) {
@@ -1547,6 +1630,36 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   var firstDate = _S.firstDate, totalDays = _S.totalDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
+  var _pkLo = _S.totalLo, _pkHi = _S.totalHi, _hasPkBand = _S.hasPkBand,
+      _pkLoCal = _S.calFTPkLo, _pkHiCal = _S.calFTPkHi;
+  // Cache the per-day free-T EXACTLY as this chart displays it, so saving to T-History
+  // stores verbatim what the user sees — no separate re-derivation, no divergence, no
+  // calibration-context bug. Only when calibrated to a real measurement (calFT set); an
+  // uncalibrated estimate is never eligible to become history. Runs day 0 → last
+  // injection (matching the history view's "ends at the last injection" contract).
+  // End at the last injection that has actually been TAKEN — its date on or before today.
+  // The plasma log includes scheduled/future doses (a series projects forward), and
+  // history must never run into the future: it stops where the last checked injection is.
+  if (calFT && sorted.length) {
+    var _hNowMs = Date.now(), _hLastPastMs = null;
+    for (var _hi = 0; _hi < sorted.length; _hi++) {
+      var _hms = new Date(sorted[_hi].date).getTime();
+      if (isFinite(_hms) && _hms <= _hNowMs) _hLastPastMs = _hms;   // sorted ascending → last one wins
+    }
+    if (_hLastPastMs === null) {
+      _tcDrawnFT = null;   // nothing taken yet — no history to store
+    } else {
+      var _hEnd = Math.max(0, Math.min(totalDays, Math.round((_hLastPastMs - firstDate.getTime()) / 86400000)));
+      var _hVals = [];
+      for (var _hk = 0; _hk <= _hEnd; _hk++) {
+        var _hv = total[_hk] * (calFT_arr ? calFT_arr[_hk] : scale);
+        _hVals.push((!isFinite(_hv) || _hv < 0) ? 0 : Math.round(_hv * 1000) / 1000);
+      }
+      _tcDrawnFT = { firstMs: firstDate.getTime(), unit: unitLabel || 'pmol/L', values: _hVals };
+    }
+  } else {
+    _tcDrawnFT = null;
+  }
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -1652,6 +1765,35 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   // SHBG β-uncertainty band: shaded region between the β=0.15 and β=0.40 free-T curves.
   // Pinches to zero width at the bloodwork draw (calibrated) and widens away from it.
+  // ── PK uncertainty band ─────────────────────────────────────────────────────
+  // Drawn first, so the SHBG band and the curve itself sit on top of it. Only appears
+  // for compounds whose backend entry declares a half-life range; for a depot ester that
+  // range is the published inter-individual spread, and it is wide enough that a single
+  // line would misrepresent the evidence. See the backend's
+  // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md
+  if (calFT && _hasPkBand && _pkLo && _pkHi) {
+    var _pkTop = function(t){ return Math.max(_pkLo[t]*_pkLoCal, _pkHi[t]*_pkHiCal) || 0; };
+    var _pkBot = function(t){ return Math.min(_pkLo[t]*_pkLoCal, _pkHi[t]*_pkHiCal) || 0; };
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkTop(xStart)));
+    for (var _pt = xStart + 1; _pt <= xEnd; _pt++) ctx.lineTo(xOf(_pt), yOf(_pkTop(_pt)));
+    for (var _pb = xEnd; _pb >= xStart; _pb--) ctx.lineTo(xOf(_pb), yOf(_pkBot(_pb)));
+    ctx.closePath();
+    ctx.fillStyle = lineColor + '14';
+    ctx.fill();
+    ctx.strokeStyle = lineColor + '33';
+    ctx.setLineDash([3,3]); ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkTop(xStart)));
+    for (var _pt2 = xStart + 1; _pt2 <= xEnd; _pt2++) ctx.lineTo(xOf(_pt2), yOf(_pkTop(_pt2)));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkBot(xStart)));
+    for (var _pb2 = xStart + 1; _pb2 <= xEnd; _pb2++) ctx.lineTo(xOf(_pb2), yOf(_pkBot(_pb2)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   if (calFT_arr && _calFTlo && _calFThi) {
     var _bandTop = function(t){ return Math.max(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
     var _bandBot = function(t){ return Math.min(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
@@ -1788,6 +1930,26 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   ctx.fillStyle = '#555'; ctx.font = '9px -apple-system,system-ui,sans-serif'; ctx.textAlign = 'center';
   var labelEvery = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
+  // The ladder above tops out at one label per 28 days, which was fine while the widest
+  // span was a few months. A slow depot ester now carries a washout tail sized off its
+  // half-life, so the visible span can exceed a year — at which point 28-day spacing
+  // packs ~14 labels into room for ~8 and they overlap into an unreadable smear.
+  // Widen only when they genuinely would not fit, so every span that already fitted
+  // keeps its existing spacing exactly.
+  // Widen only when the labels genuinely would not fit. This must be measured against
+  // the VISIBLE span (winDays), not the total series length: zoomed in to a month the
+  // window is ~30 days even when the whole series runs past a year, and sizing off the
+  // total pushed the step beyond the window so only the leftmost label ever drew.
+  if (winDays > 84) {
+    var _lblMinPx  = 44;   // "26 Sep" at 9px plus breathing room
+    var _maxLabels = Math.max(2, Math.floor(cW / _lblMinPx));
+    while (Math.floor(winDays / labelEvery) + 1 > _maxLabels) labelEvery *= 2;
+  }
+  // Whatever the ladder produced, never step past the visible window — that is what
+  // leaves an axis with a single lonely label.
+  if (labelEvery > Math.max(1, Math.floor(winDays / 2))) {
+    labelEvery = Math.max(1, Math.floor(winDays / 2));
+  }
   for (var dl = xStart; dl <= xEnd; dl += labelEvery) {
     var lx = xOf(dl);
     var labelDate = new Date(firstDate.getTime() + dl * 86400000);
@@ -2396,6 +2558,10 @@ function buildTCalc() {
       '<span style="color:#5ad1b0">■</span> STEADY-STATE AVERAGE' +
       '</label>';
     html += '<canvas id="tc-main-chart" style="width:100%;display:block;"></canvas>';
+    if (mftNum > 0) {
+      html += '<button id="tc-hist-save" onclick="tcUpdateSavedHistory(\'tc-hist-save\')" style="width:100%;margin-top:10px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted2);font-size:12px;font-weight:600;padding:9px;cursor:pointer">Update saved history</button>';
+      html += '<div style="font-size:10px;color:var(--muted2);opacity:0.75;line-height:1.5;margin-top:5px;text-align:center">Saves this exact curve to T-History. It won\'t change on its own — refresh it here whenever you want.</div>';
+    }
     html += '</div>';
   } else {
     html += '<div style="padding:28px 16px;text-align:center;color:var(--muted2);font-size:13px">';
