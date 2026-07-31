@@ -2835,6 +2835,598 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Wizard TRT step IS the planner, and can never render blank ───────────────
+// Reported: after the peptide steps, Next landed on an empty BUILD TRT screen with
+// only a Next button, and the saved protocol contained peptides only. The step now
+// renders the same four-field planner T-Calc uses, and is structurally unable to
+// render nothing: the footer is written first, the body build is wrapped, and an
+// empty result is backfilled.
+console.log('\n── Wizard TRT step ────────────────────────────────────────');
+{
+  var _mkEl = function(){
+    var o={style:{},classList:{add:function(){},remove:function(){},contains:function(){return false;}},scrollTop:0};
+    Object.defineProperty(o,'innerHTML',{get:function(){return o._h||'';},set:function(v){o._h=String(v);}});
+    return o;
+  };
+  if(typeof G.wizStepTRTHandoff==='function'){
+    var _svWiz=G._wiz;
+    G._wiz={step:0,goals:['trt'],peptides:[],trt:{enabled:true,compounds:[]},enhanced:{},editMode:false,stackIndex:-1,stackName:'t',cycle_length:12};
+    var b=_mkEl(), f=_mkEl();
+    G.wizStepTRTHandoff(b,f);
+
+    check('the TRT step renders content (was a blank screen)', b.innerHTML.length > 200,
+      'rendered '+b.innerHTML.length+' chars');
+    check('  …the ester field is there',   /1 · Ester/.test(b.innerHTML));
+    check('  …the dose field is there',    /2 · Dose per injection/.test(b.innerHTML));
+    check('  …the cadence field is there', /3 · Injection cadence/.test(b.innerHTML));
+    check('  …the start-date field is there', /4 · First injection/.test(b.innerHTML));
+    check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
+    check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
+
+    // Fail-safe: if a helper this step depends on blows up, the user still gets a step
+    var _svIds=G._tcAllCompIds;
+    G._tcAllCompIds=function(){ throw new Error('tab-tcalc.js unavailable'); };
+    var b2=_mkEl(), f2=_mkEl();
+    G.wizStepTRTHandoff(b2,f2);
+    check('a throw inside the step still renders something usable', b2.innerHTML.length > 40,
+      'rendered '+b2.innerHTML.length+' chars');
+    check('  …and the footer still lets the user continue', /wizNext\(\)/.test(f2.innerHTML));
+    G._tcAllCompIds=_svIds;
+
+    // The plan seeds from the live T-Calc plan so re-opening shows what is scheduled
+    if(typeof G._wizEnsureTrtPlan==='function'){
+      var _svTcp=G._tcp;
+      G._tcp=Object.assign({},_svTcp||{},{simplePlan:{compId:'cypionate',doseMg:'150',cadenceDays:7,startDate:'2026-07-01'}});
+      G._wiz.trtPlan=null;
+      var seeded=G._wizEnsureTrtPlan();
+      check('the step seeds from the existing T-Calc plan',
+        seeded.compId==='cypionate' && String(seeded.doseMg)==='150' && Number(seeded.cadenceDays)===7);
+
+      // …and from a classic TRT compound when there is no T-Calc plan yet
+      G._tcp=Object.assign({},_svTcp||{},{simplePlan:{}});
+      G._wiz.trtPlan=null;
+      G._wiz.trt={enabled:true,compounds:[{id:'enanthate',dose:'125',freqVal:1,freqUnit:'weeks'}]};
+      var seeded2=G._wizEnsureTrtPlan();
+      check('…or from a classic TRT compound, converted to days',
+        seeded2.compId==='enanthate' && String(seeded2.doseMg)==='125' && Number(seeded2.cadenceDays)===7);
+      G._tcp=_svTcp;
+    }
+
+    // Completeness gate
+    if(typeof G._wizTrtPlanComplete==='function'){
+      G._wiz.trtPlan={compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:'2026-07-01'};
+      check('a full plan counts as complete', G._wizTrtPlanComplete() === true);
+      G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceDays:3.5,startDate:'2026-07-01'};
+      check('a plan missing the dose is not complete', G._wizTrtPlanComplete() === false);
+    }
+    G._wiz=_svWiz;
+  }else{
+    check('wizStepTRTHandoff available', false);
+  }
+
+  var _stSrc2=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('the footer is written before the body build (so a throw cannot strand the user)',
+    /footer\.innerHTML=[\s\S]{0,200}try\{/.test(_stSrc2));
+  check('an empty body is backfilled rather than shown blank',
+    /if\(!body\.innerHTML\|\|!body\.innerHTML\.trim\(\)\)/.test(_stSrc2));
+  check('saving commits the wizard plan into the T-Calc simple plan',
+    /_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && /_tcp\.plannerMode='simple'/.test(_stSrc2));
+}
+
+// ── T-Calc simple planner (ester → dose → cadence → curve) ───────────────────
+// T-Calc is now the single place a testosterone schedule is built. The simple
+// planner is the default way in; the advanced multi-compound log is kept and sits
+// below it, greyed out unless its switch is on. Exactly one drives the curve.
+console.log('\n── T-Calc simple planner ──────────────────────────────────');
+{
+  if(typeof G._tcPlannerMode==='function' && typeof G._tcSimplePlanInjections==='function'){
+    var _svTcp = G._tcp;
+    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    var _today = _mk(new Date());
+    var _set = function(o){ G._tcp = Object.assign({manualLog:[], simplePlan:{}, plannerMode:''}, o); };
+
+    // Mode derivation must never change what an existing user already had
+    _set({manualLog:[{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]});
+    check('a profile with a manual log defaults to ADVANCED (nothing changes for them)',
+      G._tcPlannerMode() === 'advanced');
+    _set({manualLog:[]});
+    check('a fresh profile defaults to SIMPLE', G._tcPlannerMode() === 'simple');
+    _set({manualLog:[{compId:'x',doseMg:'1',date:'2026-07-01'}], plannerMode:'simple'});
+    check('an explicit choice overrides the derivation', G._tcPlannerMode() === 'simple');
+
+    // Generation: 4 inputs → a schedule
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
+    var inj = G._tcSimplePlanInjections();
+    check('a complete plan generates injections', inj.length > 0);
+    check('  …every one carries the chosen ester and dose',
+      inj.every(function(e){ return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.source==='simple'; }));
+    check('  …the first is on the chosen start date', inj[0].date === _today);
+    check('  …spaced by the chosen cadence', (function(){
+      var d0=new Date(inj[0].date), d1=new Date(inj[1].date);
+      return Math.round((d1-d0)/86400000) === 4 || Math.round((d1-d0)/86400000) === 3; // 3.5 d
+    })());
+    check('  …bounded, so a daily cadence cannot run away', inj.length <= 800);
+
+    // Incomplete plans produce nothing rather than a half-curve
+    [['compId',''],['doseMg',''],['cadenceDays',0],['startDate','']].forEach(function(f){
+      var plan = {compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today};
+      plan[f[0]] = f[1];
+      _set({plannerMode:'simple', simplePlan:plan});
+      check('an incomplete plan (no '+f[0]+') generates nothing', G._tcSimplePlanInjections().length === 0);
+    });
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'-5',cadenceDays:7,startDate:_today}});
+    check('a negative dose generates nothing', G._tcSimplePlanInjections().length === 0);
+
+    // Which planner drives the curve
+    if(typeof G._tcCurveLog==='function'){
+      var _svCache = G._injectionsCache; G._injectionsCache = {};
+      _set({plannerMode:'simple',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      var curve = G._tcCurveLog();
+      check('in SIMPLE mode the curve comes from the plan',
+        curve.length > 0 && curve.every(function(e){ return e.source === 'simple'; }));
+      check('  …and the greyed-out manual log does NOT contribute',
+        !curve.some(function(e){ return e.compId === 'cypionate'; }));
+
+      _set({plannerMode:'advanced',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      var curve2 = G._tcCurveLog();
+      check('in ADVANCED mode the curve comes from the manual log',
+        curve2.length === 1 && curve2[0].compId === 'cypionate');
+      check('  …and the greyed-out simple plan does NOT contribute',
+        !curve2.some(function(e){ return e.source === 'simple'; }));
+
+      // Switching modes must not destroy either side's data
+      _set({plannerMode:'advanced',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      G._tcCurveLog();
+      check('switching planners keeps BOTH sets of data intact',
+        G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
+      G._injectionsCache = _svCache;
+    }
+    G._tcp = _svTcp;
+  }else{
+    check('_tcPlannerMode / _tcSimplePlanInjections available', false);
+  }
+
+  // The advanced planner is kept and dimmed, never deleted
+  var _tcSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('the advanced manual log UI is still present', /INJECTION SCHEDULE/.test(_tcSrc));
+  check('the advanced section is dimmed rather than hidden when off',
+    /_advLive \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
+  check('the simple planner dims the same way when advanced is on',
+    /var dim  = live \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
+  check('the planner choice is persisted to the backend profile',
+    /_tcp\.plannerMode = mode;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
+  check('every simple-plan field change is persisted', /_tcp\.simplePlan\[field\] = value;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
+  check('the simple planner never writes into the manual log',
+    !/_tcSimplePlanInjections[\s\S]{0,600}manualLog\.push/.test(_tcSrc));
+
+  // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
+  // _tcAllCompIds() was referenced by three call sites but never actually defined —
+  // it existed only in a comment. Every call site guards with typeof===>'function',
+  // so the missing function degraded silently to an empty list instead of throwing.
+  check('_tcAllCompIds is actually defined', typeof G._tcAllCompIds === 'function');
+  if (typeof G._tcAllCompIds === 'function') {
+    var _allIds = G._tcAllCompIds();
+    check('  …and returns the ester catalogue, not an empty list', _allIds.length > 0,
+      'got ' + _allIds.length + ' ids');
+    check('  …including the frontend TRT_CAT esters',
+      (G.TRT_CAT || []).every(function(c){ return _allIds.indexOf(c.id) !== -1; }));
+    check('  …with no id listed twice',
+      _allIds.length === _allIds.filter(function(id, i){ return _allIds.indexOf(id) === i; }).length);
+    check('  …and no HCG (this list is testosterone planning only)',
+      _allIds.indexOf('hcg') === -1);
+
+    // An ester the backend serves but TRT_CAT does not must still be offered, and an
+    // ester served by both must appear exactly once.
+    var _svExtra = G._tcExtraCatalog;
+    var _dupId = (G.TRT_CAT && G.TRT_CAT[0]) ? G.TRT_CAT[0].id : 'enanthate';
+    G._tcExtraCatalog = [{id:_dupId, name:'Dup', halfLifeDays:5},
+                         {id:'__backend_only__', name:'Backend Only', halfLifeDays:9}];
+    var _mixed = G._tcAllCompIds();
+    check('  …a backend-only ester is offered', _mixed.indexOf('__backend_only__') !== -1);
+    check('  …an ester in both catalogues is listed once',
+      _mixed.filter(function(id){ return id === _dupId; }).length === 1);
+    G._tcExtraCatalog = _svExtra;
+  }
+
+  // The user-visible symptom: real <option> rows in the ester select, not just the
+  // "Select a testosterone ester…" placeholder.
+  if (typeof G._tcSimplePlannerHtml === 'function') {
+    var _svTcp2 = G._tcp;
+    G._tcp = {manualLog:[], simplePlan:{}, plannerMode:'simple'};
+    var _plannerHtml = G._tcSimplePlannerHtml('', '');
+    // Scope to the ester <select> only — the cadence select below it also has options,
+    // so matching the whole card would pass even with an empty ester list.
+    var _esterBlock = _plannerHtml.slice(_plannerHtml.indexOf('1 · Ester'),
+                                         _plannerHtml.indexOf('2 · Dose per injection'));
+    var _opts = (_esterBlock.match(/<option value="(?!")[^"]+"/g) || []);
+    check('the ester dropdown renders real options (was placeholder-only)',
+      _opts.length > 0, 'rendered ' + _opts.length + ' esters');
+    check('  …each names its compound', /<option value="[^"]+"[^>]*>[^<]+</.test(_esterBlock));
+    G._tcp = _svTcp2;
+  }
+
+  // Catch-all for the bug class: a `typeof X === 'function'` guard around a helper
+  // that does not exist anywhere fails open and silently renders nothing.
+  {
+    var _dir = path.dirname(path.resolve(htmlPath));
+    var _allSrc = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js','tab-schedule.js',
+                   'tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js',
+                   'tab-thist.js','tab-labs.js','tab-supplements.js']
+      .map(function(f){ try { return fs.readFileSync(path.join(_dir,f),'utf8'); } catch(e){ return ''; } })
+      .join('\n') + '\n' + html;
+    var _guarded = [], _m, _re = /typeof\s+(_tc[A-Za-z0-9_]*|_wiz[A-Za-z0-9_]*)\s*===?\s*'function'/g;
+    while ((_m = _re.exec(_allSrc))) { if (_guarded.indexOf(_m[1]) === -1) _guarded.push(_m[1]); }
+    var _undef = _guarded.filter(function(n){
+      return !new RegExp('function\\s+' + n + '\\s*\\(').test(_allSrc) &&
+             !new RegExp('(var|let|const)\\s+' + n + '\\s*=\\s*function').test(_allSrc);
+    });
+    check('every typeof-guarded T-Calc/wizard helper actually exists',
+      _undef.length === 0, _undef.length ? 'missing: ' + _undef.join(', ') : 'checked ' + _guarded.length);
+  }
+
+  // Wizard hand-off
+  var _stSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('the wizard TRT step hands off to T-Calc', /trt:wizStepTRTHandoff/.test(_stSrc));
+  check('the classic in-wizard TRT config is kept, one tap away',
+    /function wizStepTRT\(body,footer\)/.test(_stSrc) && /wizToggleTrtClassic/.test(_stSrc));
+  check('saving a TRT protocol routes to T-Calc and links the stack',
+    /_tcp\.targetStackId=_savedStack\.id/.test(_stSrc) && /switchTab\('tcalc'/.test(_stSrc));
+  check('a protocol with inline TRT compounds still lands on Protocols',
+    /_trtInline/.test(_stSrc));
+}
+
+// ── T-Calc is populated by the planned TRT protocol ──────────────────────────
+// A TRT protocol built in Protocols used to be invisible to T-Calc: two separate
+// injection lists, so the curve was empty until everything was re-entered by hand.
+// The curve now merges the manual log with the stack's planned TRT injections.
+// MANUAL WINS on conflict — a logged dose is a recorded event, a protocol entry is
+// a plan for that day; counting both would double the injection.
+console.log('\n── T-Calc ← planned TRT protocol ──────────────────────────');
+{
+  if(typeof G._tcCurveLog==='function' && typeof G._tcProtocolInjections==='function'){
+    var _svCache = G._injectionsCache, _svTcp = G._tcp;
+    var _setup = function(cache, manual){
+      G._injectionsCache = cache;
+      G._tcp = Object.assign({}, _svTcp || {}, {manualLog: manual});
+    };
+    var P = function(o){ return Object.assign({tier:'trt',active:true,unit:'mg',cycle_id:'stack1'}, o); };
+
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125'})]}, []);
+    check('a planned TRT injection reaches the curve', G._tcCurveLog().length === 1);
+    check('  …carrying compound, dose and date', (function(){
+      var e=G._tcCurveLog()[0];
+      return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date==='2026-07-01' && e.source==='protocol';
+    })());
+
+    // Manual wins where both describe the same compound on the same day
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125'})]},
+           [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}]);
+    var merged = G._tcCurveLog();
+    check('same compound + day is NOT double-counted', merged.length === 1);
+    check('the manually logged dose wins over the plan',
+      parseFloat(merged[0].doseMg) === 150 && merged[0].source === 'manual');
+
+    // Different day → both kept
+    _setup({'2026-07-08':[P({compound_id:'enanthate',date:'2026-07-08',dose:'125'})]},
+           [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}]);
+    check('a plan on a different day is added alongside the log', G._tcCurveLog().length === 2);
+    check('the merged log is sorted by date', (function(){
+      var l=G._tcCurveLog(); return l[0].date <= l[1].date;
+    })());
+
+    // THE DOUBLE-COUNT TRAP: T-Calc pushes its own log into /injections under
+    // cycle_id 'tcalc' / 'tcalc:<stackId>'. Reading those back would count every
+    // T-Calc injection twice.
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125',cycle_id:'tcalc'})]},
+           [{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]);
+    check('T-Calc\'s own pushed entries are not read back (no self-double-count)',
+      G._tcCurveLog().length === 1 && G._tcProtocolInjections().length === 0);
+    _setup({'2026-07-02':[P({compound_id:'enanthate',date:'2026-07-02',dose:'125',cycle_id:'tcalc:stack9'})]}, []);
+    check('the tcalc:<stackId> namespace is excluded too', G._tcProtocolInjections().length === 0);
+
+    // Only TRT, only active, only mg — an unknown unit must be dropped, not assumed
+    _setup({'2026-07-01':[
+      P({compound_id:'bpc157',date:'2026-07-01',dose:'250',tier:'peptide'}),
+      P({compound_id:'deca',date:'2026-07-01',dose:'200',tier:'enhanced'}),
+      P({compound_id:'enanthate',date:'2026-07-01',dose:'125',active:false}),
+      P({compound_id:'cypionate',date:'2026-07-01',dose:'1',unit:'ml'}),
+      P({compound_id:'testoviron',date:'2026-07-01',dose:'0'})
+    ]}, []);
+    check('non-TRT tiers, inactive entries, non-mg units and zero doses are all excluded',
+      G._tcProtocolInjections().length === 0, JSON.stringify(G._tcProtocolInjections()));
+
+    // Future-dated plan entries are kept — that is the point of a projection
+    var _future = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+    var _fc = {}; _fc[_future] = [P({compound_id:'enanthate',date:_future,dose:'125'})];
+    _setup(_fc, []);
+    check('future planned injections are included so the curve projects forward',
+      G._tcCurveLog().length === 1);
+
+    // The manual log itself must not be mutated by any of this
+    var _manual = [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}];
+    _setup({'2026-07-08':[P({compound_id:'enanthate',date:'2026-07-08',dose:'125'})]}, _manual);
+    G._tcCurveLog();
+    check('the manual log is never written to by the merge',
+      G._tcp.manualLog.length === 1 && G._tcp.manualLog[0].doseMg === '150');
+
+    check('_tcProtocolCount reports what the banner shows',
+      G._tcProtocolCount() === 1);
+
+    // Empty / missing cache must not throw
+    _setup({}, []);
+    check('no protocol and no log → empty curve, no throw', G._tcCurveLog().length === 0);
+    G._injectionsCache = undefined;
+    check('a missing injections cache is handled', G._tcProtocolInjections().length === 0);
+
+    G._injectionsCache = _svCache; G._tcp = _svTcp;
+  }else{
+    check('_tcCurveLog / _tcProtocolInjections available', false);
+  }
+}
+
+// ── Supplements are never due before they were added ─────────────────────────
+// A daily supplement returned true before the start-date check, so adding one made
+// it retroactively due on every past day — none of which could have been ticked —
+// and Today's adherence % plus the week strip counted those as missed doses.
+console.log('\n── Supplements: no retroactive back-fill ──────────────────');
+{
+  if(typeof G._suppActiveOn==='function'){
+    var _mk=function(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+    var today=new Date(); today.setHours(0,0,0,0);
+    var yesterday=new Date(today.getTime()-86400000);
+    var lastWeek=new Date(today.getTime()-7*86400000);
+    var tomorrow=new Date(today.getTime()+86400000);
+    var daily={supp_id:'d3',freq:'daily',start_date:_mk(today)};
+
+    check('daily supplement is NOT due the day before it was added',
+      G._suppActiveOn(daily, yesterday) === false);
+    check('daily supplement is NOT due a week before it was added',
+      G._suppActiveOn(daily, lastWeek) === false);
+    check('daily supplement IS due on the day it was added',
+      G._suppActiveOn(daily, today) === true);
+    check('daily supplement IS due tomorrow',
+      G._suppActiveOn(daily, tomorrow) === true);
+
+    // The other frequencies kept their existing behaviour
+    var eod={supp_id:'x',freq:'eod',start_date:_mk(today)};
+    check('eod: not due before start', G._suppActiveOn(eod, yesterday) === false);
+    check('eod: due on start day',     G._suppActiveOn(eod, today) === true);
+    check('eod: due 2 days after',     G._suppActiveOn(eod, new Date(today.getTime()+2*86400000)) === true);
+    check('eod: not due 1 day after',  G._suppActiveOn(eod, tomorrow) === false);
+    var weekly={supp_id:'w',freq:'weekly',start_date:_mk(today)};
+    check('weekly: not due before start', G._suppActiveOn(weekly, lastWeek) === false);
+    check('weekly: due on the same weekday', G._suppActiveOn(weekly, new Date(today.getTime()+7*86400000)) === true);
+
+    // Legacy rows saved before start_date was stamped must not change behaviour —
+    // guessing a start date would hide doses the user really did take.
+    check('legacy entry with no start_date stays always-active',
+      G._suppActiveOn({supp_id:'legacy',freq:'daily'}, lastWeek) === true);
+
+    // The count Today actually renders
+    if(typeof G._supplementsForDay==='function'){
+      var _sv=G._supplements;
+      G._supplements=[daily];
+      check('_supplementsForDay excludes it on a past day', G._supplementsForDay(yesterday).length === 0);
+      check('_supplementsForDay includes it today',        G._supplementsForDay(today).length === 1);
+      G._supplements=_sv;
+    }
+    // New supplements must still be stamped on save, or the guard has nothing to read
+    var _suppSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-supplements.js'),'utf8');
+    check('a saved supplement is stamped with start_date', /start_date:\s*\(existing/.test(_suppSrc));
+  }else{
+    check('_suppActiveOn available', false);
+  }
+}
+
+// ── Macros phase is remembered ───────────────────────────────────────────────
+// It was a plain var defaulting to 'recomp' on every load, so the user's choice was
+// lost on reload. Now persisted and pushed to the backend like any other setting.
+console.log('\n── Macros phase persistence ───────────────────────────────');
+{
+  var _macSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-macros.js'),'utf8');
+  check('setMacrosPhase exists as the single write path', typeof G.setMacrosPhase === 'function');
+  check('the choice is written to localStorage', /setData\('macros-phase'/.test(_macSrc));
+  check('the choice is pushed to the backend (cache is never the source of truth)',
+    /pushPepSettingsToAgent\(\{'macros-phase'/.test(_macSrc));
+  check('syncPepSettingsFromAgent rehydrates it', /s\['macros-phase'\]/.test(rawScript));
+  if(typeof G.setMacrosPhase === 'function'){
+    var _svPhase=G._macrosPhase;
+    G.setMacrosPhase('cut');
+    check('setting the phase updates the live value', G._macrosPhase === 'cut');
+    check('the choice survives a re-read of storage', G.getData('macros-phase','') === 'cut');
+    G.setMacrosPhase('bogus');
+    check('an unknown phase is rejected, not stored', G._macrosPhase === 'cut');
+    G.setMacrosPhase('reset');
+    check('every valid phase is accepted', G._macrosPhase === 'reset');
+    G.setMacrosPhase(_svPhase || 'recomp');
+  }
+  check('the wizard step writes through the same path', /wizSetMacroPhase\(p\)\{if\(typeof setMacrosPhase/.test(
+    fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8')));
+}
+
+// ── Absorption constant is solved from documented tmax ───────────────────────
+// The ka table used to bucket by half-life, which put enanthate's peak at ~1.0 d
+// against a documented 1.5-3 d (Testoviron SmPC) and Nebido's at ~9.0 d against a
+// documented median of 7 d (AVEED §12.3). Where the backend serves a documented
+// tmax, ka is now solved so the modelled peak lands where the document says.
+console.log('\n── ka solved from documented tmax ─────────────────────────');
+{
+  if(typeof G._tcKa==='function' && typeof G._tcKaFromTmax==='function' && typeof G._tcPkConc==='function'){
+    var _peakDay = function(ka, ke){
+      var best=0, bv=-1;
+      for(var t=0;t<=120;t+=0.01){ var v=G._tcPkConc(100,ka,ke,t); if(v>bv){bv=v;best=t;} }
+      return best;
+    };
+    // [label, halfLife, documented tmax, observed window]
+    [['enanthate',4.5,2.25,[1.5,3.0]],
+     ['nebido',56,7.0,[4,42]],
+     ['sustanon',8.5,1.5,[1,2]]].forEach(function(c){
+      var name=c[0], hl=c[1], tm=c[2], win=c[3];
+      var ke=Math.LN2/hl, ka=G._tcKa(hl,tm), peak=_peakDay(ka,ke);
+      check('ka solved for '+name+' peaks at its documented tmax ('+tm+' d)',
+        Math.abs(peak-tm) < 0.05, 'peaks at '+peak.toFixed(2)+' d');
+      check('ka solved for '+name+' peaks inside the observed window',
+        peak >= win[0]-0.05 && peak <= win[1]+0.05, 'peak '+peak.toFixed(2)+' vs '+win.join('-'));
+    });
+
+    // The specific regression: enanthate used to peak a day early
+    check('enanthate no longer peaks ~1 d early (was ka 3.0 → 1.04 d)',
+      _peakDay(G._tcKa(4.5,2.25), Math.LN2/4.5) > 1.4);
+    check('nebido no longer peaks ~2 d late (was ka 0.40 → 8.97 d)',
+      _peakDay(G._tcKa(56,7.0), Math.LN2/56) < 8.0);
+
+    // Compounds whose labels state NO tmax must be untouched by this change
+    check('cypionate (no documented tmax) keeps its bucket ka', G._tcKa(8) === 3.00 && G._tcKa(8,0) === 3.00);
+    check('propionate (no documented tmax) keeps its bucket ka', G._tcKa(0.8) === 8.00 && G._tcKa(0.8,0) === 8.00);
+    check('gel (no documented tmax) keeps its bucket ka',        G._tcKa(1.5,0) === 8.00);
+
+    // Guards: bad or impossible input must fall back, never fit something else
+    check('tmax beyond the model maximum (1/ke) is rejected', G._tcKaFromTmax(4.5, 99) === null);
+    check('impossible tmax falls back to the bucket',         G._tcKa(4.5, 99) === 3.00);
+    check('zero / negative / NaN tmax falls back',
+      G._tcKa(4.5,0)===3.00 && G._tcKa(4.5,-1)===3.00 && G._tcKa(4.5,NaN)===3.00);
+    check('solved ka always exceeds ke (absorption faster than elimination)',
+      G._tcKaFromTmax(4.5,2.25) > Math.LN2/4.5 && G._tcKaFromTmax(56,7) > Math.LN2/56);
+    check('_tcTmax round-trips a solved ka',
+      Math.abs(G._tcTmax(G._tcKaFromTmax(8.5,1.5), Math.LN2/8.5) - 1.5) < 1e-6);
+
+    // The backend entry's tmax must actually reach the model
+    var _sv = G._tcExtraCatalog;
+    G._tcExtraCatalog = [{id:'enanthate',name:'Testosterone Enanthate',dot:'#e05050',
+                          halfLifeDays:4.5,halfLife:'~4.5 days',tmaxDays:2.25}];
+    check('backend tmaxDays reaches _tcCompInfo', G._tcCompInfo('enanthate').tmaxDays === 2.25);
+    G._tcExtraCatalog = [{id:'enanthate',name:'Testosterone Enanthate',dot:'#e05050',
+                          halfLifeDays:4.5,halfLife:'~4.5 days'}];
+    check('absent tmaxDays is 0, not undefined (falls back cleanly)',
+      G._tcCompInfo('enanthate').tmaxDays === 0);
+    G._tcExtraCatalog = _sv;
+  }else{
+    check('_tcKa / _tcKaFromTmax / _tcPkConc available', false);
+  }
+}
+
+// ── Propionate half-life correction (2026-07-29) ─────────────────────────────
+// Propionate ran at 2 d with no source, against a published IM half-life of
+// 0.8 d (~20 h) — the shortest-acting ester. Corrected on an explicit decision.
+// A 2 d value understated both the peak and the depth of the EOD trough.
+console.log('\n── Propionate half-life correction ────────────────────────');
+{
+  if(G.TRT_GUIDE && G.TRT_GUIDE['propionate'] && typeof G._parseHalfLifeDays==='function'){
+    var _pHl = G.TRT_GUIDE['propionate'].halfLife;
+    check('propionate fallback parses to the published 0.8 d',
+      G._parseHalfLifeDays(_pHl) === 0.8, 'parsed '+G._parseHalfLifeDays(_pHl)+' from "'+_pHl+'"');
+    check('the legacy 2 d value is gone', !/~?2\s*days?/.test(_pHl));
+    check('propionate keeps its ester stamp',
+      typeof G._injPkMeta!=='function' || G._injPkMeta('trt','propionate').ester==='propionate');
+    // Shortest-acting ester: must stay shorter than every other TRT entry
+    if(typeof G.TRT_CAT!=='undefined'){
+      var _hls = G.TRT_CAT.filter(function(c){ return c.id!=='propionate'; })
+        .map(function(c){ return G._parseHalfLifeDays(G.TRT_GUIDE[c.id].halfLife); })
+        .filter(function(v){ return v>0; });
+      check('propionate is the shortest-acting ester in the fallback table',
+        _hls.every(function(v){ return v > 0.8; }), 'others: '+_hls.join(', '));
+    }
+  }else{
+    check('TRT_GUIDE.propionate available', false);
+  }
+  // The ka table buckets by half-life. 0.8 d must NOT fall into the near-immediate
+  // (gel) bucket — that would halve propionate's tmax as a rider on the half-life fix.
+  if(typeof G._tcKa==='function'){
+    check('_tcKa keeps propionate (0.8 d) in its calibrated bucket, not the gel bucket',
+      G._tcKa(0.8) === 8.00, 'got ka='+G._tcKa(0.8));
+    check('_tcKa: propionate tmax stays near the calibrated ~0.4 d', (function(){
+      var ka=G._tcKa(0.8), ke=Math.LN2/0.8, tmax=Math.log(ka/ke)/(ka-ke);
+      return tmax > 0.25 && tmax < 0.45;
+    })());
+    check('_tcKa: other buckets unchanged',
+      G._tcKa(56)===0.40 && G._tcKa(8)===3.00 && G._tcKa(4.5)===3.00 && G._tcKa(1.5)===8.00);
+    check('_tcKa: the near-immediate bucket still exists below 0.5 d', G._tcKa(0.2) === 15.0);
+  }
+}
+
+// ── Backend is the source of truth for ester PK ──────────────────────────────
+// /trt-catalog now serves PK for EVERY ester (not just ones missing from TRT_CAT),
+// so two things must hold: a backend entry must win over the hardcoded TRT_GUIDE
+// fallback for any id, and an id present in both must not be listed twice in the
+// inventory picker (_tcCategorizeComps concatenated TRT_CAT + backend blind).
+console.log('\n── Ester PK: backend is the source of truth ───────────────');
+{
+  if(typeof G._tcCompInfo==='function' && typeof G.TRT_CAT!=='undefined'){
+    var _svCat = G._tcExtraCatalog;
+    // Mock the backend serving every TRT_CAT ester with a distinctive half-life
+    G._tcExtraCatalog = G.TRT_CAT.map(function(c,i){
+      return {id:c.id, name:c.name, dot:c.dot, halfLifeDays: 100+i, halfLife:(100+i)+' days (test)'};
+    });
+
+    check('every TRT_CAT ester resolves its half-life from the backend entry',
+      G.TRT_CAT.every(function(c,i){ return G._tcCompInfo(c.id).halfLifeDays === 100+i; }),
+      G.TRT_CAT.map(function(c){ return c.id+'='+G._tcCompInfo(c.id).halfLifeDays; }).join(' '));
+
+    check('backend value overrides the hardcoded TRT_GUIDE fallback',
+      G._tcCompInfo('nebido').halfLifeDays === 100 &&
+      G._parseHalfLifeDays(G.TRT_GUIDE['nebido'].halfLife) !== 100);
+
+    if(typeof G._tcCategorizeComps==='function'){
+      var _cats = G._tcCategorizeComps();
+      var _all = _cats.reduce(function(a,c){ return a.concat(c.ids); }, []);
+      var _dupes = _all.filter(function(id,i){ return _all.indexOf(id) !== i; });
+      check('inventory picker lists no ester twice when the backend also serves it',
+        _dupes.length === 0, 'duplicated: '+_dupes.join(', '));
+      check('inventory picker still covers every TRT_CAT ester',
+        G.TRT_CAT.every(function(c){ return _all.indexOf(c.id) >= 0; }));
+    }
+
+    // A band served by the backend must reach the model; absent one, low==high==central
+    G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e05050',halfLifeDays:56,halfLifeDaysLow:37,halfLifeDaysHigh:75,halfLife:'~56 days'}];
+    var _nb = G._tcCompInfo('nebido');
+    check('backend half-life band reaches the model',
+      _nb.halfLifeDaysLow===37 && _nb.halfLifeDays===56 && _nb.halfLifeDaysHigh===75);
+    check('band is ordered low <= central <= high',
+      _nb.halfLifeDaysLow <= _nb.halfLifeDays && _nb.halfLifeDays <= _nb.halfLifeDaysHigh);
+    G._tcExtraCatalog = [{id:'cypionate',name:'Testosterone Cypionate',dot:'#e05050',halfLifeDays:8,halfLife:'~8 days'}];
+    var _cy = G._tcCompInfo('cypionate');
+    check('no band served → low == high == central (no false precision)',
+      _cy.halfLifeDaysLow===8 && _cy.halfLifeDaysHigh===8);
+
+    G._tcExtraCatalog = _svCat;
+  }else{
+    check('_tcCompInfo + TRT_CAT available', false);
+  }
+}
+
+// ── Nebido fallback PK must match the backend catalogue ──────────────────────
+// Regression: TRT_GUIDE.nebido said "~34 days", so whenever the unauthenticated
+// /trt-catalog fetch failed the whole app fell back to a 34 d half-life for
+// testosterone undecanoate — roughly half the backend's 56 d, making projected
+// levels and washout decay about twice as fast. The backend value is derived in
+// docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md (Bayer CCDS + UK
+// SmPC): 56 d plateau-equivalent, 37-75 d individual band.
+console.log('\n── Nebido fallback PK vs backend ──────────────────────────');
+{
+  if(G.TRT_GUIDE && G.TRT_GUIDE['nebido'] && typeof G._parseHalfLifeDays==='function'){
+    var _nebHl = G.TRT_GUIDE['nebido'].halfLife;
+    check('TRT_GUIDE.nebido fallback parses to the backend 56 d central value',
+      G._parseHalfLifeDays(_nebHl) === 56, 'parsed '+G._parseHalfLifeDays(_nebHl)+' from "'+_nebHl+'"');
+    check('TRT_GUIDE.nebido no longer carries the stale 34 d single-dose figure',
+      !/\b34\s*days?\b/.test(_nebHl));
+    check('TRT_GUIDE.nebido states the 37-75 d individual band',
+      /37\s*-\s*75/.test(_nebHl));
+    // The ester name is parsed out of this same string by _injPkMeta (first
+    // parenthetical), so the parenthetical must stay the ester, not the band.
+    check('TRT_GUIDE.nebido still yields the undecanoate ester stamp',
+      typeof G._injPkMeta!=='function' || G._injPkMeta('trt','nebido').ester==='undecanoate',
+      JSON.stringify(typeof G._injPkMeta==='function'?G._injPkMeta('trt','nebido'):null));
+  }else{
+    check('TRT_GUIDE.nebido + _parseHalfLifeDays available', false);
+  }
+}
+
 // ── TRT_GUIDE: structural validation (all 6 TRT compounds) ───────────────────
 console.log('\n── TRT_GUIDE: structural validation ─────────────────────────');
 {
@@ -3325,8 +3917,11 @@ if (typeof G._tcPkConc === 'function') {
 }
 
 if (typeof G._tcKa === 'function') {
-  check('_tcKa: HL=0.5d → 15.0 (gel/short)',      G._tcKa(0.5) === 15.0, 'got '+G._tcKa(0.5));
-  check('_tcKa: HL=2d   →  8.0 (propionate)',      G._tcKa(2)   ===  8.0, 'got '+G._tcKa(2));
+  // Boundary moved 1d → 0.5d when propionate was corrected to 0.8 d (2026-07-29),
+  // so 0.8 keeps ka 8 instead of dropping into the near-immediate bucket.
+  check('_tcKa: HL=0.4d → 15.0 (gel/near-immediate)', G._tcKa(0.4) === 15.0, 'got '+G._tcKa(0.4));
+  check('_tcKa: HL=0.8d →  8.0 (propionate)',      G._tcKa(0.8) ===  8.0, 'got '+G._tcKa(0.8));
+  check('_tcKa: HL=2d   →  8.0 (same bucket)',     G._tcKa(2)   ===  8.0, 'got '+G._tcKa(2));
   check('_tcKa: HL=4.5d →  3.0 (enanthate/TE)',    G._tcKa(4.5) ===  3.0, 'got '+G._tcKa(4.5));
   check('_tcKa: HL=10d  →  1.5 (cypionate/TC)',    G._tcKa(10)  ===  1.5, 'got '+G._tcKa(10));
   check('_tcKa: HL=34d  →  0.4 (undecanoate/TU)',  G._tcKa(34)  ===  0.4, 'got '+G._tcKa(34));
