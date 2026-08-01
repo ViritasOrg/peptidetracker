@@ -16,6 +16,7 @@ const patchedScript = rawScript
   .replace('const STACK_RULES=',      'var STACK_RULES=')
   .replace('const WEEKLY_DEFAULT=',   'var WEEKLY_DEFAULT=')
   .replace("const VERSION='",         "var VERSION='")
+  .replace('const APP_ID=',          'var APP_ID=')
   .replace('const AGENT_URL=',        'var AGENT_URL=')
   .replace('let _googleToken=',      'var _googleToken=')
   .replace('const GOOGLE_CLIENT_ID=', 'var GOOGLE_CLIENT_ID=')
@@ -1614,6 +1615,215 @@ console.log('\n── dose dedup migration ────────────�
     !rawScript.includes("if(!_activeStackIndices.length)_activeStackIndices=[0];"));
 }
 
+
+// ── Wizard summaries list every tier ─────────────────────────────────────────
+// Reported 2026-08-01: "never shows trt ester chosen, makes me think it is a
+// peptide-only stack". Validate and Review read only the classic _wiz.trt tier, so a
+// protocol whose testosterone came from the T-Calc planner (_wiz.trtPlan — the
+// default path since the TRT step became that planner) listed its peptides and
+// nothing else. Both steps now go through _wizTrtSummaryRows.
+{
+  console.log('\n── Wizard summaries cover every tier ──────────────────────');
+  const _svWiz = G._wiz;
+  const _mkEl2 = () => { let h=''; return {set innerHTML(v){h=v;}, get innerHTML(){return h;}}; };
+  const _pep = {id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true};
+
+  check('_wizTrtSummaryRows is defined', typeof G._wizTrtSummaryRows === 'function');
+  if (typeof G._wizTrtSummaryRows === 'function') {
+    // A plan built in the TRT step is a real TRT compound and must be summarised
+    G._wiz = {goals:['trt'], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P',
+      trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:5,cadenceUnit:'day',cadenceDays:5,startDate:'2026-08-01'}};
+    let rows = G._wizTrtSummaryRows();
+    check('a T-Calc-planner protocol reports its ester', rows.length===1 && rows[0].id==='enanthate',
+      JSON.stringify(rows));
+    check('  …with its dose', rows[0].dose==='125mg', rows[0].dose);
+    check('  …and its cadence in words', rows[0].cadence==='Every 5 days', rows[0].cadence);
+    check('  …named, not left as a raw id', rows[0].name && rows[0].name!=='enanthate', rows[0].name);
+
+    G._wiz.trtPlan.cadenceN=1; G._wiz.trtPlan.cadenceUnit='week'; G._wiz.trtPlan.cadenceDays=7;
+    check('a cadence of one reads "Every week", not "Every 1 weeks"',
+      G._wizTrtSummaryRows()[0].cadence==='Every week', G._wizTrtSummaryRows()[0].cadence);
+
+    // An incomplete plan is not a compound
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''};
+    check('an unfinished plan contributes nothing', G._wizTrtSummaryRows().length===0);
+
+    // The classic tier still works, and both together de-duplicate
+    G._wiz.trtPlan=null;
+    G._wiz.trt={enabled:true,compounds:[{id:'testosterone-cyp',name:'Test Cyp',dose:'100',unit:'mg',freqVal:1,freqUnit:'weeks',dot:'#e8a020'}]};
+    rows = G._wizTrtSummaryRows();
+    check('the classic multi-compound tier is still summarised',
+      rows.length===1 && rows[0].id==='testosterone-cyp', JSON.stringify(rows));
+    G._wiz.trtPlan={compId:'testosterone-cyp',doseMg:'100',cadenceN:1,cadenceUnit:'week',cadenceDays:7,startDate:'2026-08-01'};
+    check('the same ester configured both ways is listed once',
+      G._wizTrtSummaryRows().length===1, JSON.stringify(G._wizTrtSummaryRows()));
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'125',cadenceN:1,cadenceUnit:'week',cadenceDays:7,startDate:'2026-08-01'};
+    check('two different esters are both listed', G._wizTrtSummaryRows().length===2,
+      JSON.stringify(G._wizTrtSummaryRows().map(function(r){return r.id;})));
+  }
+
+  // End to end through the two steps that render a summary
+  G._wiz = {goals:['trt'], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P', step:0,
+    trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:5,cadenceUnit:'day',cadenceDays:5,startDate:'2026-08-01'}};
+  if (typeof G.wizStepValidate === 'function') {
+    const vb=_mkEl2(), vf=_mkEl2();
+    G.wizStepValidate(vb,vf);
+    check('Validate shows a TRT heading when a plan exists', /TRT</.test(vb.innerHTML) || />TRT/.test(vb.innerHTML),
+      vb.innerHTML.slice(0,200));
+    check('  …and names the ester', /Enanthate|Testosterone/i.test(vb.innerHTML));
+    check('  …alongside the peptides', /Retatrutide/.test(vb.innerHTML));
+  }
+  if (typeof G.wizStepReview === 'function') {
+    const rb=_mkEl2(), rf=_mkEl2();
+    G.wizStepReview(rb,rf);
+    check('Review lists the ester in the summary', /Enanthate|Testosterone/i.test(rb.innerHTML),
+      rb.innerHTML.slice(0,300));
+    check('  …with dose and cadence', /125mg/.test(rb.innerHTML) && /Every 5 days/.test(rb.innerHTML));
+    check('  …and still lists the peptides', /Retatrutide/.test(rb.innerHTML));
+  }
+
+  // A peptide-only protocol must NOT sprout an empty TRT section
+  G._wiz = {goals:[], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P', step:0, trtPlan:null};
+  if (typeof G.wizStepValidate === 'function') {
+    const nb=_mkEl2(), nf=_mkEl2();
+    G.wizStepValidate(nb,nf);
+    check('a peptide-only protocol shows no TRT section', !/>TRT</.test(nb.innerHTML));
+  }
+  G._wiz = _svWiz;
+}
+
+
+// ── Staging has its own backend namespace ────────────────────────────────────
+// Reported 2026-08-01: "testing stage fucks my prod data". Both builds sent no
+// X-App-Id, so staging wrote into the same user records as production. Staging now
+// declares its own namespace; production keeps sending nothing, which is where its
+// data already lives — changing that would orphan it.
+{
+  console.log('\n── Staging data namespace ─────────────────────────────────');
+  check('APP_ID is declared and keys off IS_STAGING',
+    /const APP_ID=IS_STAGING\?'stage':''/.test(rawScript));
+  check('authHeaders sends X-App-Id when there is one',
+    /function authHeaders\(extra\)\{const h=\{\};if\(APP_ID\)h\['X-App-Id'\]=APP_ID;/.test(rawScript));
+  check('production still sends no namespace header, so its data is untouched',
+    typeof G.APP_ID === 'string' && G.APP_ID === '' && !('X-App-Id' in G.authHeaders()),
+    JSON.stringify(G.authHeaders()));
+  check('  …and the auth token still goes out either way',
+    /const _t=_sessionToken\|\|_googleToken;if\(_t\)h\['Authorization'\]/.test(rawScript));
+
+  // The copy button
+  check('copyDataToStage is defined', typeof G.copyDataToStage === 'function');
+  check('buildStageCopyCard is defined', typeof G.buildStageCopyCard === 'function');
+  check('it posts to the copy endpoint', /AGENT_URL\+'\/account\/copy-to-stage',\{method:'POST'/.test(rawScript));
+  check('  …authenticated', /copy-to-stage',\{method:'POST',headers:authHeaders\(\)\}/.test(rawScript));
+  check('the card is rendered with the other settings cards',
+    (rawScript.match(/buildStageCopyCard\(\)/g)||[]).length >= 3,
+    'found '+((rawScript.match(/buildStageCopyCard\(\)/g)||[]).length));
+  check('it is hidden on staging — there is nothing to copy from there',
+    /if\(IS_STAGING\)\{card\.innerHTML='';return;\}/.test(rawScript));
+  check('the copy is confirmed before it runs', /confirm\('Copy your data to the staging app\?/.test(rawScript));
+  check('  …and says plainly that this app is not changed',
+    /Nothing in this app changes/.test(rawScript));
+
+  // Rendered markup, in the production case
+  if (typeof G.buildStageCopyCard === 'function') {
+    let _html='';
+    const _svGet = G.document.getElementById;
+    G.document.getElementById = id => id==='s-stagecopy-card'
+      ? {set innerHTML(v){_html=v;}, get innerHTML(){return _html;}}
+      : _svGet(id);
+    G.buildStageCopyCard();
+    check('the card renders a copy button', /s-stagecopy-btn/.test(_html) && /Copy my data to staging/.test(_html));
+    check('  …with somewhere to report the result', /s-stagecopy-status/.test(_html));
+    G.document.getElementById = _svGet;
+  }
+}
+
+// ── Only one protocol may be active ──────────────────────────────────────────
+// Reported 2026-08-01: three protocols showed "Active" at once, including two
+// overlapping TRT protocols, so Today merged doses from all of them. Activation
+// is a radio, not a set of checkboxes — switching one on switches the rest off.
+// _activeStackIndices keeps its array shape (the backend payload, the cache and
+// every reader still expect it) but never holds more than one index.
+{
+  console.log('\n── Only one active protocol ───────────────────────────────');
+  const _svStacks = G._userStacks, _svAct = G._activeStackIndices;
+  const _mkS = n => ({name:n, peptides:[{id:'retatrutide',name:'Reta',dot:'#e8ff3c',
+    days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]});
+  G._userStacks = [_mkS('A'), _mkS('B'), _mkS('C')];
+
+  check('_normalizeActiveStack is defined', typeof G._normalizeActiveStack === 'function');
+  if (typeof G._normalizeActiveStack === 'function') {
+    G._activeStackIndices = [0,1,2];
+    check('stored data with several active is clamped to one',
+      JSON.stringify(G._normalizeActiveStack()) === '[0]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = [2,0];
+    check('  …the first listed one wins',
+      JSON.stringify(G._normalizeActiveStack()) === '[2]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = [];
+    check('  …none active stays none active (on-break is valid)',
+      JSON.stringify(G._normalizeActiveStack()) === '[]');
+    G._activeStackIndices = [7,1];
+    check('  …an index past the end of the list is dropped',
+      JSON.stringify(G._normalizeActiveStack()) === '[1]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = null;
+    check('  …a non-array survives without throwing',
+      JSON.stringify(G._normalizeActiveStack()) === '[]');
+  }
+
+  // The load path must apply it, or the user keeps seeing their old multi-active set
+  check('loadUserStacks normalizes before building anything',
+    /_normalizeActiveStack\(\);\s*\n\s*var _needIdSave/.test(rawScript));
+
+  // toggleStack behaves as a radio
+  check('activating a protocol replaces the active one rather than adding to it',
+    /pos===-1\)\{\s*\n\s*_activeStackIndices=\[idx\];/.test(rawScript));
+  check('  …no code path pushes a second index onto the active set',
+    !/_activeStackIndices\.push\(/.test(rawScript), 'a push( survives in index.html');
+  check('deactivating the active protocol clears it, leaving none active',
+    /\}\s*else\s*\{\s*\n\s*_activeStackIndices=\[\];\s*\n\s*\}/.test(rawScript));
+
+  // Starting a protocol from a template makes it THE active one
+  {
+    const _tsSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+    check('starting a template activates it exclusively',
+      /_activeStackIndices=\[_idx\];/.test(_tsSrc));
+    check('  …tab-stack.js never pushes onto the active set either',
+      !/_activeStackIndices\.push\(/.test(_tsSrc));
+  }
+
+  // Through the real toggle. toggleStack is async, but it mutates the active set
+  // synchronously before its first await, so the assertion needs no await.
+  if (typeof G.toggleStack === 'function') {
+    const _sv = {save:G.saveStacksToBackend, ref:G.refreshInjectionsCache, ws:G.buildWeekStrip,
+                 t:G.buildToday, s:G.buildSchedule, ss:G.buildStackStore};
+    G.saveStacksToBackend = async () => {}; G.refreshInjectionsCache = async () => {};
+    G.buildWeekStrip = () => {}; G.buildToday = () => {};
+    G.buildSchedule = () => {}; G.buildStackStore = () => {};
+    const _quiet = p => { if (p && p.catch) p.catch(() => {}); };
+
+    G._activeStackIndices = [0];
+    _quiet(G.toggleStack(1));
+    check('turning on B turns A off', JSON.stringify(G._activeStackIndices) === '[1]',
+      JSON.stringify(G._activeStackIndices));
+    _quiet(G.toggleStack(2));
+    check('turning on C turns B off', JSON.stringify(G._activeStackIndices) === '[2]',
+      JSON.stringify(G._activeStackIndices));
+    _quiet(G.toggleStack(2));
+    check('turning the active one off leaves none active',
+      JSON.stringify(G._activeStackIndices) === '[]', JSON.stringify(G._activeStackIndices));
+    G.updateWEEKLY();
+    check('  …and WEEKLY empties out with it', G.WEEKLY.length === 0);
+    _quiet(G.toggleStack(9));
+    check('an out-of-range index is ignored', JSON.stringify(G._activeStackIndices) === '[]');
+
+    G.saveStacksToBackend = _sv.save; G.refreshInjectionsCache = _sv.ref;
+    G.buildWeekStrip = _sv.ws; G.buildToday = _sv.t;
+    G.buildSchedule = _sv.s; G.buildStackStore = _sv.ss;
+  }
+  G._userStacks = _svStacks; G._activeStackIndices = _svAct;
+  G.updateWEEKLY();
+}
+
 // ── getDosesForDate + _findWeeklyItemInfo (date-range scheduling) ──────────────
 {
   console.log('\n── getDosesForDate ─────────────────────────────────────────');
@@ -1755,122 +1965,132 @@ console.log('\n── dose dedup migration ────────────�
     tabStackJs.includes("value=\"0\"")&&tabStackJs.includes('No end date'));
 }
 
-// ── Stack conflict detection ──────────────────────────────────────────────────
+// ── Duplicate-dosing detection, within one protocol ───────────────────────────
+// Only one protocol is ever active (2026-08-01), so the old protocol-vs-protocol
+// comparison had nothing left to compare. What can still double-dose you is the
+// same compound appearing in two tiers of the SAME protocol — testosterone under
+// both TRT and Enhanced — so that is what _detectStackConflicts now checks, across
+// Peptides + TRT + Enhanced together.
 {
-  console.log('\n── Stack conflict detection ────────────────────────────────');
+  console.log('\n── Duplicate dosing within a protocol ─────────────────────');
   check('_getStackCompounds defined',typeof G._getStackCompounds==='function');
   check('_detectStackConflicts defined',typeof G._detectStackConflicts==='function');
-  check('_calcLatestActiveEnd defined',typeof G._calcLatestActiveEnd==='function');
 
-  const pepA={name:'Stack A',peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]};
-  const pepB={name:'Stack B',peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'2',unit_am:'mg',active:true},{id:'semaglutide',name:'Semaglutide',dot:'#f59e0b',days:[0],times:['AM'],dose_am:'0.5',unit_am:'mg',active:true}]};
-  const pepC={name:'Stack C',peptides:[{id:'semaglutide',name:'Semaglutide',dot:'#f59e0b',days:[0],times:['AM'],dose_am:'0.5',unit_am:'mg',active:true}]};
-  const trtStack={name:'TRT Stack',peptides:[],trt:{enabled:true,compounds:[{id:'testosterone-cyp',name:'Testosterone Cyp',dose:'100',unit:'mg/week',days:[3],dot:'#e8a020'}]}};
-  const trtStack2={name:'TRT Stack 2',peptides:[],trt:{enabled:true,compounds:[{id:'testosterone-cyp',name:'Testosterone Cyp',dose:'200',unit:'mg/week',days:[3],dot:'#e8a020'}]}};
-  const enhStack2={name:'Enhanced 2',peptides:[],enhanced:{enabled:true,compounds:[{id:'testosterone-e',name:'Testosterone E',dose:'250',unit:'mg/week',days:[1,4],dot:'#a855f7'}]}};
-  const enhStack3={name:'Enhanced 3',peptides:[],enhanced:{enabled:true,compounds:[{id:'testosterone-e',name:'Testosterone E',dose:'500',unit:'mg/week',days:[1,4],dot:'#a855f7'}]}};
+  const _pep=(id,name)=>({id:id,name:name,dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true});
+  const _trt=(id,name)=>({id:id,name:name,dose:'100',unit:'mg/week',days:[3],dot:'#e8a020'});
+  const _enh=(id,name)=>({id:id,name:name,dose:'250',unit:'mg/week',days:[1,4],dot:'#a855f7'});
 
-  // _getStackCompounds
-  var compsA=G._getStackCompounds(pepA);
-  check('_getStackCompounds: extracts peptide compounds',compsA.length===1&&compsA[0].id==='retatrutide');
-  var compsT=G._getStackCompounds(trtStack);
-  check('_getStackCompounds: extracts TRT compounds',compsT.length===1&&compsT[0].id==='testosterone-cyp');
-  var compsE=G._getStackCompounds(enhStack2);
-  check('_getStackCompounds: extracts Enhanced compounds',compsE.length===1&&compsE[0].id==='testosterone-e');
-  check('_getStackCompounds: empty stack returns []',G._getStackCompounds({peptides:[]}).length===0);
+  // _getStackCompounds spans every tier and tags which one each came from
+  const _all={name:'All tiers',peptides:[_pep('retatrutide','Retatrutide')],
+    trt:{enabled:true,compounds:[_trt('testosterone-cyp','Testosterone Cyp')]},
+    enhanced:{enabled:true,compounds:[_enh('testosterone-e','Testosterone E')]}};
+  const _comps=G._getStackCompounds(_all);
+  check('_getStackCompounds reads all three tiers together',_comps.length===3,
+    JSON.stringify(_comps.map(c=>c.id)));
+  check('  …and records which tier each compound came from',
+    JSON.stringify(_comps.map(c=>c.tier))==='["Peptides","TRT","Enhanced"]',
+    JSON.stringify(_comps.map(c=>c.tier)));
+  check('  …carrying the compound-group tags used for axis lookups',
+    Array.isArray(_comps[0].cg)&&_comps[0].cg.includes('glp1'));
+  check('_getStackCompounds: empty protocol returns []',G._getStackCompounds({peptides:[]}).length===0);
 
-  // _detectStackConflicts — peptide overlap
-  G._userStacks=[pepA,pepB];G._activeStackIndices=[0,1];
-  var det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: detects peptide overlap (retatrutide in both A and B)',det.conflicts.length>0&&det.conflicts[0].compoundId==='retatrutide');
-  check('_detectStackConflicts: identifies conflicting stack index',det.conflictingIdxs.includes(0));
+  // The case this exists for: one compound configured in two tiers
+  const _dup={name:'Dup',peptides:[],
+    trt:{enabled:true,compounds:[_trt('testosterone-e','Testosterone E')]},
+    enhanced:{enabled:true,compounds:[_enh('testosterone-e','Testosterone E')]}};
+  G._userStacks=[_dup];G._activeStackIndices=[0];
+  let det=G._detectStackConflicts(0);
+  check('the same compound in TRT and Enhanced is a conflict',det.conflicts.length===1,
+    det.conflicts.length+' found');
+  check('  …reported as a duplicate',det.conflicts[0].reason==='duplicate');
+  check('  …naming the tier that is kept and the tier that is dropped',
+    det.conflicts[0].existingTier==='TRT'&&det.conflicts[0].tier==='Enhanced',
+    det.conflicts[0].existingTier+' -> '+det.conflicts[0].tier);
 
-  // _detectStackConflicts — no overlap (peptides on different axes: glp1 vs healing)
-  const glowStack={name:'Glow Stack',peptides:[{id:'glow',name:'Glow Stack',dot:'#3b9eff',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'0.09',unit_am:'ml',active:true}]};
-  G._userStacks=[pepA,glowStack];G._activeStackIndices=[0,1];
-  det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: no conflict when peptides on different axes',det.conflicts.length===0);
+  // Duplicated inside a single tier counts too
+  const _dupPep={name:'DupPep',peptides:[_pep('retatrutide','Retatrutide'),_pep('retatrutide','Retatrutide')]};
+  G._userStacks=[_dupPep];G._activeStackIndices=[0];
+  check('the same compound twice inside one tier is a conflict',
+    G._detectStackConflicts(0).conflicts.length===1);
 
-  // _detectStackConflicts — TRT overlap
-  G._userStacks=[trtStack,trtStack2];G._activeStackIndices=[0,1];
-  det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: detects TRT compound overlap',det.conflicts.length>0&&det.conflicts[0].compoundId==='testosterone-cyp');
+  // A protocol with distinct compounds in every tier is clean
+  G._userStacks=[_all];G._activeStackIndices=[0];
+  check('distinct compounds across tiers are not a conflict',
+    G._detectStackConflicts(0).conflicts.length===0);
+  check('an empty protocol is not a conflict',
+    G._detectStackConflicts(0,{}).conflicts.length===0);
+  check('an index with no protocol behind it returns no conflicts',
+    G._detectStackConflicts(99).conflicts.length===0);
 
-  // _detectStackConflicts — Enhanced overlap
-  G._userStacks=[enhStack2,enhStack3];G._activeStackIndices=[0,1];
-  det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: detects Enhanced compound overlap',det.conflicts.length>0&&det.conflicts[0].compoundId==='testosterone-e');
+  // Deliberately NOT a conflict: two different compounds on the same axis. Across
+  // two protocols that meant "you forgot"; inside one it is the standard GH-axis
+  // pairing (CJC-1295 + Ipamorelin), and blocking it would fire on normal protocols.
+  const _ghAxis={name:'GH',peptides:[_pep('cjc-ipa','CJC-1295/IPA')],
+    enhanced:{enabled:true,compounds:[_enh('hgh','HGH (Somatropin)')]}};
+  G._userStacks=[_ghAxis];G._activeStackIndices=[0];
+  check('two different compounds on one axis are NOT blocked inside a protocol',
+    G._detectStackConflicts(0).conflicts.length===0,
+    JSON.stringify(G._detectStackConflicts(0).conflicts));
 
-  // _detectStackConflicts — single active stack → never conflicts
-  G._userStacks=[pepA];G._activeStackIndices=[0];
-  det=G._detectStackConflicts(0);
-  check('_detectStackConflicts: single stack has no conflicts',det.conflicts.length===0);
+  // The cross-protocol machinery is gone, not merely unreachable
+  check('the protocol-vs-protocol comparison is gone',
+    !/_activeStackIndices\.forEach[\s\S]{0,200}conflictingSet/.test(rawScript));
+  check('_calcLatestActiveEnd (scheduled-after-other-cycles) is gone',
+    !rawScript.includes('_calcLatestActiveEnd'));
+  check('the modal no longer offers to deactivate other protocols',
+    !rawScript.includes("_resolveConflict('deactivate'")&&!rawScript.includes('_resolveConflict(\\\'deactivate\\\''));
 
-  // _detectStackConflicts — only counts stacks that are actually active
-  G._userStacks=[pepA,pepB];G._activeStackIndices=[1]; // Stack A not active
-  det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: inactive stack not counted as conflict',det.conflicts.length===0);
-
-  // _calcLatestActiveEnd
-  const stackEndDate={name:'X',cycle_start:'2026-06-01',end_date:'2026-09-01',cycle_length:13,peptides:[]};
-  const stackCycleLen={name:'Y',cycle_start:'2026-07-01',cycle_length:12,peptides:[]};
-  const stackNoEnd={name:'Z',cycle_start:'2026-06-01',cycle_length:0,peptides:[]};
-
-  G._userStacks=[stackEndDate];G._activeStackIndices=[0];
-  var le=G._calcLatestActiveEnd(99); // excludeIdx not in array
-  check('_calcLatestActiveEnd: uses end_date when set',le&&G.dateKey(le)==='2026-09-01');
-
-  G._userStacks=[stackCycleLen];G._activeStackIndices=[0];
-  le=G._calcLatestActiveEnd(99);
-  // 2026-07-01 + 12 weeks = 2026-09-23
-  check('_calcLatestActiveEnd: computes end from cycle_start + cycle_length',le&&G.dateKey(le)==='2026-09-23');
-
-  G._userStacks=[stackNoEnd];G._activeStackIndices=[0];
-  le=G._calcLatestActiveEnd(99);
-  check('_calcLatestActiveEnd: stack with cycle_length 0 → no calculable end',le===null);
-
-  G._userStacks=[stackEndDate,stackCycleLen];G._activeStackIndices=[0,1];
-  le=G._calcLatestActiveEnd(99);
-  check('_calcLatestActiveEnd: returns latest of multiple stacks',le&&G.dateKey(le)==='2026-09-23');
-
-  G._userStacks=[stackEndDate];G._activeStackIndices=[0];
-  le=G._calcLatestActiveEnd(0); // exclude the only active stack
-  check('_calcLatestActiveEnd: excludeIdx removes that stack from calculation',le===null);
-
-  // _getStackCompounds returns cg field
-  var compsWithCg=G._getStackCompounds(pepA);
-  check('_getStackCompounds: peptide compounds include cg array',Array.isArray(compsWithCg[0].cg));
-  check('_getStackCompounds: retatrutide has glp1 cg tag',compsWithCg[0].cg.includes('glp1'));
-
-  // _detectStackConflicts: GH-axis cross-stack conflict (CJC-IPA vs HGH Somatropin)
-  const ghPepStack={name:'GH Peptides',peptides:[{id:'cjc-ipa',name:'CJC-1295/IPA',dot:'#3cffa0',days:[0,1,2,3,4,5,6],times:['AM','PM'],dose_am:'4',dose_pm:'5',unit_am:'IU',unit_pm:'IU',active:true}]};
-  const hghEnhStack={name:'HGH Stack',peptides:[],enhanced:{enabled:true,compounds:[{id:'hgh',name:'HGH (Somatropin)',dose:'3',unit:'IU/day',days:[0,1,2,3,4,5,6],dot:'#e8a020'}]}};
-  G._userStacks=[ghPepStack,hghEnhStack];G._activeStackIndices=[0,1];
-  det=G._detectStackConflicts(1);
-  check('_detectStackConflicts: detects GH-axis conflict (CJC-IPA pep + HGH enhanced)',det.conflicts.length>0);
-  check('_detectStackConflicts: GH-axis conflict reason is axis',det.conflicts[0].reason==='axis');
-  check('_detectStackConflicts: GH-axis conflict axisLabel is gh-axis',det.conflicts[0].axisLabel==='gh-axis');
-  check('_detectStackConflicts: GH-axis conflict compoundId is hgh (new stack compound)',det.conflicts[0].compoundId==='hgh');
-  check('_detectStackConflicts: GH-axis conflict existingId is cjc-ipa (existing stack compound)',det.conflicts[0].existingId==='cjc-ipa');
-  check('_detectStackConflicts: GH-axis conflictingIdxs includes stack 0',det.conflictingIdxs.includes(0));
-
-  // CROSS_STACK_CLUSTERS defined
-  check('CROSS_STACK_CLUSTERS defined in index.html',rawScript.includes('const CROSS_STACK_CLUSTERS='));
+  // CROSS_STACK_CLUSTERS still defines the axes, still used by _getStackCompounds
+  check('CROSS_STACK_CLUSTERS still defined',rawScript.includes('const CROSS_STACK_CLUSTERS='));
   check('CROSS_STACK_CLUSTERS maps ghrh to gh-axis',rawScript.includes("'ghrh':'gh-axis'"));
   check('CROSS_STACK_CLUSTERS maps hgh to gh-axis',rawScript.includes("'hgh':'gh-axis'"));
   check('CROSS_STACK_CLUSTERS maps glp1 to glp1-axis',rawScript.includes("'glp1':'glp1-axis'"));
 
-  // _scanAndShowStartupConflicts defined and called in loadUserStacks
+  // Wiring: the check runs on activation and on startup
   check('_scanAndShowStartupConflicts defined',typeof G._scanAndShowStartupConflicts==='function');
   check('_scanAndShowStartupConflicts called in loadUserStacks',rawScript.includes('_scanAndShowStartupConflicts()'));
+  check('the startup scan checks the one active protocol',
+    /var idx=_activeStackIndices\.length\?_activeStackIndices\[0\]:null;/.test(rawScript));
+  check('activating a protocol runs the duplicate check',
+    /_activeStackIndices=\[idx\];\s*\n\s*var det=_detectStackConflicts\(idx\);/.test(rawScript));
+  check('_resolveConflict defined in index.html',rawScript.includes('async function _resolveConflict('));
 
-  // Safety: conflict detection fires in toggleStack source
-  check('toggleStack calls _detectStackConflicts when activating 2nd stack',
-    rawScript.includes('_detectStackConflicts(idx)'));
-  check('toggleStack stores _pendingConflictData before showing modal',
-    rawScript.includes('_pendingConflictData={newIdx:idx'));
-  check('_resolveConflict defined in index.html',
-    rawScript.includes('async function _resolveConflict('));
+  // "Keep the first entry only" drops the later copy and leaves everything else
+  if(typeof G._resolveConflict==='function'){
+    const _sv={save:G.saveStacksToBackend,ws:G.buildWeekStrip,t:G.buildToday,s:G.buildSchedule,ss:G.buildStackStore,uw:G.updateWEEKLY,gid:G.document.getElementById};
+    G.saveStacksToBackend=async()=>{};G.buildWeekStrip=()=>{};G.buildToday=()=>{};
+    G.buildSchedule=()=>{};G.buildStackStore=()=>{};G.updateWEEKLY=()=>{};
+    // The mock element has no .remove(); returning null for the overlay lookup keeps
+    // _resolveConflict on its real path instead of throwing before it edits anything.
+    G.document.getElementById=id=>id==='stack-conflict-modal'?null:_sv.gid(id);
+    const _target={name:'Dup',peptides:[_pep('retatrutide','Reta')],
+      trt:{enabled:true,compounds:[_trt('testosterone-e','Test E')]},
+      enhanced:{enabled:true,compounds:[_enh('testosterone-e','Test E'),_enh('anavar','Anavar')]}};
+    G._userStacks=[_target];G._activeStackIndices=[0];
+    G._pendingConflictData={newIdx:0,conflicts:G._detectStackConflicts(0).conflicts};
+    const _p=G._resolveConflict('remove'); if(_p&&_p.catch)_p.catch(()=>{});
+    check('resolving "keep the first" drops the duplicate',
+      (_target.enhanced.compounds||[]).filter(c=>c.id==='testosterone-e').length===0);
+    check('  …keeps the copy in the earlier tier',
+      (_target.trt.compounds||[]).some(c=>c.id==='testosterone-e'));
+    check('  …and leaves every non-duplicate compound alone',
+      _target.peptides.length===1&&(_target.enhanced.compounds||[]).some(c=>c.id==='anavar'));
+    check('the protocol is clean afterwards',G._detectStackConflicts(0).conflicts.length===0);
+
+    // "Keep both" acknowledges without touching the data
+    const _keep={name:'K',peptides:[],
+      trt:{enabled:true,compounds:[_trt('testosterone-e','Test E')]},
+      enhanced:{enabled:true,compounds:[_enh('testosterone-e','Test E')]}};
+    G._userStacks=[_keep];G._activeStackIndices=[0];
+    G._pendingConflictData={newIdx:0,conflicts:G._detectStackConflicts(0).conflicts};
+    const _p2=G._resolveConflict('keep'); if(_p2&&_p2.catch)_p2.catch(()=>{});
+    check('resolving "keep both" changes nothing',
+      _keep.trt.compounds.length===1&&_keep.enhanced.compounds.length===1);
+
+    G.saveStacksToBackend=_sv.save;G.buildWeekStrip=_sv.ws;G.buildToday=_sv.t;
+    G.buildSchedule=_sv.s;G.buildStackStore=_sv.ss;G.updateWEEKLY=_sv.uw;
+    G.document.getElementById=_sv.gid;
+  }
 }
 
 // ── Storage tab hideable via Settings ─────────────────────────────────────────
@@ -2862,6 +3082,15 @@ console.log('\n── Wizard TRT step ──────────────
     check('  …the start-date field is there', /4 · First injection/.test(b.innerHTML));
     check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
     check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
+    check('  …and the cadence is the same two-field control as T-Calc',
+      /wizSetTrtCadence\('cadenceN'/.test(b.innerHTML) && /wizSetTrtCadence\('cadenceUnit'/.test(b.innerHTML));
+    check('  …offering 1 to 20 and day/week/month',
+      /<option value="20"/.test(b.innerHTML) && /value="month"/.test(b.innerHTML));
+    if(typeof G.wizSetTrtCadence==='function'){
+      G.wizSetTrtCadence('cadenceN','5'); G.wizSetTrtCadence('cadenceUnit','week');
+      check('  …and setting it recomputes the wizard plan interval',
+        G._wiz.trtPlan.cadenceDays===35, String(G._wiz.trtPlan.cadenceDays));
+    }
 
     // Fail-safe: if a helper this step depends on blows up, the user still gets a step
     var _svIds=G._tcAllCompIds;
@@ -2987,6 +3216,131 @@ console.log('\n── T-Calc simple planner ────────────
         G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
       G._injectionsCache = _svCache;
     }
+
+    // ── The plan owns the curve from its start date ────────────────────────────
+    // Reported 2026-08-01: "changing testo dose in the planner doesn't update the
+    // rendered curve". _tcCurveLog merged the plan with the stack's own TRT protocol
+    // and de-duplicated only on an exact (compound, date) hit — so a plan for a
+    // different ester, or on a different cadence, collided with nothing and was ADDED
+    // on top of the protocol. The curve was dominated by the protocol underneath and
+    // barely moved when the plan's dose changed.
+    if(typeof G._tcCurveLog==='function'){
+      var _svCache2 = G._injectionsCache;
+      var _mkInj = function(date,mg,comp){ return {tier:'trt',active:true,cycle_id:'stack_x',
+        unit:'mg',dose:String(mg),compound_id:comp||'cypionate',date:date}; };
+      // Protocol dosing runs from before the plan starts to well after it
+      G._injectionsCache = {'2026-07-20':[_mkInj('2026-07-20',250)],
+                            '2026-07-27':[_mkInj('2026-07-27',250)],
+                            '2026-08-03':[_mkInj('2026-08-03',250)],
+                            '2026-08-10':[_mkInj('2026-08-10',250)]};
+      _set({plannerMode:'simple',
+            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+      var _cl = G._tcCurveLog();
+      var _proto = _cl.filter(function(e){ return e.source==='protocol'; });
+      check('protocol dosing before the plan starts is kept as history',
+        _proto.length===2 && _proto.every(function(e){ return e.date < '2026-08-01'; }),
+        JSON.stringify(_proto.map(function(e){return e.date;})));
+      check('  …and protocol dosing from the plan start on is dropped, not added on top',
+        !_cl.some(function(e){ return e.source==='protocol' && e.date>='2026-08-01'; }),
+        JSON.stringify(_cl.filter(function(e){return e.source==='protocol';}).map(function(e){return e.date;})));
+      check('  …so the plan is what drives the curve forward',
+        _cl.filter(function(e){ return e.source==='simple' && e.date>='2026-08-01'; }).length>0);
+
+      // The actual complaint: changing the dose must change the curve's total
+      var _totalAt = function(mg){
+        _set({plannerMode:'simple',
+              simplePlan:{compId:'enanthate',doseMg:String(mg),cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+        return G._tcCurveLog().filter(function(e){ return e.date>='2026-08-01'; })
+                              .reduce(function(a,e){ return a+parseFloat(e.doseMg); },0);
+      };
+      var _t10=_totalAt(10), _t20=_totalAt(20);
+      check('doubling the plan dose doubles the dose the curve sees',
+        _t20>0 && Math.abs(_t20-2*_t10)<1e-6, _t10+' -> '+_t20);
+
+      // An unfinished plan must not silently delete the protocol curve
+      _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''}});
+      check('an unfinished plan leaves the protocol curve intact',
+        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===4);
+
+      // In advanced mode the plan is greyed out and owns nothing
+      _set({plannerMode:'advanced', manualLog:[],
+            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+      check('in ADVANCED mode the greyed-out plan does not claim any days',
+        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===4);
+
+      G._injectionsCache = _svCache2;
+    }
+
+  // ── Cadence: a number plus a unit, not a preset list ────────────────────────
+  // Reported 2026-08-01: "can't choose every 2nd day or third etc". The dropdown
+  // offered a fixed set (Daily, EOD, 3x/week, weekly, every 2/3/6/8/10/12 weeks), so
+  // every 3 days, every 5 weeks and so on were unreachable. Cadence is now "every
+  // N unit" with N in 1..20 and unit in day/week/month.
+  if(typeof G._tcCadenceToDays==='function'){
+    check('a month is a fixed 30-day step, not a calendar month',
+      G._TC_CADENCE_UNITS.day===1 && G._TC_CADENCE_UNITS.week===7 && G._TC_CADENCE_UNITS.month===30,
+      JSON.stringify(G._TC_CADENCE_UNITS));
+    check('every 3 days is 3 days', G._tcCadenceToDays(3,'day')===3);
+    check('every 2 weeks is 14 days', G._tcCadenceToDays(2,'week')===14);
+    check('every 3 months is 90 days', G._tcCadenceToDays(3,'month')===90);
+    check('a string from a <select> is accepted', G._tcCadenceToDays('5','week')===35);
+    check('no number yields no interval', G._tcCadenceToDays(0,'week')===0);
+    check('an unknown unit yields no interval', G._tcCadenceToDays(2,'fortnight')===0);
+
+    // Reading a saved day count back into the two fields
+    check('14 days reads back as every 2 weeks',
+      JSON.stringify(G._tcCadenceFromDays(14))==='{"n":2,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(14)));
+    check('90 days reads back as every 3 months',
+      JSON.stringify(G._tcCadenceFromDays(90))==='{"n":3,"unit":"month"}', JSON.stringify(G._tcCadenceFromDays(90)));
+    check('3 days reads back as every 3 days',
+      JSON.stringify(G._tcCadenceFromDays(3))==='{"n":3,"unit":"day"}', JSON.stringify(G._tcCadenceFromDays(3)));
+    check('7 days prefers weeks over days',
+      JSON.stringify(G._tcCadenceFromDays(7))==='{"n":1,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(7)));
+    check('an interval too long for 20 of any unit still reads as days',
+      G._tcCadenceFromDays(999).unit==='day');
+    check('no interval reads back as blank', G._tcCadenceFromDays(0).n===0);
+    check('the unit label pluralises with the number',
+      G._tcCadenceUnitLabel('day',1)==='day' && G._tcCadenceUnitLabel('day',3)==='days' &&
+      G._tcCadenceUnitLabel('week',2)==='weeks');
+
+    // Setting either field recomputes the one stored interval
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:_today}});
+    G._tcSetSimplePlanCadence('cadenceN','3');
+    check('picking a number recomputes the interval', G._tcp.simplePlan.cadenceDays===21,
+      String(G._tcp.simplePlan.cadenceDays));
+    G._tcSetSimplePlanCadence('cadenceUnit','day');
+    check('switching the unit recomputes it again, keeping the number',
+      G._tcp.simplePlan.cadenceDays===3 && G._tcp.simplePlan.cadenceN===3,
+      G._tcp.simplePlan.cadenceN+' x '+G._tcp.simplePlan.cadenceUnit+' = '+G._tcp.simplePlan.cadenceDays);
+    G._tcSetSimplePlanCadence('cadenceN','99');
+    check('a number beyond the maximum is clamped, never stored raw',
+      G._tcp.simplePlan.cadenceN===G._TC_CADENCE_MAX_N, String(G._tcp.simplePlan.cadenceN));
+    G._tcSetSimplePlanCadence('cadenceUnit','bogus');
+    check('an unrecognised unit falls back to weeks rather than zeroing the plan',
+      G._tcp.simplePlan.cadenceUnit==='week' && G._tcp.simplePlan.cadenceDays>0);
+
+    // Every-3-days actually generates a 3-day schedule — the reported gap
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'50',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:_today}});
+    var _inj3 = G._tcSimplePlanInjections();
+    check('every 3 days generates injections 3 days apart', _inj3.length>2 &&
+      Math.round((new Date(_inj3[1].date)-new Date(_inj3[0].date))/86400000)===3,
+      _inj3.length?_inj3.slice(0,3).map(function(e){return e.date;}).join(' '):'none');
+
+    // A plan saved before this control keeps its exact interval until it is edited
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
+    check('a legacy fractional cadence is preserved, not rounded away',
+      G._tcSimplePlan().cadenceDays===3.5, String(G._tcSimplePlan().cadenceDays));
+    check('  …and is still shown in the two fields as best it can be',
+      G._tcSimplePlan().cadenceN>0 && !!G._tcSimplePlan().cadenceUnit);
+    check('  …and still generates its 3.5-day schedule',
+      G._tcSimplePlanInjections().length>0);
+    G._tcSetSimplePlanCadence('cadenceN','4');
+    check('  …until the user picks a number, which replaces it',
+      G._tcp.simplePlan.cadenceDays===4, String(G._tcp.simplePlan.cadenceDays));
+  } else {
+    check('_tcCadenceToDays available', false);
+  }
+
     G._tcp = _svTcp;
   }else{
     check('_tcPlannerMode / _tcSimplePlanInjections available', false);
@@ -3050,6 +3404,25 @@ console.log('\n── T-Calc simple planner ────────────
     check('  …each names its compound', /<option value="[^"]+"[^>]*>[^<]+</.test(_esterBlock));
     G._tcp = _svTcp2;
   }
+  // The control itself: two fields, in both places a plan can be built
+  if (typeof G._tcSimplePlannerHtml === 'function') {
+    var _svTcp3 = G._tcp;
+    G._tcp = {manualLog:[], simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:'2026-08-01'}, plannerMode:'simple'};
+    var _cadHtml = G._tcSimplePlannerHtml('', '');
+    var _cadBlock = _cadHtml.slice(_cadHtml.indexOf('3 · Injection cadence'), _cadHtml.indexOf('4 · First injection'));
+    check('the cadence row renders two selects, not one preset list',
+      (_cadBlock.match(/<select/g)||[]).length===2, JSON.stringify((_cadBlock.match(/<select/g)||[]).length));
+    check('  …the number runs 1 to 20',
+      /<option value="1"/.test(_cadBlock) && /<option value="20"/.test(_cadBlock) && !/<option value="21"/.test(_cadBlock));
+    check('  …the unit offers day, week and month',
+      /value="day"/.test(_cadBlock) && /value="week"/.test(_cadBlock) && /value="month"/.test(_cadBlock));
+    check('  …the saved cadence comes back selected',
+      /<option value="3" selected>/.test(_cadBlock) && /value="day" selected/.test(_cadBlock), _cadBlock.slice(0,400));
+    check('  …and the old preset list is gone from this control',
+      !/2×\/week|E3\.5D|How often/.test(_cadBlock));
+    G._tcp = _svTcp3;
+  }
+
 
   // Catch-all for the bug class: a `typeof X === 'function'` guard around a helper
   // that does not exist anywhere fails open and silently renders nothing.
@@ -6992,6 +7365,54 @@ console.log('\n── Dose inputs: numeric keypad ──────────
     _enhInputs.length>0 && _enhInputs.every(function(t){return t.indexOf('inputmode="decimal"')>=0;}));
   check('enhanced tier renders one dose input per slot', _enhInputs.length===3, 'got '+_enhInputs.length);
   G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
+}
+
+// ── Every numeric field raises a numeric keypad, app-wide ─────────────────────
+// Reported 2026-07-31: the onboarding Age field opened iOS's numbers-and-
+// punctuation keyboard (digits plus - / : ; ( ) £ & @ " and an ABC key) rather
+// than a plain keypad. That layout is what bare type="number" gets on iOS —
+// inputmode is what actually selects the keypad, and 14 number inputs had none.
+// Decimal-capable fields use inputmode="decimal"; integer fields (age, height,
+// week counts, injection counts/intervals, frequencies) use inputmode="numeric".
+console.log('\n── Numeric keypad on every number field ───────────────────');
+{
+  var _numFiles = ['index.html'].concat(fs.readdirSync(dir).filter(function(f){
+    return /^tab-.*\.js$/.test(f); }).sort());
+  var _bare = [];
+  _numFiles.forEach(function(f){
+    var s = fs.readFileSync(path.join(dir,f),'utf8');
+    var re = /type=(\\?")number\1/g, m;
+    while ((m = re.exec(s))) {
+      var st = s.lastIndexOf('<input', m.index), en = s.indexOf('>', m.index);
+      if (st === -1 || en === -1) continue;
+      if (s.slice(st, en + 1).indexOf('inputmode') === -1)
+        _bare.push(f + ':' + (s.slice(0, m.index).split('\n').length));
+    }
+  });
+  check('no type="number" input is left without an inputmode', _bare.length === 0,
+    _bare.length ? _bare.join(', ') : 'all number inputs declare one');
+
+  // Behavioural, not just source-scanning: the two fields from the report.
+  if (typeof G._obHtml2 === 'function') {
+    var _svOb = G._obData;
+    G._obData = {sex:'male'};
+    var _ob = G._obHtml2();
+    var _obNum = (_ob.match(/<input[^>]*>/g) || []).filter(function(t){
+      return /type="(number|text)"/.test(t); });
+    check('the onboarding stats step renders its inputs', _obNum.length === 3,
+      'got ' + _obNum.length);
+    check('  …every one declares an inputmode',
+      _obNum.every(function(t){ return t.indexOf('inputmode=') !== -1; }));
+    check('  …Age asks for a plain numeric keypad',
+      /Age<\/label>[\s\S]{0,80}inputmode="numeric"/.test(_ob));
+    check('  …Height asks for a plain numeric keypad',
+      /Height \(cm\)<\/label>[\s\S]{0,80}inputmode="numeric"/.test(_ob));
+    check('  …Body Weight still allows a decimal point',
+      /Body Weight \(kg\)<\/label>[\s\S]{0,80}inputmode="decimal"/.test(_ob));
+    G._obData = _svOb;
+  } else {
+    check('_obHtml2 available for the onboarding keypad check', false);
+  }
 }
 
 
