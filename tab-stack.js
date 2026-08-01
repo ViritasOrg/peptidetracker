@@ -130,7 +130,7 @@ async function wizSave(){
   if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
      typeof _tcp!=='undefined' && _tcp){
     var _wp=_wiz.trtPlan;
-    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
+    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceN:parseInt(_wp.cadenceN,10)||0,cadenceUnit:_wp.cadenceUnit||'week',cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
     _tcp.plannerMode='simple';
   }
   if(_wantsTrt && !_trtInline && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
@@ -201,8 +201,9 @@ async function useTemplate(tid){
   if(typeof _ensureStackId==='function')_ensureStackId(proto);
   _userStacks.push(proto);_userStacks=_userStacks.slice(0,4);
   var _idx=_userStacks.length-1;
-  if(!Array.isArray(_activeStackIndices))_activeStackIndices=[];
-  if(_activeStackIndices.indexOf(_idx)<0)_activeStackIndices.push(_idx);
+  // Only one protocol may be active — starting one from a template makes it THE
+  // active one rather than adding it alongside whatever was already running.
+  _activeStackIndices=[_idx];
   _closeTemplatePicker();
   await saveStacksToBackend();
   if(typeof updateWEEKLY==='function')updateWEEKLY();
@@ -419,7 +420,7 @@ function editToggleDay(el,pi,di){
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
 function editToggleTRT(){if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
 function editToggleTRTCompound(id){if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
-function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -1028,7 +1029,7 @@ function _renderRampSection(p,pi){
     var uOpts=UNITS.map(function(u){return'<option value="'+u+'"'+(u===_canonUnit(ph.u||'mg')?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('');
     return'<div style="display:flex;align-items:center;gap:5px;margin-bottom:5px">'
       +'<span style="font-size:11px;color:var(--muted2);white-space:nowrap;min-width:30px">Wk</span>'
-      +'<input class="dose-in" type="number" min="0" value="'+ph.w+'" oninput="wizSetPhase('+pi+','+phi+',\'w\',+this.value)" style="width:44px;text-align:center;">'
+      +'<input class="dose-in" type="number" inputmode="numeric" min="0" value="'+ph.w+'" oninput="wizSetPhase('+pi+','+phi+',\'w\',+this.value)" style="width:44px;text-align:center;">'
       +'<input class="dose-in" type="text" inputmode="decimal" value="'+String(ph.d||'')+'" oninput="wizSetPhase('+pi+','+phi+',\'d\',this.value)" placeholder="dose" style="width:60px;">'
       +'<select class="unit-sel" onchange="wizSetPhase('+pi+','+phi+',\'u\',this.value)">'+uOpts+'</select>'
       +'<button onclick="wizRemovePhase('+pi+','+phi+')" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'
@@ -1537,20 +1538,25 @@ function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 // was configured that way, so neither is silently ignored.
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
-  var seed = {compId:'', doseMg:'', cadenceDays:0, startDate:''};
+  var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
   if(typeof _tcSimplePlan==='function'){
     var sp=_tcSimplePlan();
     if(sp.compId)      seed.compId=sp.compId;
     if(sp.doseMg)      seed.doseMg=sp.doseMg;
-    if(sp.cadenceDays) seed.cadenceDays=sp.cadenceDays;
+    if(sp.cadenceDays){seed.cadenceDays=sp.cadenceDays;seed.cadenceN=sp.cadenceN;seed.cadenceUnit=sp.cadenceUnit;}
     if(sp.startDate)   seed.startDate=sp.startDate;
   }
   var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
   if(c){
     if(!seed.compId) seed.compId=c.id||'';
     if(!seed.doseMg) seed.doseMg=c.dose||'';
+    // A classic TRT compound already carries the same shape: a count plus days/weeks.
     if(!seed.cadenceDays && c.freqVal && c.freqUnit){
-      seed.cadenceDays = c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal;
+      seed.cadenceN    = parseInt(c.freqVal,10)||0;
+      seed.cadenceUnit = c.freqUnit==='weeks' ? 'week' : 'day';
+      seed.cadenceDays = (typeof _tcCadenceToDays==='function')
+        ? _tcCadenceToDays(seed.cadenceN,seed.cadenceUnit)
+        : (c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal);
     }
   }
   if(!seed.startDate) seed.startDate = _wiz.cycle_start || (typeof dateKey==='function' ? dateKey(NOW) : '');
@@ -1559,6 +1565,19 @@ function _wizEnsureTrtPlan(){
 }
 function wizSetTrtPlan(field,value){
   _wizEnsureTrtPlan()[field]=value;
+  wizRender();
+}
+// Cadence is two fields but one stored interval — mirrors _tcSetSimplePlanCadence.
+function wizSetTrtCadence(field,value){
+  var p=_wizEnsureTrtPlan();
+  var maxN=(typeof _TC_CADENCE_MAX_N!=='undefined')?_TC_CADENCE_MAX_N:20;
+  var n    = field==='cadenceN'    ? (parseInt(value,10)||0) : (parseInt(p.cadenceN,10)||0);
+  var unit = field==='cadenceUnit' ? value                   : p.cadenceUnit;
+  if(!(typeof _TC_CADENCE_UNITS!=='undefined'&&_TC_CADENCE_UNITS[unit])) unit='week';
+  n=Math.max(0,Math.min(maxN,n));
+  p.cadenceN=n; p.cadenceUnit=unit;
+  p.cadenceDays=(typeof _tcCadenceToDays==='function')?_tcCadenceToDays(n,unit)
+               :n*(unit==='month'?30:unit==='week'?7:1);
   wizRender();
 }
 function _wizTrtPlanComplete(){
@@ -1611,13 +1630,21 @@ function _wizRenderTrtPlanner(body){
   html+='<input type="number" inputmode="decimal" min="0" step="any" value="'+(p.doseMg||'')+'" placeholder="125" onchange="wizSetTrtPlan(\'doseMg\',this.value)" style="'+iSty+';margin-bottom:14px">';
 
   html+='<label style="'+lSty+'">3 · Injection cadence</label>';
-  html+='<select onchange="wizSetTrtPlan(\'cadenceDays\',this.value)" style="'+iSty+';margin-bottom:14px">';
-  html+='<option value="0">How often?…</option>';
-  var freqs=(typeof _TC_FREQ_OPTS!=='undefined')?_TC_FREQ_OPTS:[{label:'Weekly',days:7}];
-  freqs.forEach(function(f){
-    html+='<option value="'+f.days+'"'+(Math.abs(f.days-parseDec(p.cadenceDays))<0.01?' selected':'')+'>'+f.label+'</option>';
-  });
+  var maxN=(typeof _TC_CADENCE_MAX_N!=='undefined')?_TC_CADENCE_MAX_N:20;
+  var units=(typeof _TC_CADENCE_ORDER!=='undefined')?_TC_CADENCE_ORDER:['day','week','month'];
+  var uLabel=function(u,n){return (typeof _tcCadenceUnitLabel==='function')?_tcCadenceUnitLabel(u,n):(parseInt(n,10)===1?u:u+'s');};
+  var curN=parseInt(p.cadenceN,10)||0;
+  html+='<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">';
+  html+='<span style="font-size:13px;color:var(--muted2);flex-shrink:0">Every</span>';
+  html+='<select onchange="wizSetTrtCadence(\'cadenceN\',this.value)" style="'+iSty+';flex:1;min-width:0">';
+  html+='<option value="0"'+(curN?'':' selected')+'>—</option>';
+  for(var _n=1;_n<=maxN;_n++) html+='<option value="'+_n+'"'+(curN===_n?' selected':'')+'>'+_n+'</option>';
   html+='</select>';
+  html+='<select onchange="wizSetTrtCadence(\'cadenceUnit\',this.value)" style="'+iSty+';flex:1.4;min-width:0">';
+  units.forEach(function(u){
+    html+='<option value="'+u+'"'+(p.cadenceUnit===u?' selected':'')+'>'+uLabel(u,curN)+'</option>';
+  });
+  html+='</select></div>';
 
   html+='<label style="'+lSty+'">4 · First injection</label>';
   html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';
@@ -1664,7 +1691,7 @@ function wizStepTRT(body,footer){
       html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
       html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
       if(!isNebido){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}
-      else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
+      else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
       html+='</div>';
     }
@@ -2239,21 +2266,57 @@ function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c
 function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
 function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
 function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+// Every TRT compound this protocol will actually dose, whichever way the tier was
+// filled in. Reported 2026-08-01: the Validate and Review steps read only the classic
+// _wiz.trt tier, so a protocol whose testosterone came from the T-Calc planner listed
+// its peptides and nothing else — it read as a peptide-only stack. Summaries must
+// always show every tier, so they go through this.
+// Returns display rows: {id, name, dot, dose, cadence}.
+function _wizTrtSummaryRows(){
+  var rows=[], seen={};
+  var nameOf=function(id){
+    if(typeof _tcCompInfo==='function'){var cd=_tcCompInfo(id);if(cd&&cd.name)return cd.name;}
+    var t=(typeof TRT_CAT!=='undefined'?TRT_CAT:[]).find(function(c){return c.id===id;});
+    return t?t.name:(id||'Testosterone');
+  };
+  // The T-Calc planner plan, if the user filled it in on the TRT step.
+  var p=(_wiz&&_wiz.trtPlan)||null;
+  if(p&&p.compId&&parseDec(p.doseMg)>0&&parseDec(p.cadenceDays)>0){
+    var n=parseInt(p.cadenceN,10)||0;
+    var cad=n?('Every '+(n===1?'':n+' ')+((typeof _tcCadenceUnitLabel==='function')?_tcCadenceUnitLabel(p.cadenceUnit,n):p.cadenceUnit))
+             :('Every '+parseDec(p.cadenceDays)+' days');
+    rows.push({id:p.compId,name:nameOf(p.compId),dot:'var(--accent4)',dose:parseDec(p.doseMg)+'mg',cadence:cad});
+    seen[p.compId]=true;
+  }
+  // Anything configured in the classic multi-compound editor.
+  (typeof _trtCompounds==='function'?_trtCompounds(_wiz&&_wiz.trt):[]).forEach(function(c){
+    if(c.id&&seen[c.id])return;
+    if(c.id)seen[c.id]=true;
+    var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week'
+            :(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');
+    rows.push({id:c.id||'',name:c.name||nameOf(c.id),dot:c.dot||'var(--accent4)',
+               dose:c.dose?c.dose+(c.unit||'mg'):'',cadence:days});
+  });
+  return rows;
+}
 function wizStepValidate(body,footer){
   var g=(_wiz&&_wiz.goals)||[];
   var pepGoals=g.filter(function(x){return x!=='trt'&&x!=='enhanced';});
   var hasPeps=pepGoals.length>0||(!_wiz.trt.enabled&&!g.includes('enhanced'));
-  var hasTRT=!!(_wiz.trt&&_wiz.trt.enabled);
   var hasEnhanced=g.includes('enhanced');
   var html='<div class="wiz-section" style="margin-bottom:8px">All Compounds</div>';
   if(hasPeps&&_wiz.peptides.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Peptides</div>';
     _wiz.peptides.forEach(function(p){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+p.name+'</span></div>';});
   }
-  if(hasTRT&&_wiz.trt.compound){
+  var _trtRows=_wizTrtSummaryRows();
+  if(_trtRows.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">TRT</div>';
-    html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(_wiz.trt.compound)+'</span></div>';
+    _trtRows.forEach(function(r){
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(r.name)+'</span></div>';
+    });
   }
+
   if(hasEnhanced&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Enhanced</div>';
     _wiz.enhanced.compounds.forEach(function(c){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</span></div>';});
@@ -2297,7 +2360,7 @@ function wizStepReview(body,footer){
   var _reviewFlow=_wizFlow();
   if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=_slotDoseSummary(p,'/',false)||'?';var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
   else if(_reviewFlow.includes('peptides')){html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
-  _trtCompounds(_wiz.trt).forEach(function(c){var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week':(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((c.dose?c.dose+(c.unit||'mg')+' · ':'')+days)+'</div></div>';});
+  _wizTrtSummaryRows().forEach(function(r){html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(r.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((r.dose?r.dose+' · ':'')+r.cadence)+'</div></div>';});
   if((_wiz.goals||[]).includes('enhanced')){
     html+='<div class="wiz-section" style="margin-top:16px">Enhancement Compounds</div>';
     if(_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
