@@ -4359,7 +4359,11 @@ if (typeof G._tcDrawManualChart === 'function') {
 // day-indexed series and (pre-cycle-baseline case) start at the measured baseline.
 if (typeof G._tcFreeTSeries === 'function') {
   var _fsFT = G._tcp.measuredFT, _fsDose = G._tcp.currentDoseMgWk, _fsBw = G._tcBwEntries;
-  G._tcp.measuredFT = '217'; G._tcp.currentDoseMgWk = ''; G._tcBwEntries = null;
+  // Calibration now requires a DATED reading (an undated value cannot say WHEN the user
+  // was at that level, and the anchor day is load-bearing). Same intent, expressed with a
+  // pre-cycle draw.
+  G._tcp.measuredFT = '217'; G._tcp.currentDoseMgWk = '';
+  G._tcBwEntries = [{date:'2026-06-20', free_t:217}];
   var _fsLog = [
     {compId:'testoviron', doseMg:'125', date:'2026-06-24'},
     {compId:'testoviron', doseMg:'125', date:'2026-06-28'},
@@ -4411,6 +4415,7 @@ if (typeof G._tcFreeTSeries === 'function') {
 
   // partial: a measured FT but no SHBG/total-T → medium band, no SHBG dynamics
   G._tcp = {measuredFT:'300', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_t3Log};
+  G._tcBwEntries = [{date:'2026-06-20', free_t:300}];   // dated: calibration requires it
   var _t3pt = G._tcFreeTSeries(_t3Log, {});
   check('tier: measured FT but no SHBG/TT → "partial"', _t3pt.tier === 'partial');
   check('tier: partial band (~±20%) is narrower than the no-bloodwork estimate band',
@@ -4445,8 +4450,34 @@ if (typeof G._tcFreeTSeries === 'function') {
   var _psFlat = G._tcFreeTSeries(_psLog.slice(), {});
   check('no-bloodwork SHBG: model runs in the estimate tier (calibrated pmol/L)',
     _psFlat.tier === 'estimate' && _psFlat.calFT > 0 && !!_psFlat.calFT_arr);
-  check('no-bloodwork SHBG: with no suppressors the curve is flat (no invented T-driven swing)',
-    _psSpread(_psFlat) < 1.01);
+  // What "no invented T-driven swing" means, now that the binding equation is the real
+  // Vermeulen one. This used to assert calFT_arr was FLAT (spread < 1.01). That assertion
+  // only held while free T was LINEAR in total T: with saturable SHBG binding, free T rises
+  // faster than proportionally, so calFT_arr — which carries exactly that non-linearity,
+  // total[] carrying the amount — must bend with dose. Demanding flatness would be demanding
+  // the linearisation back. (Verified: in this tier the array reproduces bit-for-bit from a
+  // CONSTANT-SHBG Vermeulen reconstruction.)
+  //
+  // The real invariant is that SHBG itself never moves without a measured total T — the β
+  // power-law stays off. β acts through a LAGGED EMA of total T, so when it is on, two days
+  // that share the same total T get different free-T scaling depending on how they got
+  // there. With SHBG constant, calFT_arr is a pure function of total[t] and nothing else.
+  function _psPathDep(s){
+    var worst = 0;
+    for (var a = 0; a <= s.totalDays; a++) {
+      for (var b = a + 15; b <= s.totalDays; b++) {          // rising limb vs falling limb
+        if (!(s.total[a] > 0) || !(s.total[b] > 0)) continue;
+        if (Math.abs(s.total[a] / s.total[b] - 1) > 0.002) continue;   // same total T
+        var d = Math.abs(s.calFT_arr[a] / s.calFT_arr[b] - 1);
+        if (d > worst) worst = d;
+      }
+    }
+    return worst;
+  }
+  var _psDepEst = _psPathDep(_psFlat);
+  check('no-bloodwork SHBG: no β-driven swing — SHBG is constant, so free T is a pure function of total T',
+    _psDepEst < 0.002, 'path-dependence=' + _psDepEst.toFixed(6));
+
   // add a GH suppressor → the curve must bend (suppression shows without any bloodwork)
   G._tcGhStack = [{pepId:'hgh', startDateStr:'2026-05-01', interactions:_psGhI, dailyDose:5}];
   var _psSupp = G._tcFreeTSeries(_psLog.slice(), {});
@@ -4455,11 +4486,222 @@ if (typeof G._tcFreeTSeries === 'function') {
   check('no-bloodwork SHBG: GH raises free T later in the cycle vs the same schedule with no GH',
     _psFt(_psSupp, _psSupp.totalDays - 5) > _psFt(_psFlat, _psFlat.totalDays - 5));
   // without the population SHBG baseline (e.g. table not loaded) → safe flat fallback
+  // With no population SHBG baseline the model must not invent SHBG DYNAMICS — SHBG is
+  // held fixed. This used to be asserted as "calFT_arr is flat (spread < 1.01)", which
+  // only held while binding was linearised. With the saturable Vermeulen quadratic the
+  // free FRACTION legitimately rises with total T even at constant SHBG, so a flat array
+  // would now mean the binding curve had been linearised again. Assert the real property:
+  // no path dependence — two days sharing a total T scale identically, which can only be
+  // true if nothing is moving SHBG around.
   G._tcShbgBaseline = null;
-  check('no-bloodwork SHBG: no population baseline → falls back to a flat estimate',
-    _psSpread(G._tcFreeTSeries(_psLog.slice(), {})) < 1.01);
+  var _psDepFlat = _psPathDep(G._tcFreeTSeries(_psLog.slice(), {}));
+  check('no-bloodwork SHBG: no population baseline → SHBG held fixed (no invented dynamics)',
+    _psDepFlat < 0.002, 'path-dependence=' + _psDepFlat.toFixed(6));
   G._tcShbgBaseline = _psBase;
+  // Teeth for the path-dependence check above: with a MEASURED total T the β power-law does
+  // run, SHBG tracks the lagged T level, and the very same measurement separates clearly.
+  // Without this, "path-dependence is small" could pass simply by being unmeasurable.
+  G._tcGhStack = [];
+  G._tcp = {measuredFT:'400', currentDoseMgWk:'', totalT:'25', shbg:'40', birthYear:'1985', manualLog:_psLog};
+  G._tcBwEntries = [{date:'2026-05-01', total_t:25, shbg:40, free_t:400}];
+  var _psMeas = G._tcFreeTSeries(_psLog.slice(), {});
+  var _psDepMeas = _psPathDep(_psMeas);
+  check('no-bloodwork SHBG: …and the measured tier DOES apply β (so the check above can fail)',
+    _psMeas.tier === 'measured' && _psDepMeas > 0.005 && _psDepMeas > _psDepEst * 5,
+    'measured=' + _psDepMeas.toFixed(6) + ' vs estimate=' + _psDepEst.toFixed(6));
   G._tcp = _psTp; G._tcBwEntries = _psBw; G._tcGhStack = _psGh;
+}
+
+// ── Ester mass fraction: a dose is ESTER mass, only part of it is testosterone ──
+console.log('\n── T-calc: ester mass fraction (testosteroneFraction) ──');
+if (typeof G._TC_T_FRACTION === 'object' && G._TC_T_FRACTION) {
+  var _efT = 288.4;   // testosterone C19H28O2, PubChem CID 6013
+  var _efMW = { propionate:344.5, enanthate:400.6, cypionate:412.6, undecanoate:456.7,
+                phenylpropionate:420.6, isocaproate:386.6, decanoate:442.7 };
+  function _efRatio(e){ return Math.round(_efT/_efMW[e]*10000)/10000; }
+  check('ester fraction: enanthate is the MW ratio, not a remembered constant',
+    Math.abs(G._TC_T_FRACTION.enanthate - _efRatio('enanthate')) < 1e-9,
+    'got ' + G._TC_T_FRACTION.enanthate + ' want ' + _efRatio('enanthate'));
+  check('ester fraction: testoviron IS enanthate, same fraction',
+    G._TC_T_FRACTION.testoviron === G._TC_T_FRACTION.enanthate);
+  check('ester fraction: cypionate', Math.abs(G._TC_T_FRACTION.cypionate - _efRatio('cypionate')) < 1e-9);
+  check('ester fraction: propionate', Math.abs(G._TC_T_FRACTION.propionate - _efRatio('propionate')) < 1e-9);
+  check('ester fraction: nebido is undecanoate', Math.abs(G._TC_T_FRACTION.nebido - _efRatio('undecanoate')) < 1e-9);
+  check('ester fraction: topical gel is unesterified testosterone (1.0)', G._TC_T_FRACTION.topical === 1.0);
+  // Sustanon is a blend — the dose-weighted mean of its four SmPC-stated components.
+  // Regression on a real error: 0.729 (from a "182.2 mg" figure that does not reproduce)
+  // overstated its testosterone content by 3.5%.
+  var _efBlend = [[30,'propionate'],[60,'phenylpropionate'],[60,'isocaproate'],[100,'decanoate']];
+  var _efMg = 0, _efTotal = 0;
+  _efBlend.forEach(function(c){ _efMg += c[0]; _efTotal += c[0] * _efT / _efMW[c[1]]; });
+  check('ester fraction: Sustanon components sum to the 250 mg label dose', _efMg === 250);
+  check('ester fraction: Sustanon blend is 176.2 mg testosterone per 250 mg',
+    Math.abs(_efTotal - 176.16) < 0.05, 'got ' + _efTotal.toFixed(2));
+  check('ester fraction: Sustanon is the dose-weighted blend (0.7046)',
+    Math.abs(G._TC_T_FRACTION.sustanon - Math.round(_efTotal/250*10000)/10000) < 1e-9,
+    'got ' + G._TC_T_FRACTION.sustanon);
+  check('ester fraction: the superseded 0.729 is gone', G._TC_T_FRACTION.sustanon !== 0.729);
+  // Ordering the model depends on: a heavier ester delivers LESS testosterone per mg.
+  check('ester fraction: propionate > enanthate > cypionate > undecanoate (heavier ester, less T)',
+    G._TC_T_FRACTION.propionate > G._TC_T_FRACTION.enanthate &&
+    G._TC_T_FRACTION.enanthate  > G._TC_T_FRACTION.cypionate &&
+    G._TC_T_FRACTION.cypionate  > G._TC_T_FRACTION.nebido);
+  // The whole point: switching ester at the same mg changes delivered testosterone.
+  if (typeof G._tcCompInfo === 'function') {
+    var _efEn = G._tcCompInfo('enanthate'), _efNe = G._tcCompInfo('nebido');
+    check('ester fraction: _tcCompInfo exposes it to the PK model',
+      _efEn.testosteroneFraction > 0 && _efNe.testosteroneFraction > 0);
+    check('ester fraction: 100 mg enanthate delivers ~14% more testosterone than 100 mg undecanoate',
+      Math.abs((_efEn.testosteroneFraction / _efNe.testosteroneFraction) - 1.14) < 0.02,
+      'ratio=' + (_efEn.testosteroneFraction / _efNe.testosteroneFraction).toFixed(4));
+  }
+} else {
+  check('_TC_T_FRACTION defined', false);
+}
+
+// ── ABSOLUTE free-T model: the invariants the old scale-fitted one violated ──
+console.log('\n── T-calc: absolute model (no fitted scale factor) ──');
+if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'function') {
+  var _amS={tp:G._tcp,bw:G._tcBwEntries,gh:G._tcGhStack};
+  function _amIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  // 100 mg TU every 2 days — the real protocol that exposed this.
+  function _amRun(startStr,n){
+    var st=new Date(startStr+'T12:00:00');
+    var log=[]; var t=new Date(st.getTime());
+    for(var i=0;i<n;i++){log.push({compId:'nebido',doseMg:'100',date:_amIso(t)});t=new Date(t.getTime()+2*86400000);}
+    G._tcp={measuredFT:'217',currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
+    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:217,shbg:45}];
+    G._tcGhStack=[];
+    var s=G._tcFreeTSeries(log.slice(),{});
+    var ft=function(i){return s.total[i]*(s.calFT_arr?s.calFT_arr[i]:s.scale);};
+    var mx=0;for(var i=0;i<=s.totalDays;i++)if(ft(i)>mx)mx=ft(i);
+    return {s:s, ft:ft, peak:mx};
+  }
+  var _amA=_amRun('2026-06-26',900);
+  // 1. total[] is an ABSOLUTE appearance rate in mg/day, not an arbitrary scale.
+  //    Before the first dose it is exactly endogenous production.
+  check('absolute model: day-0 appearance rate == endogenous production (mg/day)',
+    Math.abs(_amA.s.total[0] - G.TCALC_ENDOG_T_MGD) < 1e-6, 'total[0]='+_amA.s.total[0]);
+  // 2. Steady-state appearance rate == the dose rate. Mass balance: every injected mg
+  //    appears. 100mg TU q2d = 100*0.6315/2 mg testosterone/day, + endogenous.
+  // Endogenous production is SUPPRESSED by the exogenous dose (HPTA shutdown), so the
+  // steady-state appearance rate is the dose rate plus whatever survives suppression —
+  // which at this dose is ~0.8% of baseline, i.e. essentially the dose rate alone.
+  var _amRate=100*0.6315/2, _amSS=0;
+  for(var i=Math.floor(_amA.s.totalDays*0.6);i<=Math.floor(_amA.s.totalDays*0.7);i++) _amSS=Math.max(_amSS,_amA.s.total[i]);
+  var _amPsup=G._tcEndogAt(_amRate, G.TCALC_ENDOG_T_MGD);
+  check('absolute model: steady-state rate == dose rate + SUPPRESSED endogenous (mass balance)',
+    Math.abs(_amSS-(_amRate+_amPsup))/(_amRate+_amPsup) < 0.03,
+    'got '+_amSS.toFixed(2)+' want '+(_amRate+_amPsup).toFixed(2));
+  check('absolute model: a supraphysiological dose shuts endogenous production down',
+    _amPsup < G.TCALC_ENDOG_T_MGD*0.05, 'P still '+_amPsup.toFixed(3)+' mg/d');
+  check('absolute model: no dose leaves endogenous production untouched',
+    Math.abs(G._tcEndogAt(0, G.TCALC_ENDOG_T_MGD) - G.TCALC_ENDOG_T_MGD) < 1e-9);
+  check('absolute model: suppression is monotone in dose',
+    G._tcEndogAt(1,6.5) > G._tcEndogAt(5,6.5) && G._tcEndogAt(5,6.5) > G._tcEndogAt(20,6.5));
+  // 3. The curve starts at the user's own measured baseline (pre-cycle draw).
+  check('absolute model: day-0 free T == the measured baseline',
+    Math.abs(_amA.ft(0)-217) < 1.0, 'day0='+_amA.ft(0).toFixed(1));
+  // 4. THE BUG THIS REPLACED: the projected plateau must not depend on how far into the
+  //    protocol you happen to be. The old model answered 435-15789 pmol/L for one protocol
+  //    because its "endogenous baseline" was carved from the drug curve.
+  var _amB=_amRun('2025-06-01',900), _amC=_amRun('2026-07-25',900);
+  var _amSpread=Math.max(_amA.peak,_amB.peak,_amC.peak)/Math.min(_amA.peak,_amB.peak,_amC.peak);
+  check('absolute model: plateau does NOT depend on how far into the protocol you are',
+    _amSpread < 1.05,
+    'peaks '+_amA.peak.toFixed(0)+' / '+_amB.peak.toFixed(0)+' / '+_amC.peak.toFixed(0)+' spread='+_amSpread.toFixed(3));
+  // 5. The plateau matches first principles: TT scales as (rate+P)/P, then Vermeulen.
+  // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
+  // so SHBG stays at the measured 45. (Applying beta here would be testing a different
+  // tier than the one the scenario configures.)
+  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+_amPsup)/G.TCALC_ENDOG_T_MGD;
+  var _amWant=G._tcVermeulenFT(_amTT0*_amMult, 45);
+  check('absolute model: plateau matches (rate+P_suppressed)/P0 then Vermeulen, within 5%',
+    Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
+    'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
+  // 6. Binding must stay SATURABLE. A linearised form pins the free fraction at a
+  //    constant, which under-reports free T by ~51% at supraphysiological total T —
+  //    the direction that invites dose escalation. Independently verified 2026-08-01.
+  var _amF15=G._tcVermeulenFT(15,40)/15000, _amF60=G._tcVermeulenFT(60,40)/60000;
+  check('absolute model: free fraction RISES with total T (SHBG saturates, not linear)',
+    _amF60 > _amF15*1.2, 'free% 15->'+(_amF15*100).toFixed(2)+'  60->'+(_amF60*100).toFixed(2));
+  check('absolute model: doubling total T raises free T MORE than 2x',
+    G._tcVermeulenFT(30,40)/G._tcVermeulenFT(15,40) > 2.05,
+    'ratio='+(G._tcVermeulenFT(30,40)/G._tcVermeulenFT(15,40)).toFixed(4));
+  check('absolute model: Vermeulen inverse round-trips through the quadratic',
+    Math.abs(G._tcInvVermeulenTT(G._tcVermeulenFT(25,40),40) - 25) < 0.01);
+  var _amSrcV=require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('absolute model: the linearised binding form has not come back',
+    /disc|Math\.sqrt/.test(_amSrcV.slice(_amSrcV.indexOf('function _tcVermeulenFT'), _amSrcV.indexOf('function _tcVermeulenFT')+700)),
+    'the quadratic solve is gone from _tcVermeulenFT');
+  // 6. No fitted scale factor may come back.
+  var _amSrc=require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('absolute model: calFT is not refitted to the measurement',
+    !/calFT\s*=\s*_mftNum\s*\//.test(_amSrc), 'a calFT = _mftNum/... scale fit reappeared');
+  check('absolute model: no anchor re-normalisation of calFT_arr',
+    !/calFT_arr\[_ai\]\s*\*=/.test(_amSrc), 'the anchor normalisation reappeared');
+  G._tcp=_amS.tp; G._tcBwEntries=_amS.bw; G._tcGhStack=_amS.gh;
+}
+
+// ── UNITS ARE ALWAYS pmol/L + missing labs fall back to the population average ──
+// A curve that silently became mg/day when it could not calibrate was never a requested
+// feature. It rendered a y-axis of 0-35 where the user expected 217+ pmol/L and read as a
+// broken chart. Missing bloodwork changes the CONFIDENCE, never the unit.
+console.log('\n── T-calc: always pmol/L, population estimate when no lab ──');
+{
+  var _puSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('units: no mg fallback anywhere in the unit label',
+    !/unitLabel\s*=\s*calFT\s*\?/.test(_puSrc), 'a conditional unit label is back');
+  check('units: unitLabel is assigned the literal pmol/L',
+    (_puSrc.match(/var unitLabel = 'pmol\/L';/g) || []).length >= 2);
+  // Targeted: unitLabel itself must never be assigned mg. (Bare 'mg' elsewhere is a DOSE
+  // unit — mg of drug injected — which is correct and unrelated to the chart's y-axis.)
+  check('units: unitLabel is never assigned mg',
+    !/unitLabel\s*=\s*[^;\n]*'mg'/.test(_puSrc), 'unitLabel can still become mg');
+  check('units: the free-T axis cannot render a non-pmol/L unit',
+    !/unitLabel\s*=\s*(?!'pmol\/L')/.test(_puSrc) || /var unitLabel = 'pmol\/L';/.test(_puSrc));
+  check('estimate: chart labels it an ESTIMATE', /ESTIMATE — population average/.test(_puSrc));
+  check('estimate: chart says it is not the user\'s levels', /not your levels/.test(_puSrc));
+  check('estimate: chart asks for a dated blood test', /Add a dated/.test(_puSrc));
+
+  if (typeof G._tcFreeTSeries === 'function') {
+    var _puSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+    var _puLog = [{compId:'nebido', doseMg:'100', date:'2026-06-26'},
+                  {compId:'nebido', doseMg:'100', date:'2026-06-28'},
+                  {compId:'nebido', doseMg:'100', date:'2026-06-30'}];
+    // No bloodwork at all -> population average for age, still pmol/L.
+    G._tcp = {measuredFT:'', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_puLog};
+    G._tcBwEntries = null; G._tcGhStack = [];
+    var _puA = G._tcFreeTSeries(_puLog.slice(), {});
+    var _puFt = function(S,i){ return S.total[i]*(S.calFT_arr?S.calFT_arr[i]:S.scale); };
+    check('no lab: unit is STILL pmol/L (never mg)', _puA.unitLabel === 'pmol/L', 'got '+_puA.unitLabel);
+    check('no lab: curve is calibrated, not blank', _puA.calFT != null);
+    check('no lab: tier reports it as an estimate', _puA.tier === 'estimate', 'tier='+_puA.tier);
+    var _popFT = G._tcDefaultFT(1985);
+    check('no lab: day 0 sits at the population average for the age',
+      Math.abs(_puFt(_puA,0) - _popFT) < Math.max(1, _popFT*0.02),
+      'day0='+_puFt(_puA,0).toFixed(1)+' population='+_popFT);
+    check('no lab: the curve still rises with the drug', _puFt(_puA,_puA.totalDays-1) > _puFt(_puA,0));
+
+    // An UNDATED personal reading must not anchor the curve — the anchor day sets the
+    // whole scale. It falls back to the same population estimate rather than to no curve.
+    G._tcp = {measuredFT:'900', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_puLog};
+    G._tcBwEntries = null;
+    var _puB = G._tcFreeTSeries(_puLog.slice(), {});
+    check('undated personal value does not anchor the curve (population used instead)',
+      _puB.tier === 'estimate' && Math.abs(_puFt(_puB,0) - _popFT) < Math.max(1, _popFT*0.02),
+      'day0='+_puFt(_puB,0).toFixed(1));
+    check('undated personal value: unit is still pmol/L', _puB.unitLabel === 'pmol/L');
+
+    // A DATED lab wins and drops the estimate labelling.
+    G._tcp = {measuredFT:'217', currentDoseMgWk:'0', totalT:'', shbg:'45', birthYear:'1985', manualLog:_puLog};
+    G._tcBwEntries = [{date:'2026-06-25', free_t:217, shbg:45}];
+    var _puC = G._tcFreeTSeries(_puLog.slice(), {});
+    check('dated lab: anchors on the user\'s own value, not the population',
+      Math.abs(_puFt(_puC,0) - 217) < 1.0, 'day0='+_puFt(_puC,0).toFixed(1));
+    check('dated lab: no longer flagged as an estimate', _puC.tier !== 'estimate', 'tier='+_puC.tier);
+    G._tcp = _puSave.tp; G._tcBwEntries = _puSave.bw; G._tcGhStack = _puSave.gh;
+  }
 }
 
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
@@ -5058,16 +5300,31 @@ if (typeof G._tcDrawManualChart === 'function') {
 
   function _nbRun(offsets){ _nbCalFT = null; _nbFillNums = []; G._tcDrawManualChart('tc-manual-chart', _nbSeries(offsets)); return {calFT:_nbCalFT, peak:Math.max.apply(null, _nbFillNums.concat([0]))}; }
 
-  var _nbThrew = false, _nbR1 = null, _nbR2 = null;
+  var _nbThrew = false, _nbR1 = null, _nbR2 = null, _nbUncal = null;
+  var _nbSavedBw = G._tcBwEntries;
   try {
+    // NEW CONTRACT: with no dated reading the curve is not calibrated at all — the model
+    // refuses to guess WHEN an undated free T was taken, because the anchor day sets the
+    // whole scale. Captured first, before a dated draw is supplied below.
+    G._tcBwEntries = null;
+    _nbUncal = _nbRun(_nbOff1);
+    // The invariant this block exists for — appending FUTURE injections must not rescale
+    // the curve — is unchanged and still worth testing, so give it a dated draw.
+    G._tcBwEntries = [{date:_nbDate(-7), free_t:217}];
     _nbR1 = _nbRun(_nbOff1);
     _nbR2 = _nbRun(_nbOff2);
   } catch(e) {
     _nbThrew = true;
     console.error('  no-bloodwork anchor test threw:', e.message);
   }
+  G._tcBwEntries = _nbSavedBw;
   check('no-bloodwork anchor: no crash', !_nbThrew);
-  check('no-bloodwork anchor: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
+  // Undated no longer means UNCALIBRATED — it means the population estimate is used.
+  // The curve is always drawn and always pmol/L; only the confidence changes.
+  check('undated reading still yields a calibrated pmol/L curve (population estimate)',
+    !_nbThrew && _nbUncal && _nbUncal.calFT != null,
+    'calFT=' + (_nbUncal && _nbUncal.calFT));
+  check('dated draw: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
   if (!_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null) {
     check(
       'no-bloodwork anchor: calFT must not change when future injections are appended',
@@ -5607,7 +5864,7 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   var _awLog = [];
   for (var _awi=0; _awi<40; _awi++){ var _awd=new Date(new Date('2026-04-01').getTime()+_awi*3.5*86400000); _awLog.push({compId:'enanthate', doseMg:'100', date:_awd.getFullYear()+'-'+String(_awd.getMonth()+1).padStart(2,'0')+'-'+String(_awd.getDate()).padStart(2,'0')}); }
   G._tcp = {measuredFT:'500', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_awLog};
-  G._tcBwEntries = null; G._tcGhStack = [];
+  G._tcBwEntries = [{date:'2026-06-20', free_t:500}]; G._tcGhStack = [];
   var _awS = G._tcFreeTSeries(_awLog.slice(), {});
   function _awWinMean(a,b){ var s=0,n=0; for(var t=a;t<=b;t++){ s+=_awS.total[t]*(_awS.calFT_arr?_awS.calFT_arr[t]:_awS.scale); n++; } return n?s/n:0; }
   try { localStorage.removeItem('tc-avg-line'); } catch(e){}
@@ -5689,12 +5946,21 @@ if (typeof G._tcDrawManualChart === 'function') {
     var _arr=_shCap.arr, _lo=_shCap.lo, _hi=_shCap.hi, _cal=_shCap.calFT, _ref=_shCap.refDay, _tot=_shCap.total;
     // peak index by central curve
     var _pk=0,_pv=0; for (var _t=0; _t<_tot.length; _t++){ var _v=_tot[_t]*_arr[_t]; if(_v>_pv){_pv=_v;_pk=_t;} }
-    check('T→SHBG: curve stays anchored at the draw (factor = 1 there)',
-      Math.abs(_arr[_ref]/_cal - 1) < 1e-6, 'arr[ref]/calFT='+(_arr[_ref]/_cal).toFixed(8));
+    // The curve must pass through the user's measured free T at the draw. This used to be
+    // asserted as arr[ref]/calFT === 1, which tested the old REPRESENTATION (arr was a
+    // multiplier around a fitted calFT). calFT is no longer a fitted scale factor — the
+    // baseline is solved from the lab instead — so assert the property directly. It now
+    // holds because TT_base was derived from this measurement, not because the curve was
+    // rescaled to hit it: a modelling error can no longer be absorbed into a constant.
+    check('T→SHBG: curve passes through the measured free T at the draw',
+      Math.abs(_tot[_ref] * _arr[_ref] - 217) < 0.5,
+      'rendered at draw=' + (_tot[_ref] * _arr[_ref]).toFixed(4) + ' vs measured 217');
     check('T→SHBG: band pinches to zero width at the draw',
       Math.abs(_lo[_ref]-_hi[_ref]) < 1e-6);
+    // Same contract change: compare the free-T FRACTION at the peak against its value at
+    // the draw, rather than against calFT.
     check('T→SHBG: free-T fraction rises above the draw dose (SHBG suppressed)',
-      _arr[_pk] > _cal * 1.02, 'arr[peak]/calFT='+(_arr[_pk]/_cal).toFixed(4));
+      _arr[_pk] > _arr[_ref] * 1.02, 'arr[peak]/arr[ref]='+(_arr[_pk]/_arr[_ref]).toFixed(4));
     check('T→SHBG: β band brackets the central curve at the peak',
       _lo[_pk] <= _arr[_pk] + 1e-9 && _arr[_pk] <= _hi[_pk] + 1e-9);
     check('T→SHBG: band has real width away from the draw (hi > lo at peak)',
@@ -7836,4 +8102,11 @@ console.log('\n── T-History: read-only view ──────────�
 
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
-if(failed>0)process.exit(1);
+// Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
+// block near the top of this file; that callback is a microtask and only runs after
+// this synchronous phase finishes. Calling process.exit(1) killed the process first,
+// so ANY synchronous failure silently skipped those 137 tests — they disappeared
+// exactly when the suite was already broken and you most needed them. Setting
+// exitCode lets the queue drain; the async block prints the full total and exits
+// with the true aggregate.
+process.exitCode = failed > 0 ? 1 : 0;
