@@ -66,6 +66,9 @@ const sandbox = vm.createContext({
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
   google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
+  // The real browser has this; buildTCalc schedules its canvas draw through it. Without
+  // it, any test that renders a NON-EMPTY plasma curve throws ReferenceError.
+  requestAnimationFrame:noop,cancelAnimationFrame:noop,
   AbortController:class{constructor(){this.signal={};}abort(){}},
 });
 vm.runInContext(patchedScript, sandbox);
@@ -4701,6 +4704,97 @@ console.log('\n── T-calc: always pmol/L, population estimate when no lab ─
       Math.abs(_puFt(_puC,0) - 217) < 1.0, 'day0='+_puFt(_puC,0).toFixed(1));
     check('dated lab: no longer flagged as an estimate', _puC.tier !== 'estimate', 'tier='+_puC.tier);
     G._tcp = _puSave.tp; G._tcBwEntries = _puSave.bw; G._tcGhStack = _puSave.gh;
+  }
+}
+
+// ── Simple planner must actually drive the plasma curve ──
+// Reported 2026-08-02 (trt-stage): the plan card said "140 mg/week - 74 injections
+// projected - Shown in the plasma curve at the top of this page" while the curve itself
+// said "No injections logged yet" and drew nothing. buildTCalc gated the curve card on
+// _tcp.manualLog, which is legitimately EMPTY when the simple planner is the live one.
+console.log('\n── T-calc: the live planner drives the curve ──');
+{
+  var _spSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('curve gate uses _tcCurveLog(), not a manualLog filter',
+    /var validLog = _tcCurveLog\(\);/.test(_spSrc) &&
+    !/var validLog = log\.filter/.test(_spSrc),
+    'buildTCalc still gates the plasma curve on the manual log');
+  if (typeof G._tcCurveLog === 'function' && typeof G._tcSimplePlanInjections === 'function') {
+    var _spSave = {tp:G._tcp};
+    // Simple planner live, manual log EMPTY — exactly the reported state.
+    G._tcp = Object.assign({}, G._tcp, {
+      manualLog: [],
+      simplePlan: {compId:'testoviron', doseMg:'100', cadenceN:5, cadenceUnit:'days',
+                   cadenceDays:5, startDate:'2026-08-02'},
+      plannerMode: 'simple'
+    });
+    var _spInj = G._tcSimplePlanInjections();
+    check('simple planner generates a schedule from the plan alone', _spInj.length > 0,
+      'got ' + _spInj.length + ' injections');
+    var _spCurve = G._tcCurveLog();
+    check('curve log is non-empty when the plan is live and manualLog is empty',
+      _spCurve.length > 0, 'got ' + _spCurve.length);
+    check('curve log entries carry the planned compound and dose',
+      _spCurve.length > 0 && _spCurve[0].compId === 'testoviron' && parseFloat(_spCurve[0].doseMg) === 100,
+      _spCurve.length ? JSON.stringify(_spCurve[0]) : 'empty');
+    G._tcp = _spSave.tp;
+  }
+}
+
+// ── Schedule generation must step in CALENDAR days, not milliseconds ──
+// Reported 2026-08-02: two visible kinks in the plasma curve, mistaken for pharmacology.
+// The generator advanced by i * cadenceDays * 86400000 ms from parseLocalDate(startDate),
+// which is LOCAL MIDNIGHT. A fixed number of ms is not a fixed number of local days — at
+// each DST transition the wall clock shifts an hour and, anchored at midnight, crosses a
+// date boundary. "Every 5 days" from 2026-08-02 in a European timezone produced
+// 2026-10-21 -> 2026-10-25 (4-day gap) and 2027-03-24 -> 2027-03-30 (6-day gap): one dose
+// crammed in, one dropped. EOD degraded to gaps of 1, 2 AND 3 days.
+//
+// NOTE: CI runs in UTC, where no DST transition occurs, so a purely functional test cannot
+// reproduce it here. The source guard below is what actually protects this.
+console.log('\n── T-calc: DST-proof schedule generation ──');
+{
+  var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  var _dsFn = _dsSrc.slice(_dsSrc.indexOf('function _tcSimplePlanInjections'),
+                           _dsSrc.indexOf('function _tcSimplePlanInjections') + 2200);
+  check('schedule steps in calendar days (DST-proof)',
+    /start\.getDate\(\)\s*\+\s*Math\.round\(i \* cadence\)/.test(_dsFn),
+    'calendar-day stepping is gone');
+  check('schedule does NOT step in milliseconds from the start instant',
+    !/start\.getTime\(\)\s*\+\s*i\s*\*\s*stepMs/.test(_dsFn),
+    'ms stepping is back — this is the DST bug');
+  if (typeof G._tcSimplePlanInjections === 'function') {
+    var _dsSave = G._tcp;
+    function _dsGaps(cadence){
+      G._tcp = Object.assign({}, G._tcp, { manualLog: [], plannerMode: 'simple',
+        simplePlan: {compId:'testoviron', doseMg:'100', cadenceN:0, cadenceUnit:'days',
+                     cadenceDays:cadence, startDate:'2026-08-02'} });
+      var inj = G._tcSimplePlanInjections(), seen = {};
+      for (var i = 1; i < inj.length; i++){
+        var g = Math.round((new Date(inj[i].date+'T12:00:00') - new Date(inj[i-1].date+'T12:00:00'))/86400000);
+        seen[g] = 1;
+      }
+      return { n: inj.length, gaps: Object.keys(seen).map(Number).sort(function(a,b){return a-b;}) };
+    }
+    var _ds5 = _dsGaps(5);
+    check('every-5-days yields only 5-day gaps', _ds5.n > 50 && _ds5.gaps.length === 1 && _ds5.gaps[0] === 5,
+      'gaps ' + _ds5.gaps.join(','));
+    var _ds2 = _dsGaps(2);
+    check('EOD never puts two doses on consecutive days', _ds2.gaps.indexOf(1) < 0,
+      'gaps ' + _ds2.gaps.join(','));
+    // Fractional cadence must stay fractional on AVERAGE without drifting.
+    var _ds3 = _dsGaps(7/3);
+    check('3x/week alternates 2 and 3 day gaps only',
+      _ds3.gaps.length <= 2 && _ds3.gaps.every(function(g){ return g === 2 || g === 3; }),
+      'gaps ' + _ds3.gaps.join(','));
+    G._tcp = Object.assign({}, G._tcp, { simplePlan: {compId:'testoviron', doseMg:'100',
+      cadenceN:0, cadenceUnit:'days', cadenceDays:7/3, startDate:'2026-08-02'} });
+    var _dsI = G._tcSimplePlanInjections();
+    var _dsSpan = (new Date(_dsI[_dsI.length-1].date+'T12:00:00') - new Date(_dsI[0].date+'T12:00:00'))/86400000;
+    check('3x/week does not drift over a year',
+      Math.abs(_dsSpan/(_dsI.length-1) - 7/3) < 0.02,
+      'mean interval ' + (_dsSpan/(_dsI.length-1)).toFixed(4));
+    G._tcp = _dsSave;
   }
 }
 
