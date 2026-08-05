@@ -507,8 +507,14 @@ function _tcEndogAt(drugRateMgd, p0) {
 
 // Endogenous testosterone production, mg/day. The one link between "my own level" and
 // "mg I inject", so it sets how far above baseline any protocol lands.
-// TODO: move to the backend with a citation (clinical range ~3-10 mg/day).
-var TCALC_ENDOG_T_MGD = 6.5;
+//
+// 5, not the 6.5 used until 2026-08-02. Handelsman's Endotext chapter "Androgen
+// Physiology, Pharmacology, Use and Misuse" sources a tracer-derived range of 3-10
+// mg/day, and anchors it concretely: an 800 mg implant "releasing ~5 mg per day
+// ... replicating the testosterone production rate in healthy eugonadal men".
+// Nothing published states 6.5 — it was a mid-range guess. Backend
+// ENDOGENOUS_T_PRODUCTION carries the full citation; keep the two in step.
+var TCALC_ENDOG_T_MGD = 5;
 
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
@@ -1532,8 +1538,11 @@ function _tcAttachPanListeners(canvas) {
     if (e.preventDefault) e.preventDefault();
     var s = canvas._tcPanState || state;
     _tcChartPanOffset = _pOff - dx * ((s.xEnd - s.xStart) / (s.cW || 250));
-    var vl = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e2){ return e2.date && e2.doseMg && parseDec(e2.doseMg) > 0; }) : [];
-    _tcDrawManualChart(canvas.id, vl, _tcChartZoom);
+    // Redraw from the LIVE planner's schedule. This used to filter _tcp.manualLog, which
+    // is empty whenever the simple planner is the live one — so dragging redrew an empty
+    // chart and the curve simply would not pan. Same mistake as the curve gate in
+    // buildTCalc; _tcCurveLog() is the single source both must use.
+    _tcDrawManualChart(canvas.id, _tcCurveLog(), _tcChartZoom);
   };
   canvas._tcTouchEnd = function() { _pDX = null; };
   canvas._tcMouseDown = canvas._tcTouchStart;
@@ -1920,10 +1929,24 @@ function _tcFreeTSeries(sorted, hooks) {
   // as an accumulated mid-cycle level. So we fall back to the age-based population value,
   // which is unambiguously an UNTREATED baseline and therefore anchors at day 0.
   var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
-  if (_mftUndated || _ftIsDefault) {
+  // READ THE CALIBRATING ENTRY ITSELF — not the _tcp mirrors.
+  // _ftIsDefault is derived from _tcp.measuredFT alone, and _tcFetchBwEntries only mirrors
+  // free_t/total_t/shbg when the NEWEST entry happens to carry them. So a dated draw with a
+  // total T but no free T (a perfectly normal TRT panel) left _ftIsDefault true, and the
+  // block below then REPLACED the user's measured value with the age population average.
+  // The result: bloodwork entered, bloodwork ignored, and a chart captioned
+  // "ESTIMATE - NO BLOODWORK" over it. Take the values from _bwCal, the entry that was
+  // already selected as the one carrying a dated measurement.
+  var _bwFT   = _bwCal ? (parseDec(_bwCal.free_t)  || 0) : 0;
+  var _bwTT   = _bwCal ? (parseDec(_bwCal.total_t) || 0) : 0;
+  var _bwSHBG = _bwCal ? (parseDec(_bwCal.shbg)    || 0) : 0;
+  if (_bwFT > 0) { _mftNum = _bwFT; _ftIsDefault = false; }
+  // Population fallback ONLY when no dated draw can calibrate at all.
+  if ((_mftUndated || _ftIsDefault) && !(_bwFT > 0) && !(_bwTT > 0)) {
     var _popFT = _tcDefaultFT(parseInt(_tcp.birthYear, 10) || 0);
     if (_popFT > 0) { _mftNum = _popFT; _ftIsDefault = true; }
   }
+  if (_bwSHBG > 0) _shbgMeas0 = _bwSHBG;
   var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
     (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
   // Inverting free T needs SOME SHBG. With no measurement and no population table (no age
@@ -1933,7 +1956,11 @@ function _tcFreeTSeries(sorted, hooks) {
   // uncertainty; it must not change the UNITS of the answer.
   if (!(_shbgForInv > 0)) _shbgForInv = 35;
   var _ttAtDraw = null;
-  if (_mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
+  // A measured total T from the dated draw is used directly. Inverting a free T the user
+  // did not provide - worst of all a POPULATION free T - to guess a total they actually
+  // measured is strictly worse than reading the number they gave us.
+  if (_bwTT > 0 && !(_bwFT > 0)) _ttAtDraw = _bwTT;
+  if (!(_ttAtDraw > 0) && _mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
   if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
   var _ttBase = (_ttAtDraw > 0 && _endogP > 0) ? (_ttAtDraw * _endogP / _anchRate) : 0;
 
@@ -1970,7 +1997,11 @@ function _tcFreeTSeries(sorted, hooks) {
   //   measured : total-T + SHBG bloodwork    → full model incl. T-driven β, β-band
   //   partial  : only a measured free T        → GH/Boron suppression on a population SHBG base
   //   estimate : no bloodwork (age-default FT) → same, wide band
-  var _tier = (_shbgMeas > 0 && _ttMeas > 0) ? 'measured' : (_ftIsDefault ? 'estimate' : 'partial');
+  // 'estimate' means NO DATED BLOODWORK AT ALL. It must be decided by whether a calibrating
+  // entry exists (_bwCal), never by whether that entry happened to include a free T -
+  // claiming "NO BLOODWORK" to a user who just entered some is the bug this fixes.
+  var _tier = (_shbgMeas > 0 && _ttMeas > 0) ? 'measured'
+            : (_bwCal ? 'partial' : (_ftIsDefault ? 'estimate' : 'partial'));
   // Baseline SHBG: measured when present, else a population value for the user's age. The
   // SHBG suppression model runs whenever we have one — so GH/Boron move the curve even with
   // no bloodwork (population averages) or only a partial / mid-cycle test.
@@ -2294,6 +2325,9 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(xDays, nowDay + 2 + panDays); }
   else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(xDays, nowDay + 4 + panDays); }
   else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(xDays, nowDay + 15 + panDays); }
+  // 3 months: the span a titration decision actually plays out over — long enough to see
+  // accumulation trend, short enough to still resolve individual injections.
+  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(xDays, nowDay + 45 + panDays); }
   // Whole view: make sure "today" is inside the window so its marker/level show
   // even when the curve has already washed back to baseline before today.
   if (_zoom === 'whole' && nowDay > xEnd && nowDay <= totalDays) xEnd = nowDay;
@@ -2344,16 +2378,11 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // Without a dated lab the curve is calibrated to the POPULATION AVERAGE for the user's
   // age. It is still a real pmol/L curve — units never change — but the level it is
   // pinned to is a population figure, not this user's. Say so plainly and ask for a test.
-  if (_tier === 'estimate') {
-    var _ucY = PAD.top + 10;
-    ctx.textAlign = 'left'; ctx.font = 'bold 9px -apple-system,system-ui,sans-serif';
-    ctx.fillStyle = '#e0a030';
-    ctx.fillText('ESTIMATE — population average for your age', PAD.left + 4, _ucY);
-    ctx.font = '8px -apple-system,system-ui,sans-serif';
-    ctx.fillStyle = '#e0a03099';
-    ctx.fillText('Educated guess, not your levels. Add a dated', PAD.left + 4, _ucY + 11);
-    ctx.fillText('blood test (free T or total T) for the real curve.', PAD.left + 4, _ucY + 21);
-  }
+  // Drawn as ONE block below, next to the badge — not here. This used to paint three
+  // lines starting at PAD.top+10, directly underneath the pill badge that starts at
+  // PAD.top+2, so the badge sat on top of the first line and the result read
+  // "...ge for your age" over a coloured pill, with the remaining two lines running
+  // across the curve. Two separate warnings saying the same thing, overlapping.
 
   // SHBG suppression + β-source annotation (top-right of chart)
   if (_ghAnnot) {
@@ -2447,8 +2476,11 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   for (var t3 = xStart + 1; t3 <= xEnd; t3++) {
     ctx.lineTo(xOf(t3), yOf(total[t3] * (calFT_arr ? calFT_arr[t3] : scale) || 0));
   }
-  // Estimate tiers (no bloodwork, or no SHBG data) draw dashed to signal lower confidence.
-  if (_tier && _tier !== 'measured') ctx.setLineDash([5,3]);
+  // The plasma curve is ALWAYS a solid line. Estimate tiers used to draw it dashed, which
+  // made an uncalibrated curve read as broken rather than uncertain — at Whole zoom the
+  // dashes alias against the injection cycles and the line disappears entirely. Lower
+  // confidence is already carried by the badge, the wider band and the axis note; it does
+  // not also need to degrade the line itself.
   ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
   ctx.setLineDash([]);
 
@@ -2483,6 +2515,12 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(_bx, _by, _badgeW, 12, 3); ctx.fill(); }
     else { ctx.fillRect(_bx, _by, _badgeW, 12); }
     ctx.fillStyle = '#1a1205'; ctx.fillText(_badge, _bx + 5, _by + 9);
+    // One line of guidance, BELOW the pill (badge is 12px tall from _by), so nothing
+    // overlaps. It says what to do; the badge already says what is wrong.
+    ctx.font = '8px -apple-system,system-ui,sans-serif';
+    ctx.fillStyle = '#e0a030bb';
+    ctx.fillText('Not your levels — add a dated blood test',
+                 _bx + 1, _by + 23);
   }
 
   // "Now" vertical line + TODAY'S free-T level (Y-axis label) — shown in EVERY
@@ -3169,7 +3207,7 @@ function buildTCalc() {
   if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
-    ['today','week','month','whole'].forEach(function(z) {
+    ['today','week','month','3mo','whole'].forEach(function(z) {
       var isA = _tcChartZoom === z;
       html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
     });
