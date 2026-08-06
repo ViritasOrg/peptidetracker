@@ -1418,7 +1418,7 @@ async function stackConfirmAddAAS(){
 async function stackRemoveAASCompound(idx){
   var c=_cycle;if(!c||!c.id)return;
   var name=(c.compounds&&c.compounds[idx])?c.compounds[idx].name:'this compound';
-  if(!confirm('Remove '+name+'?'))return;
+  if(!confirmGlobalDelete(name))return;
   c.compounds=(c.compounds||[]).filter(function(_,i){return i!==idx;});
   cycleCacheSave(c);renderStackEditor();
   try{var _rcr=await fetch(AGENT_URL+'/cycles/'+c.id,{method:'PATCH',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({compounds:c.compounds})});if(!_rcr.ok)_logHttp('cyclePatchCompounds',_rcr.status,'/cycles/'+c.id);}catch(e){_logErr('cyclePatchCompounds',e);}
@@ -2011,7 +2011,7 @@ function wizAdviseSetExperience(v){
   var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
   // Persist the correction so it isn't stale here or elsewhere in the app.
   try{var p=(typeof getData==='function'&&getData('pep-profile',null))||{};p.experience=v;if(typeof setData==='function')setData('pep-profile',p);
-      if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v});}catch(e){}
+      if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v,'pep-profile':p});}catch(e){}
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 async function enhancedAdvisorFromAgent(inp){

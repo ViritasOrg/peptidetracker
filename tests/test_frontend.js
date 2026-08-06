@@ -1086,7 +1086,11 @@ G.wizSave().then(async ()=>{
 
   // deleteWeight removes entry from weights array
   G.weights = [{ date: '2026-06-01', weight: 90 }, { date: '2026-06-05', weight: 89 }];
+  // The sandbox stubs confirm() to false, and deleteWeight now asks before deleting
+  // (it used to delete silently). Say yes for this behavioural check.
+  const _cfWas = G.confirm; G.confirm = () => true;
   G.deleteWeight('2026-06-01');
+  G.confirm = _cfWas;
   check('deleteWeight removes correct entry', G.weights.length === 1 && G.weights[0].date === '2026-06-05',
     `got ${JSON.stringify(G.weights)}`);
   check('deleteWeight preserves other entries', G.weights[0].weight === 89, `got ${G.weights[0].weight}`);
@@ -1191,7 +1195,70 @@ console.log('\n── Card header overflow regressions ────────�
 }
 
 console.log(`\n${'─'.repeat(59)}`);
-  console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
+  
+// ── The profile must survive a cache wipe (2026-08-05) ─────────────────────
+// localStorage is a cache, never the source of truth. pep-profile carried the
+// onboarded flag, the experience tier and the goals, and only the four shared
+// user_* fields were ever pushed — so wiping the cache lost all three and the app
+// replayed onboarding as if the account were new.
+{
+  const _tsProf = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+  check('onboarding pushes the profile object itself',
+    /kv\['pep-profile'\]=profile;/.test(rawScript));
+  check('the profile carries the onboarded flag',
+    /goals:\(_obData\.goals\|\|\[\]\)\.slice\(\),onboarded:true\}/.test(rawScript));
+  check('the startup sync restores it', /if\(s\['pep-profile'\]/.test(rawScript));
+  check('the restored profile is merged, not swapped in whole',
+    /setData\('pep-profile',Object\.assign\(\{\},getData\('pep-profile',\{\}\),s\['pep-profile'\]\)\)/.test(rawScript));
+  check('correcting the experience tier pushes the profile too',
+    /pushPepSettingsToAgent\(\{'pep-experience':v,'pep-profile':p\}\)/.test(_tsProf));
+
+  // applyTheme pushes as well as stores, so re-applying an unchanged theme sent the
+  // same value back to the backend on every single load. Same guard as workout.
+  check('the theme is only re-applied when it differs',
+    /s\['pep-theme'\]&&getData\('pep-theme',null\)!==s\['pep-theme'\]/.test(rawScript));
+}
+
+
+// ── No hardcoded personal data, and deletes say they are global (2026-08-05) ─
+// BC_SEED held one person's real neck/belly/body-fat measurements, in a public
+// repo, merged into every user's body-comp history at four separate call sites.
+// Henrik: remove anything hardcoded, and "delete entries need an extra
+// confirmation step explaining that the delete is global."
+{
+  const fsx = require('fs'), pathx = require('path');
+  const rd = f => fsx.readFileSync(pathx.join(__dirname, '..', f), 'utf8');
+  const body = rd('tab-body.js'), labs = rd('tab-labs.js');
+  const supp = rd('tab-supplements.js'), stack = rd('tab-stack.js');
+
+  check('no BC_SEED constant', !/BC_SEED/.test(rawScript));
+  check('  …and no merge sites left in tab-body.js', !/BC_SEED/.test(body));
+  check('no hardcoded measurements anywhere in the app',
+    ![rawScript, body].some(src => /neck:42,belly:9[0-9]/.test(src)));
+
+  check('there is one shared confirm helper', /function confirmGlobalDelete\(what\)\{/.test(rawScript));
+  check('  …and it says the record leaves the backend',
+    /deletes it from your account on the backend/.test(rawScript));
+  check('  …and that every device is affected, not just this one',
+    /every device you are signed in on — not just this one/.test(rawScript));
+  check('  …and that it cannot be undone', /It cannot be undone\./.test(rawScript));
+
+  check('deleting a weight asks (it used to delete silently)',
+    /function deleteWeight\(date\)\{if\(!confirmGlobalDelete\(/.test(rawScript));
+  check('deleting a protocol asks', /confirmGlobalDelete\('this protocol'\)/.test(rawScript));
+  check('deleting a blood test asks', /confirmGlobalDelete\('this blood test'\)/.test(labs));
+  check('removing a supplement asks', /confirmGlobalDelete\('this supplement'\)/.test(supp));
+  check('removing a compound from a cycle asks', /confirmGlobalDelete\(name\)/.test(stack));
+
+  // Every one of those writes through to the backend, so none may keep the old
+  // wording that implied a local-only change.
+  check('no delete still uses the old local-sounding prompt',
+    !/confirm\('Delete this protocol\?|confirm\('Delete this blood test\?|confirm\('Remove this supplement\?/
+      .test(rawScript + labs + supp + stack));
+}
+
+console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
 
@@ -8540,6 +8607,33 @@ console.log('\n─────────────────────�
     /method:'DELETE'/.test(ref) && /from_date='\+_todayKey/.test(ref));
   check('  …and still only targets today onward, never the past',
     !/from_date='\+dateKey\(from\)/.test(ref));
+}
+
+
+// ── Deleting every stack must stick (regression, 2026-08-05) ───────────────
+// Reported: "when I delete all stacks my old peptide stack reappears".
+// loadUserStacks synthesised a stack from WEEKLY_DEFAULT whenever the list came back
+// empty, then persisted it via saveStacksToBackend — so deleting every protocol
+// recreated one on the next load AND wrote it to the backend.
+//
+// WEEKLY_DEFAULT is also one specific person's real protocol, so seeding it handed
+// that protocol to anyone with an empty stack — the same class of issue as
+// _DEFAULT_PEPTIDES in protocol.py (2026-06-24).
+{
+  const i = rawScript.indexOf('async function loadUserStacks()');
+  const body = rawScript.slice(i, rawScript.indexOf('function updateWEEKLY()', i));
+  check('an empty stack list no longer synthesises one',
+    !/_userStacks=\[_synthesizeProtocol\(WEEKLY_DEFAULT\)\]/.test(body));
+  check('  …and no longer names it "My Stack"', !/_userStacks\[0\]\.name='My Stack'/.test(body));
+  check('an empty list clears the active selection', /if\(!_userStacks\.length\)_activeStackIndices=\[\]/.test(body));
+  // The offline path must still work: a dead backend falls back to cached stacks.
+  check('cached stacks are still restored when the endpoint fails',
+    /localStorage\.getItem\('stacks_cache'\)/.test(body));
+  // buildToday already renders the correct empty state — the synthesis was what kept
+  // that screen unreachable.
+  const today = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  check('the empty state offers a template or a build-your-own', /No protocol yet/.test(today));
+  check('  …rather than a silently invented protocol', /Build your first protocol|openTemplatePicker/.test(today));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
