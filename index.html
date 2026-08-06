@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.272</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -272,11 +272,6 @@ const MILESTONES=[
   {date:new Date(2026,5,29),name:'Trough Blood Panel',desc:'Urologist — E2, TT, hematocrit, LH, FSH'},
   {date:new Date(2026,6,4), name:'HGH Start / Nebido #2',desc:'1 IU/day 5-on/2-off. CJC/IPA stops.'},
 ];
-const BC_SEED=[
-  {date:"2026-3-23",dateLabel:"23 Mar 2026",neck:42,belly:99,bf:23.0},
-  {date:"2026-5-2", dateLabel:"2 May 2026", neck:42,belly:96,bf:21.0},
-  {date:"2026-5-3", dateLabel:"3 May 2026", neck:42,belly:94,bf:19.6},
-];
 const BC_KEY='proto-bodycomp-v2';
 let weights=[];
 let _viewDate=null;
@@ -373,7 +368,6 @@ function _bfEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</
 function _latestBodyFat(){
   var arr=[];try{arr=JSON.parse(localStorage.getItem(BC_KEY)||'[]')||[];}catch(e){arr=[];}
   var seen={};arr.forEach(function(e){if(e&&e.date)seen[e.date]=1;});
-  if(typeof BC_SEED!=='undefined'&&BC_SEED)BC_SEED.forEach(function(s){if(s&&s.date&&!seen[s.date])arr.push(s);});
   arr=arr.filter(function(e){return e&&e.date&&typeof e.bf==='number'&&isFinite(e.bf);});
   if(!arr.length)return null;
   arr.sort(function(a,b){return new Date(String(a.date).replace(/-/g,'/'))-new Date(String(b.date).replace(/-/g,'/'));});
@@ -785,11 +779,20 @@ async function loadUserStacks(){
   // back. Each stage now renders in a finally: bad data degrades one section rather
   // than hanging the whole app.
   try{
-  if(!_userStacks.length){
-    _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
-    _userStacks[0].name='My Stack';
-    _activeStackIndices=[0];
-  }
+  // An empty stack list means the user deleted their protocols — NOT that the app
+  // should invent one. This used to synthesise a stack from WEEKLY_DEFAULT and then
+  // persist it via saveStacksToBackend, so deleting every stack silently recreated
+  // one on the next load and wrote it back to the backend. Deleting must stick.
+  //
+  // WEEKLY_DEFAULT is also one specific person's real protocol (Retatrutide Sun/Wed,
+  // CJC-1295/IPA AM+PM, GLOW daily), so seeding it was handing that protocol to
+  // whoever had an empty stack — the same class of issue as _DEFAULT_PEPTIDES in
+  // protocol.py (2026-06-24). Neutral empty state only.
+  //
+  // buildToday already renders the correct empty state for this case: "No protocol
+  // yet" with Start-from-a-template / Build-your-own. The synthesis was preventing
+  // that screen from ever being reachable.
+  if(!_userStacks.length)_activeStackIndices=[];
   _normalizeActiveStack();
   var _needIdSave=_userStacks.some(function(s){return s&&!s.id;});
   _userStacks.forEach(function(stack){
@@ -1113,7 +1116,7 @@ async function useStack(idx){
 }
 // ── Delete a stack ───────────────────────────────────────────────────────────
 async function deleteStack(idx){
-  if(!confirm('Delete this protocol? This cannot be undone.'))return;
+  if(!confirmGlobalDelete('this protocol'))return;
   if(idx>=0&&idx<_userStacks.length){
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
@@ -1439,7 +1442,13 @@ async function saveUserWeight(weight){
 }
 async function pushWeightToAgent(date,weightVal){try{const r=await fetch(AGENT_URL+'/weights',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:date,weight:weightVal})});if(!r.ok)_logHttp('pushWeight',r.status,'/weights');}catch(e){_logErr('pushWeight',e);}}
 async function deleteWeightFromAgent(date){try{const r=await fetch(AGENT_URL+'/weights/'+date,{method:'DELETE',headers:authHeaders()});if(!r.ok)_logHttp('deleteWeight',r.status,'/weights/'+date);}catch(e){_logErr('deleteWeight',e);}}
-function deleteWeight(date){weights=weights.filter(function(w){return w.date!==date;});setData('weight_log',weights);bcRender();deleteWeightFromAgent(date);}
+// Deleting a record removes it from the backend, not just this device — it is gone
+// from every device signed into this account, and there is no undo. Every delete of
+// a stored record asks with those words, so nobody learns it the hard way.
+function confirmGlobalDelete(what){
+  return confirm('Delete '+what+'?\n\nThis deletes it from your account on the backend, so it disappears from every device you are signed in on — not just this one. It cannot be undone.');
+}
+function deleteWeight(date){if(!confirmGlobalDelete('the weight logged on '+date))return;weights=weights.filter(function(w){return w.date!==date;});setData('weight_log',weights);bcRender();deleteWeightFromAgent(date);}
 
 function saveBodyMeasurement(type){
   var inp=document.getElementById('bc-'+type+'-in');
@@ -1657,6 +1666,9 @@ function obFinish(){
   if(profile.age){localStorage.setItem('user_age',String(profile.age));var ai=document.getElementById('bc-age-in');if(ai)ai.value=profile.age;}
   var kv={};if(_obData.sex)kv['user_sex']=_obData.sex;if(profile.height)kv['user_height']=profile.height;if(profile.weight)kv['user_weight']=profile.weight;if(profile.age)kv['user_age']=profile.age;
   if(_obData.experience)kv['pep-experience']=_obData.experience;if((_obData.goals||[]).length)kv['pep-goals']=_obData.goals;
+  // The profile object itself, so the onboarded flag and goals survive a cache
+  // wipe. Without it the app replayed onboarding as if the account were new.
+  kv['pep-profile']=profile;
   if(Object.keys(kv).length)pushPepSettingsToAgent(kv);
   document.getElementById('onboarding-overlay').classList.add('hidden');
   buildAppearanceCard();buildCacheCard();buildStageCopyCard();
@@ -1772,7 +1784,7 @@ async function copyDataToStage(){
   }
 }
 function wipeLocalCache(){if(!confirm('Clear all locally cached data? The app will reload and re-fetch everything from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');var _s=window.localStorage.getItem('session_token');window.localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);if(_s)window.localStorage.setItem('session_token',_s);window.location.reload();}
-async function syncPepSettingsFromAgent(){try{const r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepSettings',r.status,'/user-settings');return;}const s=await r.json();if(!s)return;if(s['proto-tab-vis']){_tabVis=Object.assign({},TAB_DEFAULTS,s['proto-tab-vis']);setData('proto-tab-vis',s['proto-tab-vis']);applyTabVis();buildTabsSettingsCard();}if(s['user_sex'])setBioSex(s['user_sex']);if(s['user_height']){localStorage.setItem('user_height',String(s['user_height']));const hi=document.getElementById('bc-height-in');if(hi)hi.value=s['user_height'];}if(s['user_weight']){localStorage.setItem('user_weight',String(s['user_weight']));const wi=document.getElementById('bc-weight-in');if(wi)wi.value=s['user_weight'];}if(s['user_age']){localStorage.setItem('user_age',String(s['user_age']));const ai=document.getElementById('bc-age-in');if(ai)ai.value=s['user_age'];}if(s['proto-blood-hidden'])setData('proto-blood-hidden',s['proto-blood-hidden']);if(s['tc-avg-line']!==undefined)setData('tc-avg-line',s['tc-avg-line']);if(s['pep-theme'])applyTheme(s['pep-theme']);if(s['pep-density']){setData('pep-density',s['pep-density']);if(typeof buildAppearanceCard==='function')buildAppearanceCard();}if(s['macros-phase']&&typeof _MACROS_PHASES!=='undefined'&&_MACROS_PHASES.indexOf(s['macros-phase'])>=0){_macrosPhase=s['macros-phase'];setData('macros-phase',s['macros-phase']);}if(s['macros-train-time'])localStorage.setItem('macros-train-time',s['macros-train-time']);if(s['macros-train-dur'])localStorage.setItem('macros-train-dur',String(s['macros-train-dur']));}catch(e){_logErr('syncPepSettings',e);}}
+async function syncPepSettingsFromAgent(){try{const r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepSettings',r.status,'/user-settings');return;}const s=await r.json();if(!s)return;if(s['proto-tab-vis']){_tabVis=Object.assign({},TAB_DEFAULTS,s['proto-tab-vis']);setData('proto-tab-vis',s['proto-tab-vis']);applyTabVis();buildTabsSettingsCard();}if(s['user_sex'])setBioSex(s['user_sex']);if(s['user_height']){localStorage.setItem('user_height',String(s['user_height']));const hi=document.getElementById('bc-height-in');if(hi)hi.value=s['user_height'];}if(s['user_weight']){localStorage.setItem('user_weight',String(s['user_weight']));const wi=document.getElementById('bc-weight-in');if(wi)wi.value=s['user_weight'];}if(s['user_age']){localStorage.setItem('user_age',String(s['user_age']));const ai=document.getElementById('bc-age-in');if(ai)ai.value=s['user_age'];}if(s['pep-profile']&&typeof s['pep-profile']==='object')setData('pep-profile',Object.assign({},getData('pep-profile',{}),s['pep-profile']));if(s['proto-blood-hidden'])setData('proto-blood-hidden',s['proto-blood-hidden']);if(s['tc-avg-line']!==undefined)setData('tc-avg-line',s['tc-avg-line']);if(s['pep-theme']&&getData('pep-theme',null)!==s['pep-theme'])applyTheme(s['pep-theme']);if(s['pep-density']){setData('pep-density',s['pep-density']);if(typeof buildAppearanceCard==='function')buildAppearanceCard();}if(s['macros-phase']&&typeof _MACROS_PHASES!=='undefined'&&_MACROS_PHASES.indexOf(s['macros-phase'])>=0){_macrosPhase=s['macros-phase'];setData('macros-phase',s['macros-phase']);}if(s['macros-train-time'])localStorage.setItem('macros-train-time',s['macros-train-time']);if(s['macros-train-dur'])localStorage.setItem('macros-train-dur',String(s['macros-train-dur']));}catch(e){_logErr('syncPepSettings',e);}}
 // A sub-tab is visible unless the user toggled it off. Settings is always on;
 // a tab absent from TAB_LABELS (e.g. Storage on prod) stays hidden as before.
 function _subVisible(id){if(id==='settings')return true;if(!(id in TAB_LABELS))return false;return _tabVis[id]!==false;}
@@ -1908,19 +1920,19 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.271"></script>
-<script src="tab-macros.js?v=1.271"></script>
-<script src="tab-stack.js?v=1.271"></script>
-<script src="tab-today.js?v=1.271"></script>
-<script src="tab-schedule.js?v=1.271"></script>
-<script src="tab-timeline.js?v=1.271"></script>
-<script src="tab-body.js?v=1.271"></script>
-<script src="tab-recon.js?v=1.271"></script>
-<script src="tab-blood.js?v=1.271"></script>
-<script src="tab-labs.js?v=1.271"></script>
-<script src="tab-tcalc.js?v=1.271"></script>
-<script src="tab-thist.js?v=1.271"></script>
-<script src="tab-supplements.js?v=1.271"></script>
+<script src="tab-cycles.js?v=1.272"></script>
+<script src="tab-macros.js?v=1.272"></script>
+<script src="tab-stack.js?v=1.272"></script>
+<script src="tab-today.js?v=1.272"></script>
+<script src="tab-schedule.js?v=1.272"></script>
+<script src="tab-timeline.js?v=1.272"></script>
+<script src="tab-body.js?v=1.272"></script>
+<script src="tab-recon.js?v=1.272"></script>
+<script src="tab-blood.js?v=1.272"></script>
+<script src="tab-labs.js?v=1.272"></script>
+<script src="tab-tcalc.js?v=1.272"></script>
+<script src="tab-thist.js?v=1.272"></script>
+<script src="tab-supplements.js?v=1.272"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
