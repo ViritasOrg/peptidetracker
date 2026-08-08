@@ -1695,7 +1695,83 @@ console.log(`\n${'─'.repeat(59)}`);
     /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
     /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
   check('  …with only the future half going through the plan sync',
-    /if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
+    /if\(future\.length\)\{[\s\S]{0,1200}?await _tcSyncLogToBackend\(\);/.test(tcJs));
+
+  // ── The plan must be PERSISTED before anything re-reads the record ─────────
+  // Reported 2026-08-08: "If I edit a series it won't save the update. If I add a
+  // new series of 10 injections starting at today's date, only a single injection
+  // is saved." One cause behind both. _tcLoadLogFromStack() assigns _tcp.manualLog
+  // outright from the record, so running it BEFORE the sync erased every dose that
+  // was still only in the profile — and the sync then wrote that erased state back.
+  // The add only hits it when the series straddles today, i.e. when it starts today.
+  var _tcAddFn  = tcJs.slice(tcJs.indexOf('async function _tcConfirmAddSheet()'),
+                             tcJs.indexOf('function _tcConfirmRemove('));
+  var _tcEditFn = tcJs.slice(tcJs.indexOf('async function _tcSaveEditSeries()'),
+                             tcJs.indexOf('function _tcConfirmRemoveSeries('));
+  check('adding a series persists the plan before the record is re-read',
+    _tcAddFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
+    _tcAddFn.indexOf('await _tcSyncLogToBackend();') < _tcAddFn.indexOf('_tcLoadLogFromStack();'));
+  check('  …and never syncs after the rebuild, which wrote the erased state back',
+    !/if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
+  check('editing a series persists before buildTCalc rebuilds manualLog',
+    _tcEditFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
+    _tcEditFn.indexOf('await _tcSyncLogToBackend();') < _tcEditFn.indexOf('buildTCalc();'));
+  check('  …and is async, so the sync is actually awaited',
+    /async function _tcSaveEditSeries\(\)/.test(tcJs));
+  check('  …then re-reads the history rather than trusting the local edit',
+    /await _tcSyncLogToBackend\(\);\n  await _tcFetchHistory\(true\);/.test(tcJs));
+  // The plan sync clears before it re-posts. That delete had no logged filter, so it
+  // removed logged records dated today or later and the re-post recreated them as
+  // unlogged plans — a record silently downgraded to a schedule.
+  check('the plan sync clears only the plan, never a logged record',
+    /'&unlogged_only=true'/.test(tcJs));
+
+  // ── A planned dose is a DRAFT until Save to protocol ───────────────────────
+  // Henrik, 2026-08-08: "the user flow would always be add injections and when happy
+  // with the curve then save it to a protocol. Its a planning tool!"
+  // _tcSetTargetStack is what binds a stack and then flushes manualLog to the record,
+  // so a planned dose necessarily exists BEFORE any stack does. _tcLoadLogFromStack
+  // assigned manualLog outright from the record and runs on every buildTCalc(), so
+  // the draft was erased on the very next render and never survived to be saved —
+  // which is why a 10-dose series starting today kept only the one logged dose for
+  // today (a record) and lost the nine future ones (a draft).
+  check('a locally planned dose is marked as an unsaved draft',
+    /seriesId:runId,draft:true/.test(tcJs) && /seriesId:sid,draft:true/.test(tcJs));
+  check('  …and the planner is NOT gated on having a protocol first',
+    !/Pick a protocol first/.test(tcJs));
+
+  hist([]);
+  G._injectionsCache = {};
+  var _dk = G.dateKey, _now = new Date();   // NOW is a const, not on the sandbox
+  var _fut  = _dk(new Date(_now.getTime() + 7 * 86400000));
+  var _fut2 = _dk(new Date(_now.getTime() + 9 * 86400000));
+  var _old  = _dk(new Date(_now.getTime() - 7 * 86400000));
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_fut,  seriesId:'s1',draft:true},
+    {compId:'nebido',doseMg:'100',date:_fut2, seriesId:'s1',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('a planned series survives the rebuild that runs on every build',
+    G._tcp.manualLog.length === 2, JSON.stringify(G._tcp.manualLog));
+
+  // The record owns the past: a draft dated before today is not resurrected.
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_old,seriesId:'s2',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('  …but a draft in the past is dropped — the record owns the past',
+    G._tcp.manualLog.length === 0, JSON.stringify(G._tcp.manualLog));
+
+  // Once the record holds it, the draft retires instead of duplicating the row.
+  hist([]);
+  G._injectionsCache = {};
+  G._tcHistory = [{compId:'nebido',doseMg:'100',date:_fut,source:'logged'}];
+  G._tcHistoryState = 'ready';
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_fut,seriesId:'s1',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('  …and a draft the record caught up with does not duplicate',
+    G._tcp.manualLog.length === 1, JSON.stringify(G._tcp.manualLog));
+  hist([]);
+  G._injectionsCache = {};
   check('  …and the history re-read after writing, not assumed',
     /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
   check('a partial write is reported rather than swallowed',
