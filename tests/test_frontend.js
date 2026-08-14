@@ -10332,6 +10332,59 @@ console.log('\n─────────────────────�
   check('  …rather than a silently invented protocol', /Build your first protocol|openTemplatePicker/.test(today));
 }
 
+
+// ── DELETES MUST NEVER REACH ANOTHER COMPOUND, OR A RECORD ───────────────────
+// 2026-08-14, the worst incident of the session. Binding T-Calc to a protocol for
+// the FIRST time destroyed the account's entire forward schedule: 106 HGH rows,
+// every forward peptide row, and a logged dose — none of them testosterone.
+//
+// _tcSetTargetStack cleared its "old home" with
+//     DELETE /injections?cycle_id=<oldCid>&from_date=<today>
+// and oldCid is '' when nothing is bound yet. The backend filters with
+// `if cycle_id and ...`, so an empty value is NO filter: it deleted every injection
+// in the account from today on, across every protocol, logged included.
+console.log('\n── injection deletes: scoped, and never a record ──────────');
+{
+  const _dsSave = { f: G.fetch, tp: G._tcp, us: G._userStacks, ah: G.authHeaders };
+  const dels = [];
+  // The stub records synchronously as the call is made, so the first DELETE lands
+  // even without awaiting the async function under test.
+  G.fetch = (url, opt) => {
+    if ((opt || {}).method === 'DELETE') dels.push(String(url));
+    return Promise.resolve({ ok: true, status: 200, json: async () => ([]) });
+  };
+  G.authHeaders = () => ({});
+  G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2', cycle_start:'2026-05-18' }];
+  G._tcp = { manualLog: [], targetStackId: '' };      // unbound — the incident's state
+  if (typeof G._tcSetTargetStack === 'function') {
+    try { G._tcSetTargetStack('protocol_2_nostart'); } catch (e) {}
+  }
+  const inj = dels.filter(u => u.indexOf('/injections?') >= 0);
+  check('binding from unbound issues NO cycle-wide delete',
+    !inj.some(u => /cycle_id=(&|$)/.test(u)), inj.join(' | ') || '(none issued)');
+  check('  …and no delete is unscoped by compound',
+    inj.every(u => u.indexOf('compound_id=') >= 0),
+    inj.filter(u => u.indexOf('compound_id=') < 0).join(' | ') || 'ok');
+  check('  …and none may take a logged record',
+    inj.every(u => u.indexOf('unlogged_only=true') >= 0),
+    inj.filter(u => u.indexOf('unlogged_only=true') < 0).join(' | ') || 'ok');
+  G.fetch = _dsSave.f; G._tcp = _dsSave.tp; G._userStacks = _dsSave.us; G.authHeaders = _dsSave.ah;
+
+  // Structural backstop across all three files. A plan-clear that forgets
+  // unlogged_only downgrades a record to a schedule; one that forgets compound_id
+  // reaches a protocol's peptides and HGH. This holds for deletes added later.
+  const _dsDir = path.dirname(path.resolve(htmlPath));
+  ['tab-tcalc.js','tab-stack.js','index.html'].forEach(function(f){
+    const src = fs.readFileSync(path.join(_dsDir,f),'utf8');
+    const bad = (src.match(/'\/injections\?[^\n]*method:'DELETE'/g) || [])
+      .filter(l => l.indexOf('unlogged_only=true') < 0);
+    check(f + ': every /injections DELETE passes unlogged_only',
+      bad.length === 0, bad.join(' | ').slice(0, 200));
+  });
+  check('_tcSetTargetStack guards against an empty old cycle id',
+    /if\(oldCid&&oldCid!==newCid\)/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
@@ -10363,16 +10416,39 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   // Unbound + drafts → the banner appears, counts them, and offers the real action.
   G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
   G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
+  const _saveIsActive = G._isActiveStack;
+  G._isActiveStack = function(i){ return i === 0; };
   const unbound = banner();
   check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
   check('  …counting them', /7 planned doses/.test(unbound));
   check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
   check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
-  check('  …and offering Save to protocol', /_tcOpenSaveToStack\(\)/.test(unbound));
+  check('  …and offering the save action', /_tcOpenSaveToStack\(\)/.test(unbound));
+  // "Save to protocol" alone reads as if the app already knows where. It does not,
+  // and there is deliberately no default — picking one for the user is what put a
+  // protocol's injections into a new empty stack (2026-08-14).
+  check('  …saying there is NO destination yet', /no destination yet/.test(unbound));
+  check('  …that the user picks it next', /You pick it in the next step/.test(unbound));
+  check('  …naming the protocols on offer, active marked',
+    /Protocol 2 \(active\)/.test(unbound), unbound.replace(/<[^>]*>/g,'').slice(0,200));
+  check('  …and the button says a choice follows', /Choose a protocol/.test(unbound));
 
-  // Bound → silent. The sync writes normally; a banner here would be noise.
+  // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
+  // the only place the target was shown was the simple planner's card header, which
+  // is off whenever the manual planner is in use (Henrik, 2026-08-14: "how do I know
+  // which protocol ... anyone would assume is the active protocol").
   G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
-  check('a bound plan shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+  const bound = banner();
+  check('a bound plan names the destination protocol', /Protocol 2/.test(bound));
+  check('  …saying doses are saved into it', /saved into/.test(bound));
+  check('  …and offers a way to change it', /_tcOpenSaveToStack\(\)/.test(bound));
+  check('  …without the unsaved warning', !/Not scheduled yet/.test(bound));
+
+  // Bound to a stack that no longer exists → _tcTargetCycleId is '' (unbound), so the
+  // warning path runs rather than naming a protocol that is gone.
+  G._tcp = { targetStackId:'gone', manualLog: drafts };
+  check('  …a target that no longer exists falls back to the warning',
+    /Not scheduled yet/.test(banner()));
 
   // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
   // returns '' for it, so the sync silently no-ops and the banner must fire.
@@ -10391,5 +10467,70 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   check('buildTCalc renders it above the curve',
     /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
 
+  G._isActiveStack = _saveIsActive;
   G._tcp = save.tp; G._userStacks = save.us;
+}
+
+// ── T-History: the "as of" readout follows the series end ────────────────────
+// 2026-08-14: "T-calc shows 894 pmol/l today, T-History shows 858 — which curve is
+// incorrect?" Neither. The stored point for 14 Aug was 893.99, matching T-Calc
+// exactly. _thFocusDay is module-level and was reset only when it fell OUTSIDE the
+// series, so a series that GREW left the cursor on the OLD last day — the readout
+// said "As of 12 Aug · 858" while the chart drew the new points.
+console.log('\n── T-History: as-of cursor follows new points ─────────────');
+{
+  const has = typeof G._thNormFocusDay === 'function';
+  check('_thNormFocusDay exists', has);
+  const norm = (s) => { if (has) G._thNormFocusDay(s); };
+  const S = (lastDay) => ({ totalDays:lastDay, lastDay:lastDay });
+
+  // Fresh: no cursor yet → pin to the end.
+  G._thFocusDay = null; G._thPrevLastDay = null;
+  norm(S(48));
+  check('an unset cursor starts at the series end', G._thFocusDay === 48);
+
+  // THE BUG: two new points captured. Cursor was at the old end → follow it.
+  norm(S(50));
+  check('a cursor at the end follows the series when it grows', G._thFocusDay === 50,
+    'got ' + G._thFocusDay + ' — this is the 858-vs-894 report');
+
+  // A deliberately scrubbed cursor is NOT dragged to the end.
+  G._thFocusDay = 20;
+  norm(S(52));
+  check('  …but a scrubbed cursor stays where the user put it', G._thFocusDay === 20);
+  norm(S(54));
+  check('  …and keeps staying there across further captures', G._thFocusDay === 20);
+
+  // Scrub back onto the end → it is pinned again and resumes following.
+  G._thFocusDay = 54;
+  norm(S(56));
+  check('  …scrubbing back to the end re-pins it', G._thFocusDay === 56);
+
+  // Out of range in either direction is clamped to the end.
+  G._thFocusDay = 999; norm(S(56));
+  check('a cursor past the end is clamped', G._thFocusDay === 56);
+  G._thFocusDay = -3;  norm(S(56));
+  check('a negative cursor is clamped', G._thFocusDay === 56);
+
+  // Both render paths must normalise, or the readout and the chart disagree.
+  const _thSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-thist.js'),'utf8');
+  check('both _thRender and _thRedraw normalise the cursor',
+    (_thSrc.match(/_thNormFocusDay\(series\);/g) || []).length >= 2);
+  // The "never computes" rule is already asserted against the buildTHist function
+  // body itself further down (search: "buildTHist never captures/persists"). A
+  // whole-file grep for those names matches the comment that says they are absent,
+  // which is why the duplicate attempted here was both redundant and wrong.
+}
+
+// The save sheet must label what each choice does. An unmarked "New protocol" button
+// beside the existing ones created an empty stack, made it active and moved a
+// protocol's injections to it — with nothing on screen saying so (2026-08-14).
+{
+  const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
+  check('  …and marks the current save target', /· current target/.test(_tcSrc2));
+  check('  …and warns that New protocol creates an EMPTY active one',
+    /Creates an <b>empty<\/b> protocol and makes it the active one/.test(_tcSrc2));
+  check('  …pointing at Existing for a protocol you already run',
+    /pick it under Existing instead/.test(_tcSrc2));
 }
