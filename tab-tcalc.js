@@ -1057,7 +1057,7 @@ async function _tcWritePlanToStack(st, plan){
     // not leave the Testoviron shots standing beside the new ones.
     var ids = (oldId && oldId !== c.id) ? [oldId, c.id] : [c.id];
     for (var i = 0; i < ids.length; i++){
-      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td, {method:'DELETE', headers:h}); } catch(_e){}
+      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td+'&unlogged_only=true', {method:'DELETE', headers:h}); } catch(_e){}
     }
   }
   if (typeof generateAndPushInjections === 'function') await generateAndPushInjections(st, now);
@@ -3999,7 +3999,7 @@ async function _tcClearStackConfigTrt(stack){
     var _n=new Date();_n.setHours(0,0,0,0);
     var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
     for(var _i=0;_i<_cids.length;_i++){
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cyc)+'&compound_id='+encodeURIComponent(_cids[_i])+'&from_date='+_td,{method:'DELETE',headers:h});}catch(_e){}
+      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cyc)+'&compound_id='+encodeURIComponent(_cids[_i])+'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
     }
   }
 }
@@ -4022,12 +4022,37 @@ async function _tcSetTargetStack(stackId){
   _tcp.targetStackId=stackId||'';
   _tcSaveProfile();
   var newCid=_tcTargetCycleId();
-  if(oldCid!==newCid){
+  // ── CLEARING THE OLD HOME MUST TOUCH ONLY T-CALC'S OWN TESTOSTERONE ────────
+  // This call used to be:
+  //     DELETE /injections?cycle_id=<oldCid>&from_date=<today>
+  // with no compound filter and no unlogged_only. Three faults, and on 2026-08-14
+  // all three fired at once and destroyed a user's entire forward schedule.
+  //
+  //  1. EMPTY oldCid DELETES EVERYTHING. _tcTargetCycleId() returns '' when nothing
+  //     is bound, and the backend's filter is `if cycle_id and ...` — an empty value
+  //     is NO filter. Binding for the first time therefore issued
+  //     `DELETE /injections?cycle_id=&from_date=<today>`: every injection in the
+  //     account from today on, every protocol. That is what happened — 106 HGH rows,
+  //     every forward peptide row, and a logged dose, none of them testosterone and
+  //     none of them T-Calc's to touch. Only cycles whose rows all predate today
+  //     survived, which is why it looked protocol-scoped and was not.
+  //  2. NO compound_id. T-Calc owns testosterone and nothing else. Clearing its old
+  //     home must not reach a protocol's peptides or HGH — exactly what the sibling
+  //     _tcClearStackConfigTrt above gets right, per compound, deliberately.
+  //  3. NO unlogged_only. A logged injection is a record of something administered;
+  //     rebinding a planner must never delete one. The backend defaults this to
+  //     False, so it had to be asked for and was not.
+  if(oldCid&&oldCid!==newCid){
     var h=(typeof authHeaders==='function')?authHeaders():null;
     if(h){
       var _n=new Date();_n.setHours(0,0,0,0);
       var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(oldCid)+'&from_date='+_td,{method:'DELETE',headers:h});}catch(_e){}
+      var _tids=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
+      for(var _ti=0;_ti<_tids.length;_ti++){
+        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(oldCid)
+          +'&compound_id='+encodeURIComponent(_tids[_ti])
+          +'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
+      }
     }
   }
   await _tcSyncLogToBackend();
@@ -4073,7 +4098,20 @@ async function _tcSyncLogToBackend() {
     // unlogged_only: this clears the PLAN. Without it the delete also removed
     // logged records dated today or later, and the batch re-post recreated them
     // as unlogged plans — a record silently downgraded to a schedule.
-    await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    //
+    // compound_id: and it must be scoped to TESTOSTERONE. _cid is the STACK's cycle
+    // id ("the stack is the container", 2026-08-06), so that cycle also holds the
+    // protocol's peptides and HGH. Unscoped, every sync — every dose edit, every
+    // series save — deleted the protocol's whole unlogged forward plan and re-posted
+    // only testosterone. Looping the known esters still "covers removed compounds
+    // too" (the original intent), because it clears every testosterone id under the
+    // cycle whether or not it is still in the plan.
+    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
+    for(var _tj=0;_tj<_tid2.length;_tj++){
+      await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
+        +'&compound_id='+encodeURIComponent(_tid2[_tj])
+        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    }
   }catch(_e){}
 
   var compIds=Object.keys(byComp);
@@ -4144,8 +4182,52 @@ function _tcCloseSaveToStack(){
 // auto-bind or auto-write: the stack is still the container and Save to protocol is
 // still the moment of persistence. Degrade the visibility of a state, never invent a
 // fallback that silently changes what is stored.
+// The protocol these injections are written into, by name, or null. Distinct from
+// _tcSimplePlanStack, which additionally requires the stack to carry exactly one TRT
+// compound because it drives the SIMPLE planner's card. Binding is binding: this
+// answers "where do my doses go" for any planner mode.
+// The protocols the save sheet will offer, named, with the active one marked — so the
+// destination is knowable before the sheet is opened. Empty string when there are no
+// protocols yet (the sheet then only offers to create one).
+function _tcSaveTargetsHint(){
+  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
+  var names=[];
+  stacks.forEach(function(s,i){
+    if(!s)return;
+    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' (active)':'';
+    names.push(_esc(s.name||('Protocol '+(i+1)))+act);
+  });
+  if(!names.length)return '';
+  return names.join(', ');
+}
+function _tcBoundStack(){
+  var tid=_tcp&&_tcp.targetStackId;
+  if(!tid||typeof _userStacks==='undefined'||!_userStacks)return null;
+  return _userStacks.find(function(s){return s&&s.id===tid;})||null;
+}
 function _tcUnsavedDraftBanner(){
-  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId())return '';  // bound → sync writes
+  // ── BOUND: say WHICH protocol, always ──────────────────────────────────────
+  // Henrik, 2026-08-14: "how do I know which protocol the missing injections get
+  // saved to from T-calc? It just says Save to Protocol (which anyone would assume
+  // is the active protocol)."
+  //
+  // It is not the active protocol — it is _tcp.targetStackId, whatever was last
+  // bound, and the sheet's "New protocol" buttons bind a brand-new empty stack. The
+  // only place the target was ever named is the SIMPLE planner's card header, which
+  // reads "off — advanced planner is on" whenever the manual planner is in use. So
+  // in the mode where doses are actually added, nothing named the destination before
+  // saving or after. That is how a tap in that sheet moved a protocol's injections
+  // to a new empty stack without it being visible anywhere.
+  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId()){
+    var _bs=_tcBoundStack();
+    if(!_bs)return '';
+    return '<div style="display:flex;align-items:center;gap:8px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.28);border-left:3px solid #5ad1b0;border-radius:10px;padding:10px 12px;margin-bottom:12px">'
+      +'<div style="flex:1;font-size:12px;color:var(--text);line-height:1.5">'
+        +'<span style="color:var(--muted2)">Injections are saved into</span> <b>'+_esc(_bs.name||'this protocol')+'</b>'
+      +'</div>'
+      +'<button onclick="_tcOpenSaveToStack()" style="flex-shrink:0;background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:11px;font-weight:700;padding:6px 10px;cursor:pointer;font-family:inherit">Change</button>'
+    +'</div>';
+  }
   var drafts=((_tcp&&_tcp.manualLog)||[]).filter(function(e){return e&&e.draft&&e.date;});
   if(!drafts.length)return '';
   var dates=drafts.map(function(e){return e.date;}).sort();
@@ -4158,7 +4240,16 @@ function _tcUnsavedDraftBanner(){
       +'<b>'+drafts.length+' planned dose'+(drafts.length===1?'':'s')+'</b> ('+_esc(span)+') '
       +'show on this curve but are <b>not saved to a protocol</b>, so they do not appear in Today and nothing is scheduled from them.'
     +'</div>'
-    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Save to protocol</button>'
+    // Name the destination, or say plainly that there isn't one yet. "Save to
+    // protocol" alone reads as if the app already knows where — it does not, and
+    // there is deliberately no default: picking one for the user is what put a
+    // protocol's injections into a new empty stack. So the button states that the
+    // next step is the choice, and lists what is on offer.
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:9px">'
+      +'They have no destination yet. You pick it in the next step'
+      +(_tcSaveTargetsHint()?(' — '+_tcSaveTargetsHint()):'')+'.'
+    +'</div>'
+    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Choose a protocol…</button>'
   +'</div>';
 }
 
@@ -4170,9 +4261,10 @@ function _tcOpenSaveToStack(){
 
   var rows=stacks.map(function(st,i){
     if(!st)return '';
-    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' ●':'';
+    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' <span style="font-size:11px;color:#5ad1b0;font-weight:700">· active</span>':'';
+    var cur=(_tcp&&_tcp.targetStackId===st.id)?' <span style="font-size:11px;color:#6688cc;font-weight:700">· current target</span>':'';
     return '<button onclick="_tcSaveToExistingStack(\''+_esc(st.id||'')+'\')" style="display:block;width:100%;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;color:var(--text);font-size:14px;font-family:inherit;cursor:pointer">'
-      +_esc(st.name||('Protocol '+(i+1)))+act+'</button>';
+      +_esc(st.name||('Protocol '+(i+1)))+act+cur+'</button>';
   }).join('');
 
   var newBtn=function(tier,label,ok){
@@ -4192,6 +4284,7 @@ function _tcOpenSaveToStack(){
     +'<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Testosterone belongs to a protocol, so its doses show on Today alongside everything else you are running.</div>'
     +(rows?('<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Existing</div>'+rows):'')
     +'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">New protocol</div>'
+    +'<div style="font-size:11px;color:#e8a020;line-height:1.5;margin-bottom:8px">Creates an <b>empty</b> protocol and makes it the active one. Your other protocols keep their compounds, but Today will show only this one until you switch back. To add testosterone to a protocol you already run, pick it under Existing instead.</div>'
     +'<div style="display:flex;gap:8px">'+newBtn('trt','TRT',true)+newBtn('enhanced','Enhanced',enhOk)+'</div>'
     +(enhOk?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px">Enhanced protocols need tier 3.</div>')
     +(full?'<div style="font-size:11px;color:var(--muted2);margin-top:8px">You already have 4 protocols — pick one above.</div>':'')
