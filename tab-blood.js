@@ -141,25 +141,44 @@ function _blTmax(halfLifeDays) {
 
 // T-Calc-planned testosterone — planned via the T-Calc planner rather than
 // configured as a stack TRT compound, so it is otherwise absent from the chart.
-// Covers both the unassigned plan (cycle_id 'tcalc') and a plan assigned to a
-// stack (cycle_id 'tcalc:<stackId>'). _injectionsCache is already filtered to
-// visible entries (unassigned + active-stack-owned), so any 'tcalc'-prefixed
-// entry here belongs on the aggregated Free T line. Gather dated doses per compound.
+// _injectionsCache is already filtered to visible entries (unassigned +
+// active-stack-owned). Gather dated doses per compound.
+//
+// This applies the SAME two rules as _tcCurveLog, and it has to, because it now sees
+// the same rows: the compound id is CANONICALISED, and one (compound, date) pair is
+// one injection however many rows describe it. A real account holds `enhanced/test_u`
+// under a protocol and `trt/nebido` under T-Calc's legacy `manual` cycle, on the same
+// days — one molecule, two ids, two rows. Grouping on the raw id would draw a free-T
+// curve at double the real dose.
 function _blTcalcTestosterone() {
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
-  var byComp = {};
+  var byComp = {}, seen = {};
+  // Logged first, so a recorded injection outranks a plan for the same day — the
+  // ordering _tcCurveLog uses, for the same reason.
+  var rows = [];
   Object.keys(_injectionsCache).forEach(function(dk){
-    (_injectionsCache[dk]||[]).forEach(function(e){
-      var cyc = (e && e.cycle_id) || '';
-      if (cyc !== 'tcalc' && cyc.indexOf('tcalc:') !== 0) return;
-      if (e.tier && e.tier !== 'trt') return;
-      if (e.active === false) return;
-      var cid = e.compound_id || e.compound_name || 'testosterone';
-      var c = byComp[cid] || (byComp[cid] = { id:cid, name:e.compound_name||cid, unit:e.unit||'mg', doses:[] });
-      var dose = parseDec(e.dose) || 0;
-      var d = (typeof parseLocalDate === 'function') ? parseLocalDate(e.date) : new Date(e.date);
-      if (d && dose > 0) c.doses.push({ date:d, dose:dose });
-    });
+    (_injectionsCache[dk]||[]).forEach(function(e){ if(e) rows.push(e); });
+  });
+  rows.sort(function(a,b){ return (b.logged?1:0) - (a.logged?1:0); });
+  rows.forEach(function(e){
+    // Select on WHAT THE ROW IS, not on which cycle it was filed under. This used to
+    // require cycle_id 'tcalc' / 'tcalc:<id>' — the namespace T-Calc wrote before
+    // "the stack is the container" (2026-08-06) moved it to the stack's own cycle
+    // id. Every properly bound T-Calc plan was therefore invisible here, which only
+    // stopped mattering because the stack config was being derived as well. It is
+    // not any more (see _blTestosteroneLog), so this is the sole selector.
+    if (!(typeof _tcIsTestoRow === 'function' ? _tcIsTestoRow(e.tier, e.compound_id)
+                                              : (!e.tier || e.tier === 'trt'))) return;
+    if (e.active === false) return;
+    var raw = e.compound_id || e.compound_name || 'testosterone';
+    var cid = (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(raw) : raw;
+    var k = cid + '|' + e.date;
+    if (seen[k]) return;
+    seen[k] = true;
+    var c = byComp[cid] || (byComp[cid] = { id:cid, name:e.compound_name||cid, unit:e.unit||'mg', doses:[] });
+    var dose = parseDec(e.dose) || 0;
+    var d = (typeof parseLocalDate === 'function') ? parseLocalDate(e.date) : new Date(e.date);
+    if (d && dose > 0) c.doses.push({ date:d, dose:dose });
   });
   return Object.keys(byComp).map(function(k){ return byComp[k]; }).filter(function(c){ return c.doses.length; });
 }
@@ -269,47 +288,22 @@ function _blDosePerInjection(c, ec){
   var per = String(unit).split('/')[1];
   return String(per === 'week' ? amt / 7 : per === 'EOD' ? amt / 2 : amt);
 }
-// Gather EVERY testosterone injection across all sources — stack TRT esters,
-// enhanced-tier testosterone, and the T-Calc plan — into one dated log. This
-// feeds the shared free-T model (_tcFreeTSeries) so the chart shows a single
-// aggregated "Free T" line in pmol/L rather than a separate line per ester.
+// Gather every testosterone injection into one dated log. This feeds the shared
+// free-T model (_tcFreeTSeries) so the chart shows a single aggregated "Free T" line
+// in pmol/L rather than a separate line per ester.
+//
+// ── The ONLY source is T-Calc (rule 2026-08-14) ──────────────────────────────────
+// This used to derive a schedule from each active stack's TRT tier as well, and from
+// the Enhanced tier when the TRT tier was empty. Neither tier generates testosterone
+// injections any more (_genInjBatches) — T-Calc does — so deriving one here would
+// plot a stream the app never injects, and would double it against the T-Calc plan.
+// That double is exactly the failure the earlier "one stream per stack" rule existed
+// to stop; the rule has not changed, only which source is the owner.
+//
+// Only testosterone moved. Every other compound still comes from the stacks, in
+// _blCompoundLines, which is untouched.
 function _blTestosteroneLog(){
   var log = [];
-  (_userStacks||[]).forEach(function(st, si){
-    if(!_isActiveStack(si)) return;
-    var cycleLen = (st.cycle_length || 12) * 7;
-    var startDate = st.cycle_start ? parseLocalDate(st.cycle_start) : new Date(NOW);
-    var startDow = startDate.getDay();
-    function pushSched(c, dpi){
-      _pkInjectionDays(c, cycleLen, startDow).forEach(function(dd){
-        log.push({ compId:c.id, doseMg:String(dpi), date:_blFmtDateKey(new Date(startDate.getTime()+dd*86400000)) });
-      });
-    }
-    if(st.trt && st.trt.enabled){
-      (st.trt.compounds||[]).forEach(function(c){
-        var doseNum=parseDec(c.dose)||0; if(doseNum) pushSched(c, doseNum);
-      });
-    }
-    // One testosterone stream per stack — the same rule the injection generator
-    // applies (_genInjBatches). When the TRT tier carries testosterone, the Enhanced
-    // tier's testosterone is not a second dose: it is the same protocol described
-    // twice, and adding both here doubled the free-T curve for anyone who had
-    // configured it in both places.
-    var _trtOwnsTesto = !!(st.trt && st.trt.enabled && (st.trt.compounds||[]).length);
-    if(st.enhanced && st.enhanced.enabled && !_trtOwnsTesto){
-      (st.enhanced.compounds||[]).forEach(function(c){
-        if((c.name||'').toLowerCase().indexOf('testosterone')===-1) return;
-        var ec = (typeof ENHANCEMENT_COMPOUNDS!=='undefined') ? ENHANCEMENT_COMPOUNDS.find(function(x){return x.id===c.id;}) : null;
-        if(!(parseDec(c.dose)>0)) return;
-        // The SAME conversion the injection generator uses (_enhDosePerInjection in
-        // tab-stack.js), so this curve is built from the amount actually injected.
-        // The local version handled only mg/week on a weekday schedule: a compound on
-        // mg/day, mg/EOD or an interval cadence fell through to `doseNum` and was
-        // plotted as if the whole weekly rate went in at every single injection.
-        pushSched(c, parseDec(_blDosePerInjection(c, ec)) || 0);
-      });
-    }
-  });
   _blTcalcTestosterone().forEach(function(c){
     c.doses.forEach(function(d){ log.push({ compId:c.id, doseMg:String(d.dose), date:_blFmtDateKey(d.date) }); });
   });
@@ -358,7 +352,8 @@ function _blBuildLines(){
         var doseNum = parseDec(c.dose)||0; if(!doseNum) return;
         var unit = c.unit || ec.unit || 'mg/week';
         var injDays = _pkInjectionDays(c, cycleLen, startDow); if(!injDays.length) return;
-        // Same shared conversion as the free-T log above — see _blDosePerInjection.
+        // A configured dose is a RATE; an injection is an AMOUNT — see
+        // _blDosePerInjection, which mirrors _enhDosePerInjection in tab-stack.js.
         var dpi = parseDec(_blDosePerInjection(c, ec)) || 0; if(!dpi) return;
         lines.push({ id:'enh_'+si+'_'+c.id, pkId:c.id, name:c.name, color:c.dot||ec.dot||'#a855f7',
           kind:'enhanced', unit:((unit||'mg/week').split('/')[0]||'mg'), startDate:startDate, cycleLen:cycleLen, sub:stackLabel,
