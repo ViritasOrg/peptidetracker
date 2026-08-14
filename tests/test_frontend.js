@@ -1591,9 +1591,21 @@ console.log(`\n${'─'.repeat(59)}`);
     /_TC_HISTORY_LOOKBACK_DAYS = 400/.test(tcJs));
   check('  …selecting on logged, and refusing anything else',
     /if \(!e\.logged\) return;/.test(tcJs));
-  check('  …with no cycle_id filter anywhere in that fetch',
-    !/cycle_id/.test(tcJs.slice(tcJs.indexOf('async function _tcFetchHistory'),
-                                tcJs.indexOf('// manualLog is the ADVANCED planner'))));
+  // The rule this protects is that the PAST is selected on `logged` and nothing else —
+  // never narrowed by which stack a dose was filed under. Narrowed 2026-08-14 from
+  // "the token cycle_id never appears" to "cycle_id is never TESTED": the skipped-dose
+  // rows now carry cycle_id as metadata so the series editor can address them, which is
+  // a record, not a filter. Any comparison or branch on cycle_id inside this fetch still
+  // fails — that is the thing that broke six weeks of TRT.
+  {
+    const _fetchSrc = tcJs.slice(tcJs.indexOf('async function _tcFetchHistory'),
+                                 tcJs.indexOf('// manualLog is the ADVANCED planner'));
+    const _cycTested = _fetchSrc.split('\n').some(l =>
+      /cycle_id/.test(l) && (/[!=]==?/.test(l) || /\bif\s*\(/.test(l) || /\breturn\b/.test(l)));
+    check('  …with no cycle_id filter anywhere in that fetch', !_cycTested);
+    check('  …and the logged rows carry no cycle id at all',
+      !/rows\.push\(\{[^}]*cycle/i.test(_fetchSrc.replace(/\n/g, ' ')));
+  }
   check('  …and triggered when the tab is built', /if \(_tcHistoryState === 'idle'\) _tcFetchHistory\(\);/.test(tcJs));
 
   // The curve, end to end.
@@ -1912,6 +1924,468 @@ console.log(`\n${'─'.repeat(59)}`);
     check('citation fields are escaped before rendering',
       /_esc\(c\.title/.test(body) && /_esc\(c\.states\)/.test(body));
   }
+}
+
+
+// ── Free-T exposure vs the physiological range ───────────────────────────────
+// Henrik, 2026-08-12: "for testosterone the real metric is free T." The dose
+// anchor cannot see SHBG; this can. The risk in building it is that it quietly
+// becomes a SECOND free-T model that disagrees with the chart, or that it starts
+// claiming an outcome nobody has measured. These tests guard both.
+{
+  const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+
+  check('the reference range comes from the backend, not a frontend const',
+    /_FT_REF/.test(rawScript) && /free_t_reference/.test(rawScript));
+  check('  …and no pmol/L threshold is hardcoded in the frontend',
+    !/\b(804|243)\s*pmol/.test(rawScript) && !/ceiling_pmol_l\s*[:=]\s*\d/.test(rawScript));
+  check('an exposure helper exists', /function _ftExposureHtml\(/.test(rawScript));
+
+  {
+    const i = rawScript.indexOf('function _ftExposureHtml(');
+    const body = rawScript.slice(i, rawScript.indexOf('function openAllReferences(', i));
+    check('it renders nothing when the range has not loaded',
+      /if\(!_FT_REF\|\|!_FT_REF\.ceiling_pmol_l\)return''/.test(body));
+    check('it renders nothing without a curve', /if\(!\(pmol>0\)\|\|!isFinite\(pmol\)\)return''/.test(body));
+    check('the multiple is rounded to the backend step, not shown raw',
+      /_FT_REF\.round_to/.test(body) && /Math\.round\(\(pmol\/ceil\)\/step\)\*step/.test(body));
+    check('above the ceiling is described as unmeasured, not unsafe',
+      /above_ceiling_note/.test(body));
+    check('  …and the frontend does not invent its own harm wording',
+      !/dangerous|unsafe|toxic/i.test(body));
+    check('the calculated-free-T caveat always ships with the number',
+      /_FT_REF\.caveat/.test(body));
+    check('the range carries its citation chips', /_citeChips\(/.test(body));
+    check('every rendered field is escaped', /_esc\(headline\)/.test(body) && /_esc\(_FT_REF\.caveat/.test(body));
+    check('units are pmol/L and nothing else', /pmol\/L/.test(body) && !/\bng\/dL\b|\bpg\/mL\b|\bmg\/day\b/.test(body));
+  }
+
+  // The load-bearing one. doc 13 is SETTLED: T-Calc owns the free-T model and
+  // this readout must be a READ of what was plotted, never a second derivation.
+  {
+    const i = tc.indexOf('_tcSsPeakPmol = ');
+    const around = tc.slice(Math.max(0, i - 900), i + 300);
+    check('the exposure value is read from the plotted series',
+      /total\[_si\] \* \(calFT_arr \? calFT_arr\[_si\] : scale\)/.test(around));
+    check('  …with no call into the model to get it',
+      !/_tcFreeTSeries\(/.test(around));
+    check('  …over the steady-state window, not the ramp-up',
+      /Math\.floor\(totalDays \/ 2\)/.test(around));
+    check('an uncalibrated curve yields no multiple at all',
+      /_tcSsPeakPmol = \(calFT && _ssPk > 0\) \? _ssPk : null/.test(tc));
+  }
+
+  check('T-Calc renders a slot for the exposure note', /id="tc-exposure-note"/.test(tc));
+  check('  …filled only after the chart has been drawn',
+    /getElementById\('tc-exposure-note'\)/.test(tc));
+  check('the readout never writes to stored history',
+    !/_tcSsPeakPmol[\s\S]{0,200}(setData|pushT|POST)/.test(tc));
+}
+
+
+// ── T-Calc: today's level must not move when you PLAN ────────────────────────
+// Reported 2026-08-14: "I am playing around with future injections, but even if I have
+// 30 injections scheduled suddenly the curve has a flat area? And calculated free T for
+// today has dropped 100pmol/l?"
+//
+// TT_base is solved as TT_at_draw * P / total[anchorDay], so every injection dated at or
+// before the anchor raises the divisor and scales the WHOLE curve — today included — down.
+// The model comment claimed appended injections cannot move it; that holds only for
+// injections AFTER the anchor. Two states put newly planned doses before it:
+//   • a draw dated in the FUTURE (a level cannot have been measured on a day that has
+//     not happened) — 96 pmol/L of drift on the reproduction case
+//   • an UNDATED reading, which took the "no bloodwork at all" branch whose anchor day
+//     depends on _logDays, i.e. on the LAST injection — 810 pmol/L of drift
+console.log('\n── T-calc: the anchor is immune to planning ahead ─────────');
+if (typeof G._tcFreeTSeries === 'function') {
+  const _anSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+  const _anT = [{compId:'nebido',doseMg:'100',date:'2026-06-26'},
+                {compId:'nebido',doseMg:'100',date:'2026-06-28'}];
+  const _anEod = (end) => { const o=[]; let d=new Date('2026-06-30T12:00:00');
+    const E=new Date(end+'T12:00:00');
+    while(d<=E){o.push({compId:'nebido',doseMg:'100',date:d.toISOString().slice(0,10)});
+      d=new Date(d.getTime()+2*86400000);} return o; };
+  const _anToday = (log) => {
+    const s=log.slice().sort((a,b)=>a.date<b.date?-1:1);
+    const S=G._tcFreeTSeries(s,{});
+    const n=Math.max(0,Math.min(S.totalDays,Math.round((Date.now()-S.firstDate.getTime())/86400000)));
+    return S.total[n]*(S.calFT_arr?S.calFT_arr[n]:S.scale);
+  };
+  // Every horizon must give the SAME value for today. Planning is not a measurement.
+  const _anSpread = (label, tp, bw) => {
+    G._tcp = Object.assign({}, _anSave.tp||{}, tp);
+    G._tcBwEntries = bw; G._tcGhStack = [];
+    const v = ['2026-08-13','2026-08-26','2026-09-30','2026-12-31']
+      .map(e => _anToday(_anT.concat(_anEod(e))));
+    const spread = Math.max(...v) - Math.min(...v);
+    check('today is unchanged by the plan ahead — ' + label,
+      spread < 1, 'spread ' + spread.toFixed(1) + ' pmol/L across horizons: ' + v.map(x=>x.toFixed(0)).join('/'));
+  };
+  const _anBase = {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980', currentDoseMgWk:''};
+  _anSpread('pre-cycle draw',            _anBase, [{date:'2026-06-20',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('mid-cycle draw',            _anBase, [{date:'2026-07-20',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('draw dated TODAY',          _anBase, [{date:(function(){const n=new Date();return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');})(),free_t:217,shbg:45,total_t:17}]);
+  _anSpread('draw dated in the FUTURE',  _anBase, [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('bloodwork entry with NO date', _anBase, [{free_t:217,shbg:45,total_t:17}]);
+  _anSpread('undated free T, no lab',    _anBase, []);
+  _anSpread('no lab, no free T',         {measuredFT:'',shbg:'',totalT:'',birthYear:'1980',currentDoseMgWk:''}, []);
+  _anSpread('prior-protocol warm start', Object.assign({},_anBase,{currentDoseMgWk:'175'}),
+            [{date:'2026-06-20',free_t:217,shbg:45,total_t:17}]);
+
+  // A future-dated draw cannot calibrate at all — it is not a measurement yet, so the
+  // curve degrades to the labelled population estimate rather than anchoring on it.
+  // The unit NEVER changes (CLAUDE.md): confidence degrades, pmol/L does not.
+  G._tcp = Object.assign({}, _anSave.tp||{}, _anBase);
+  G._tcBwEntries = [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]; G._tcGhStack = [];
+  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod('2026-08-26')).sort((a,b)=>a.date<b.date?-1:1), {});
+  check('a future-dated draw does not calibrate the curve', _anFut.measuredFT !== 217);
+  check('  …and the curve is still drawn in pmol/L', _anFut.unitLabel === 'pmol/L');
+
+  const _anSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('the anchor only considers draws dated today or earlier',
+    /_bwUsable\s*=\s*\(_tcBwEntries \|\| \[\]\)\.filter/.test(_anSrc));
+  check('the SHBG reference day uses the same filtered list',
+    /_bwEntry = _bwUsable\.length \? _bwUsable\[0\] : null/.test(_anSrc));
+  check('the population fallback is resolved BEFORE the anchor day is chosen',
+    _anSrc.indexOf('_popFT = _tcDefaultFT') < _anSrc.indexOf('var _anchorDay, _anchorCutoffDate;'));
+
+  G._tcp = _anSave.tp; G._tcBwEntries = _anSave.bw; G._tcGhStack = _anSave.gh;
+}
+
+// ── T-Calc: an unticked past dose is excluded — and SAID SO ──────────────────
+// The exclusion itself is the rule and does not change: a past-dated dose that was never
+// ticked is a plan the user did not confirm taking. What was wrong is that it happened
+// silently. Two doses missed on 10 and 12 Aug left a six-day hole that flattened the
+// curve across "today" and read low, while the series card re-derived its cadence from
+// the first surviving gap and printed "8 injections · every 6 days · 8 Aug → 26 Aug" —
+// a span that holds 10 doses at the real every-2-days cadence.
+console.log('\n── T-calc: skipped doses are reported, not absorbed ───────');
+{
+  const _skSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('unticked past doses are collected for reporting',
+    /var _tcSkippedPast\s*=\s*\[\]/.test(_skSrc));
+  check('  …from the full history fetch, not a second request',
+    /_tcSkippedPast\s*=\s*_skipped/.test(_skSrc));
+  check('  …and are still kept OUT of the curve',
+    !/_add\(\s*_tcSkippedPast/.test(_skSrc) && !/_tcSkippedPast.*_tcCurveLog/.test(_skSrc));
+  check('the curve note names them and says they are not counted',
+    /never ticked/.test(_skSrc) && /not in this curve/.test(_skSrc));
+  check('  …and tells the user what to do about it',
+    /Tick them in Today if you took them/.test(_skSrc));
+  // Cadence must survive a hole anywhere in the run.
+  check('series cadence is the MODAL gap, not the first gap',
+    !/_seriesMeta\[sid\]\.interval=Math\.round\(\(d1-d0\)\/86400000\)/.test(_skSrc));
+
+  // The gap has to be visible ON THE CHART, at the point the curve stops rising.
+  // Reported three times as "the curve flatlines" — the third time read as an
+  // artefact of two adjacent series joining, which it is not (the join is seamless;
+  // the flat is entirely the unticked doses). Prose under the chart was not enough.
+  check('skipped doses are marked on the chart itself',
+    /_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    /ctx\.arc\(sx, PAD\.top \+ cH \+ 3/.test(_skSrc));
+  check('  …distinct from a real dose tick, not drawn as one',
+    /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
+
+  check('  …and the card states how many doses the span is missing',
+    /_seriesMeta\[sid\]\.missing/.test(_skSrc) && / missed<\/span>/.test(_skSrc));
+}
+
+
+// ── T-Calc: editing a series must not shed its past ──────────────────────────
+// Reported 2026-08-14: "If I edit the last series to 10 injections every 2 day and click
+// save it saves as 8 injections every 6 day? And every edit drops number of injections
+// by 2????"
+//
+// _tcSaveEditSeries regenerated EVERY dose as draft:true. _tcSyncLogToBackend only
+// writes from today forward and _tcLoadLogFromStack only carries drafts from today
+// forward, so each save deleted the past-dated doses that were not already logged
+// records. Two unticked doses (10 + 12 Aug) vanished on every save, and because the
+// editor also derived its cadence from entries[1]-entries[0] the surviving 8 Aug -> 14
+// Aug gap re-labelled an EOD run "every 6 days" — which the next save then applied.
+console.log('\n── T-calc: an edited series keeps its past ────────────────');
+{
+  const _esSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  const _esFn = _esSrc.slice(_esSrc.indexOf('async function _tcSaveEditSeries'),
+                             _esSrc.indexOf('function _tcConfirmRemoveSeries'));
+  check('the past half of an edited series is not pushed as a draft',
+    /if\(ds < _editTodayK\) return;/.test(_esFn),
+    'every dose is still drafted, so the past half is dropped again');
+  check('  …it is written as a PLAN row instead',
+    /_tcCreatePlannedInjections\(compId,doseMg,_toCreate,sid\)/.test(_esFn));
+  check('  …never as a record — re-typing a cadence is not a claim you injected',
+    /logged: false/.test(_esSrc) && !/_tcCreateLoggedInjections/.test(_esFn));
+  check('  …and doses already ticked are left alone',
+    /_loggedOn\[compId\+'\|'\+d\]/.test(_esFn));
+  check('  …while doses the edit removed are retired from the record',
+    /_tcDeleteStoredInjection\(_stale\[_si\]\.injId\)/.test(_esFn));
+
+  // The editor and the card must agree on cadence, or opening the sheet and pressing
+  // SAVE silently rewrites the schedule to the wrong interval.
+  const _esOpen = _esSrc.slice(_esSrc.indexOf('function _tcOpenEditSeriesSheet'),
+                               _esSrc.indexOf('function _tcCloseEditSeriesSheet'));
+  check('the edit sheet pre-fills the MODAL gap, not the first gap',
+    !/interval = Math\.max\(1, Math\.round\(\(d1-d0\)\/86400000\)\)/.test(_esOpen) &&
+    /_eBest/.test(_esOpen));
+
+  // The curve rule is untouched: a past dose that was never ticked is still excluded.
+  check('unticked past doses are carried in the PLAN',
+    /rows\.push\(Object\.assign\(\{\},e,\{unticked:true\}\)\)/.test(_esSrc));
+  check('  …and still excluded from the CURVE',
+    /if \(e\.unticked\) return;/.test(_esSrc));
+  check('  …with the card saying how many are not ticked',
+    / not ticked<\/span>/.test(_esSrc));
+}
+
+// The exclusion is behavioural, not just textual: an unticked row in the plan must not
+// move the modelled level by even a fraction of a pmol/L.
+if (typeof G._tcFreeTSeries === 'function' && typeof G._tcCurveLog === 'function') {
+  const _uxSave = {tp:G._tcp, h:G._tcHistory, hs:G._tcHistoryState, c:G._injectionsCache, sk:G._tcSkippedPast};
+  G._tcHistory = [{compId:'nebido',doseMg:'100',date:'2026-06-26',source:'logged'},
+                  {compId:'nebido',doseMg:'100',date:'2026-06-28',source:'logged'}];
+  G._tcHistoryState = 'ready'; G._injectionsCache = {};
+  G._tcp = Object.assign({}, _uxSave.tp||{}, {plannerMode:'advanced', manualLog:[
+    {compId:'nebido',doseMg:'100',date:'2026-06-26'},
+    {compId:'nebido',doseMg:'100',date:'2026-06-28'},
+  ]});
+  const _uxClean = G._tcCurveLog().length;
+  G._tcp.manualLog = G._tcp.manualLog.concat([
+    {compId:'nebido',doseMg:'100',date:'2026-06-30',unticked:true},
+    {compId:'nebido',doseMg:'100',date:'2026-07-02',unticked:true},
+  ]);
+  const _uxWith = G._tcCurveLog().length;
+  check('an unticked plan row never reaches the curve log',
+    _uxWith === _uxClean, 'curve grew from ' + _uxClean + ' to ' + _uxWith);
+  G._tcp = _uxSave.tp; G._tcHistory = _uxSave.h; G._tcHistoryState = _uxSave.hs;
+  G._injectionsCache = _uxSave.c; G._tcSkippedPast = _uxSave.sk;
+}
+
+
+// ── T-Calc: every way a schedule can be CREATED, driven end to end ───────────
+// Audit 2026-08-14. Until now the two main creation paths — the Add sheet and the
+// series editor — were guarded only by source greps (call ordering, await present,
+// draft flag). Those catch "someone deleted the await"; they do not catch "the
+// resulting schedule is wrong", which is exactly what shipped: a straddling edit
+// silently lost its past-dated doses on every save.
+//
+// These drive the real functions with stubbed DOM fields and a recording fetch, and
+// assert what is actually WRITTEN, for every temporal permutation:
+//   entry point  x  {all past, straddling today, all future}
+console.log('\n── T-calc: schedule creation permutations ────────────────');
+if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries === 'function') {
+  const _pmSave = {tp:G._tcp, us:G._userStacks, h:G._tcHistory, hs:G._tcHistoryState,
+                   c:G._injectionsCache, sk:G._tcSkippedPast, as:G._tcAddSheet,
+                   es:G._tcEditSeriesId, f:G.fetch, g:G.document.getElementById};
+  const _dk = G.dateKey, _now = new Date();
+  const _d = (off) => _dk(new Date(_now.getTime() + off * 86400000));
+
+  // Record every write instead of performing it.
+  const _arm = (fields) => {
+    const calls = [];
+    G.fetch = async (url, opt) => {
+      const m = (opt && opt.method) || 'GET';
+      let body = null;
+      try { body = opt && opt.body ? JSON.parse(opt.body) : null; } catch (e) {}
+      calls.push({url:String(url), method:m, body:body});
+      return {ok:true, status:200, json: async () => []};
+    };
+    G.document.getElementById = (id) =>
+      Object.prototype.hasOwnProperty.call(fields, id)
+        ? {value:fields[id], textContent:'', style:{}, innerHTML:'', remove(){}, appendChild(){}}
+        : {value:'', textContent:'', style:{}, innerHTML:'', remove(){}, appendChild(){},
+           classList:{add(){},remove(){},contains:()=>false}, getContext:()=>null, offsetWidth:300};
+    return calls;
+  };
+  const _reset = () => {
+    G._userStacks = [{id:'s1', name:'P1', cycle_start:_d(-30)}];
+    G._tcp = {targetStackId:'s1', manualLog:[], plannerMode:'advanced', measuredFT:'217'};
+    G._tcHistory = []; G._tcHistoryState = 'ready';
+    G._injectionsCache = {}; G._tcSkippedPast = [];
+  };
+  // Doses written as RECORDS (logged:true) via POST /injections
+  const _recs  = (c) => c.filter(x => x.method === 'POST' && /\/injections$/.test(x.url) && x.body && x.body.logged === true);
+  // Doses written as PLAN rows (logged:false) via POST /injections
+  const _plans = (c) => c.filter(x => x.method === 'POST' && /\/injections$/.test(x.url) && x.body && x.body.logged === false);
+  // Future plan, written by the batch upsert
+  const _batch = (c) => c.filter(x => x.method === 'POST' && /\/injections\/batch$/.test(x.url))
+                         .reduce((n, x) => n + ((x.body && x.body.entries) ? x.body.entries.length : 0), 0);
+
+  // ── ADD SHEET ────────────────────────────────────────────────────────────
+  const _add = async (label, fields, isSeries, expect) => {
+    _reset();
+    G._tcAddSheet = {isSeries: isSeries};
+    const calls = _arm(fields);
+    await G._tcConfirmAddSheet();
+    const r = _recs(calls).length, p = _plans(calls).length, b = _batch(calls);
+    check('add · ' + label,
+      r === expect.records && b === expect.future && p === 0,
+      'records=' + r + ' (want ' + expect.records + '), future=' + b + ' (want ' + expect.future + '), plans=' + p);
+  };
+  // A dose already taken is a RECORD; a dose ahead is a PLAN. A series spanning
+  // today splits, and nothing is lost at the seam.
+  await _add('single dose in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-5)}, false,
+             {records:1, future:0});
+  await _add('single dose in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
+             {records:0, future:1});
+  await _add('series entirely in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-20),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:5, future:0});
+  await _add('series entirely in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:5});
+  await _add('series straddling today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:2});
+  await _add('series starting exactly today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(0),
+             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:9});
+
+  // ── SERIES EDITOR ────────────────────────────────────────────────────────
+  // The reported bug: a straddling edit dropped its past-dated doses on every save.
+  // The editor must account for EVERY dose in the run it was asked to write.
+  const _edit = async (label, existing, fields, expect) => {
+    _reset();
+    G._tcp.manualLog = existing.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm(fields);
+    await G._tcSaveEditSeries();
+    const r = _recs(calls).length, p = _plans(calls).length, b = _batch(calls);
+    check('edit · ' + label,
+      p === expect.plans && b === expect.future && r === expect.records,
+      'plans=' + p + ' (want ' + expect.plans + '), future=' + b + ' (want ' + expect.future +
+      '), records=' + r + ' (want ' + expect.records + ')');
+  };
+  const _ex = [_d(-4), _d(-2), _d(0), _d(2)];
+  // Re-typing a cadence never asserts a dose was injected: the past half is written
+  // as PLAN rows, never records.
+  await _edit('grown, straddling today', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'10','tc-es-interval':'2'},
+    {plans:2, future:8, records:0});
+  await _edit('entirely in the future', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(4),'tc-es-count':'6','tc-es-interval':'2'},
+    {plans:0, future:6, records:0});
+  await _edit('entirely in the past', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-20),'tc-es-count':'4','tc-es-interval':'2'},
+    {plans:4, future:0, records:0});
+  await _edit('shrunk, straddling today', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'3','tc-es-interval':'2'},
+    {plans:2, future:1, records:0});
+
+
+  // ── REMOVAL — the inverse, and historically the most fragile ──────────────
+  // CLAUDE.md: "Writing to manualLog alone is a silent no-op — it is a cache and the
+  // next render rebuilds it. That bug shipped twice in one day (delete, then add)."
+  // These had NO coverage at all before this audit. A delete must reach the RECORD.
+  // agree=false models the user cancelling at the global-delete prompt.
+  const _del = async (label, rows, run, expect, agree) => {
+    _reset();
+    G._tcp.manualLog = rows.slice();
+    const calls = _arm({});
+    const _oc = G.confirmGlobalDelete;
+    G.confirmGlobalDelete = () => (agree !== false);
+    await run();
+    G.confirmGlobalDelete = _oc;
+    const dels = calls.filter(x => x.method === 'DELETE' && /\/injections\//.test(x.url));
+    check('remove · ' + label, dels.length === expect,
+      'DELETE /injections/<id> x' + dels.length + ', want ' + expect);
+  };
+  const _stored = (d, i, sid) => ({compId:'nebido', doseMg:'100', date:d, injId:'i'+i, seriesId:sid});
+  await _del('a stored row deletes the record, not just the cache',
+    [_stored(_d(-6),1), _stored(_d(-4),2)],
+    () => G._tcRemoveManualEntry(0), 1);
+  await _del('a whole stored series deletes every record in it',
+    [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA'), _stored(_d(-2),3,'sA')],
+    () => G._tcRemoveSeries('sA'), 3);
+  await _del('a profile-only row (no injId) reaches no endpoint',
+    [{compId:'nebido', doseMg:'100', date:_d(4), draft:true}],
+    () => G._tcRemoveManualEntry(0), 0);
+  await _del('cancelling the global-delete prompt deletes nothing',
+    [_stored(_d(-6),1), _stored(_d(-4),2)],
+    () => G._tcRemoveManualEntry(0), 0, false);
+  await _del('cancelling it on a series deletes nothing either',
+    [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA')],
+    () => G._tcRemoveSeries('sA'), 0, false);
+
+
+  // ── NEVER CREATE A DOSE THE RECORD ALREADY HOLDS ──────────────────────────
+  // Reported: "even if I go and check those they are gone after app restart."
+  // The existence check was keyed on (compound, date, seriesId). A run split across
+  // two cards — or rows carrying no series_id — failed to match, so the edit POSTed a
+  // SECOND row for a date already stored. Today de-dupes on (compound, slot) and
+  // prefers the logged one, so ticking marked one row and left its twin unlogged:
+  // _tcSkippedPast kept reporting it, the curve kept flat-lining, and the tick looked
+  // discarded on restart. Existence is (compound, date); seriesId only governs what
+  // this edit may RETIRE.
+  const _dupCase = async (storedSeriesId) => {
+    _reset();
+    G._tcp.manualLog = [{compId:'nebido',doseMg:'100',date:_d(-6),seriesId:'sX'},
+                        {compId:'nebido',doseMg:'100',date:_d(-4),seriesId:'sX'}];
+    G._tcSkippedPast = [
+      {compId:'nebido',doseMg:'100',date:_d(-6),injId:'a1',cycleId:'s1',seriesId:storedSeriesId},
+      {compId:'nebido',doseMg:'100',date:_d(-4),injId:'a2',cycleId:'s1',seriesId:storedSeriesId}];
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-6),
+                        'tc-es-count':'6','tc-es-interval':'2'});
+    await G._tcSaveEditSeries();
+    return _plans(calls).map(x => x.body.date);
+  };
+  for (const [lbl, sidv] of [['same series id','sX'],['a different series id','sOld'],['no series id',undefined]]) {
+    const made = await _dupCase(sidv);
+    check('edit · no duplicate row when the record already holds the dose (' + lbl + ')',
+      made.indexOf(_d(-6)) < 0 && made.indexOf(_d(-4)) < 0,
+      'POSTed ' + JSON.stringify(made) + ' — ' + _d(-6) + '/' + _d(-4) + ' already exist');
+  }
+  check('edit · …while the genuinely new date is still created',
+    (await _dupCase('sOld')).indexOf(_d(-2)) >= 0);
+
+  // THE REGRESSION, stated as the invariant it broke: an edit writes as many doses as
+  // it was asked for. The old code wrote only the future half, so "10 every 2 days"
+  // starting four days ago persisted 8 — and each further save shed two more.
+  const _acct = async (count, startOff) => {
+    _reset();
+    G._tcp.manualLog = _ex.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(startOff),
+                        'tc-es-count':String(count),'tc-es-interval':'2'});
+    await G._tcSaveEditSeries();
+    return _plans(calls).length + _recs(calls).length + _batch(calls);
+  };
+  check('edit · every dose asked for is accounted for (10 from −4d)',
+    (await _acct(10, -4)) === 10, 'wrote ' + (await _acct(10, -4)) + ' of 10');
+  check('edit · …and re-saving the same run does not shed doses',
+    (await _acct(10, -4)) === (await _acct(10, -4)));
+  check('edit · a 20-dose run from 10 days ago is written in full',
+    (await _acct(20, -10)) === 20, 'wrote ' + (await _acct(20, -10)) + ' of 20');
+
+  G._tcp = _pmSave.tp; G._userStacks = _pmSave.us; G._tcHistory = _pmSave.h;
+  G._tcHistoryState = _pmSave.hs; G._injectionsCache = _pmSave.c;
+  G._tcSkippedPast = _pmSave.sk; G._tcAddSheet = _pmSave.as; G._tcEditSeriesId = _pmSave.es;
+  G.fetch = _pmSave.f; G.document.getElementById = _pmSave.g;
+}
+
+
+// A stale duplicate row must not make a ticked dose look skipped.
+// Duplicates are no longer created, but some are already stored, and deleting rows
+// from the injection log to tidy up is not this code's call — the log is the record.
+// Selecting skipped doses by DAY rather than by row makes the stale ones harmless.
+if (typeof G._tcFetchHistory === 'function') {
+  const _dpSave = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast};
+  const _mk = (date, logged, id) => ({id:id, tier:'trt', logged:logged, unit:'mg',
+    dose:'100', compound_id:'nebido', date:date, active:true, cycle_id:'s1'});
+  const _today = G.dateKey(new Date());
+  const _past  = G.dateKey(new Date(Date.now() - 4*86400000));
+  const _past2 = G.dateKey(new Date(Date.now() - 6*86400000));
+  G.fetch = async () => ({ok:true, status:200, json: async () => ([
+    _mk(_past,  true,  'r1'),   // ticked
+    _mk(_past,  false, 'r2'),   // its stale twin
+    _mk(_past2, false, 'r3'),   // genuinely never ticked
+  ])});
+  G._tcHistory = null; G._tcHistoryState = 'idle';
+  await G._tcFetchHistory(true);
+  const dates = (G._tcSkippedPast||[]).map(e => e.date);
+  check('a ticked dose is not reported skipped because a duplicate row exists',
+    dates.indexOf(_past) < 0, 'reported ' + JSON.stringify(dates));
+  check('  …while a genuinely unticked dose is still reported',
+    dates.indexOf(_past2) >= 0, 'reported ' + JSON.stringify(dates));
+  check('  …and the ticked dose still counts in the history',
+    (G._tcHistory||[]).some(e => e.date === _past));
+  G.fetch = _dpSave.f; G._tcHistory = _dpSave.h;
+  G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

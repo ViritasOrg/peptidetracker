@@ -34,6 +34,10 @@ var _tcAgeMissing     = false; // true when user-settings returned but no user_a
 var _tcBwOpen         = false; // whether the bloodwork panel is expanded
 var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] = loaded
 var _tcBwLoading      = false;
+var _tcSsPeakPmol     = null;  // steady-state peak in pmol/L, read from the values this
+                               // chart just PLOTTED. Never recomputed — T-Calc owns the
+                               // model (doc 13, SETTLED) and this must never disagree
+                               // with the curve the user is looking at.
 var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
                               // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
@@ -1392,6 +1396,14 @@ var _TC_HISTORY_LOOKBACK_DAYS = 400;
 var _TC_HISTORY_HORIZON_DAYS  = 400;
 var _tcHistory       = null;   // logged TRT injections in that window — null until fetched
 var _tcHistoryState  = 'idle'; // idle | loading | ready | error
+// Past-dated TRT doses that were SCHEDULED but never ticked. They are deliberately NOT
+// part of the curve — a plan the user did not confirm taking is not the past, and that
+// rule stays. What was missing is that nothing said so: two unticked doses left a
+// six-day hole that flattened the curve across "today" and read ~50 pmol/L low, while
+// the series card quietly re-derived its cadence around the hole and called an EOD run
+// "every 6 days". Collected here (same 400-day fetch, no extra request) purely to be
+// REPORTED. Never add these to _tcCurveLog.
+var _tcSkippedPast   = [];
 
 // The injections T-Calc treats as the past. Read from _tcHistory (all time), never
 // from _injectionsCache — that cache is scoped to what Today needs and is the reason
@@ -1414,8 +1426,21 @@ async function _tcFetchHistory(force){
     if (!r.ok){ _logHttp('tcHistory', r.status, '/injections'); _tcHistoryState = 'error'; return; }
     var all = await r.json();
     var rows = [];
+    var _skipped = [], _todayK = dateKey(NOW);
     (Array.isArray(all) ? all : []).forEach(function(e){
       if (!e || e.tier !== 'trt') return;
+      // Scheduled, past-dated, never ticked. Recorded for the note only — see
+      // _tcSkippedPast. It stays out of the curve, which is the documented rule.
+      if (!e.logged && e.active !== false && (e.date || '') < _todayK) {
+        var _sm = parseDec(e.dose);
+        if ((e.unit || 'mg').toLowerCase() === 'mg' && _sm > 0)
+          _skipped.push({compId: e.compound_id, doseMg: String(_sm), date: e.date,
+                         seriesId: e.series_id || undefined,
+                         // injId and cycleId make the row addressable: the series editor
+                         // has to be able to keep, retire or recreate it rather than
+                         // silently dropping it (see _tcSaveEditSeries).
+                         injId: e.id || undefined, cycleId: String(e.cycle_id || '')});
+      }
       if (!e.logged) return;                        // checked, or it is not the past
       var unit = (e.unit || 'mg').toLowerCase();
       if (unit !== 'mg') return;                    // a unit mix-up would corrupt the curve
@@ -1429,7 +1454,24 @@ async function _tcFetchHistory(force){
                  seriesId: e.series_id || undefined, source: 'logged'});
     });
     rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+    _skipped.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+    // A DATE THAT ALREADY HAS A LOGGED DOSE IS NOT A SKIPPED DOSE.
+    // An unlogged row sitting on a day the user has ticked is not a missed injection —
+    // it is a second row for the same dose. Duplicates should not exist (the editor no
+    // longer creates them) but some are already stored from before that fix, and
+    // deleting rows from the injection log to tidy up is not something this code gets
+    // to do on its own — the log is the record and every delete is global.
+    //
+    // Reporting them as missed is what made ticking look futile: the dose was recorded,
+    // the curve counted it, and the note still said "2 scheduled doses were never
+    // ticked" because the twin was still sitting there unlogged. Selecting on the DAY
+    // rather than the row costs nothing when there are no duplicates and makes the
+    // stale ones harmless. The curve is unaffected either way — it already de-duplicates
+    // on (compound, date), so a twin never double-counted.
+    var _loggedDays = {};
+    rows.forEach(function(e){ _loggedDays[e.compId + '|' + e.date] = true; });
     _tcHistory      = rows;
+    _tcSkippedPast  = _skipped.filter(function(e){ return !_loggedDays[e.compId + '|' + e.date]; });
     _tcHistoryState = 'ready';
   }catch(e){
     _logErr('tcHistory', e);
@@ -1493,6 +1535,22 @@ function _tcLoadLogFromStack(){
     seen[e.compId+'|'+e.date]=true;
     rows.push(e);
   });
+  // PAST-DATED DOSES THAT WERE SCHEDULED BUT NEVER TICKED BELONG TO THE PLAN.
+  // They are NOT part of the curve — that rule is unchanged, and `unticked` is what
+  // _tcCurveLog filters on — but dropping them from manualLog entirely made the
+  // planner lose them. Editing a series regenerates every dose as a draft, the sync
+  // only writes from today forward, and the draft carry-forward above is
+  // today-onwards, so each save silently deleted the past-dated doses that were not
+  // already logged records: "edit to 10 injections every 2 days" saved as 8, and
+  // every further edit shed another two. The run is the user's plan; only the CURVE
+  // is restricted to confirmed doses.
+  (_tcSkippedPast||[]).forEach(function(e){
+    if(!e||!e.date)return;
+    if(cid&&String(e.cycleId||'')!==cid)return;    // this stack's plan only
+    if(seen[e.compId+'|'+e.date])return;
+    seen[e.compId+'|'+e.date]=true;
+    rows.push(Object.assign({},e,{unticked:true}));
+  });
   rows.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcp.manualLog=rows;
   return true;
@@ -1537,6 +1595,13 @@ function _tcCurveLog(){
   function _add(list){
     (list || []).forEach(function(e){
       if (!e || !e.date || !(parseDec(e.doseMg) > 0)) return;
+      // A past-dated dose that was never ticked is a plan the user did not confirm
+      // taking, and is excluded — unchanged. manualLog now CARRIES those rows so the
+      // planner and the series card can show the real run (and so editing a series
+      // stops deleting them), which is exactly why the exclusion has to be enforced
+      // here as well as by the date filters. `unticked` is set only in
+      // _tcLoadLogFromStack, from the record's own unlogged past rows.
+      if (e.unticked) return;
       var k = e.compId + '|' + e.date;
       if (seen[k]) return;
       seen[k] = true;
@@ -1612,9 +1677,27 @@ function _tcHistoryNoteHtml(){
     return '<div style="' + box + 'color:var(--muted2)">No checked injections yet — this curve is your plan only. Tick doses off in Today and they become your history.</div>';
   var first = h[0].date;
   var d = parseLocalDate(first);
+  // Doses scheduled in the past and never ticked are NOT counted — that is the rule.
+  // Say so, in the same breath as the count, and name the dates. Silence here is what
+  // made a gap read as a low number instead of as missing data (the same reason this
+  // line states what it stands on at all).
+  var _sk = (_tcSkippedPast || []).filter(function(e){ return (e.date || '') >= first; });
+  var _skHtml = '';
+  if (_sk.length) {
+    var _skDates = _sk.slice(-3).map(function(e){
+      var _d2 = parseLocalDate(e.date);
+      return _d2 && !isNaN(_d2.getTime()) ? fmtDate(_d2) : _esc(e.date);
+    }).join(', ');
+    _skHtml = ' <span style="color:#e8a020">' + _sk.length + ' scheduled dose' +
+      (_sk.length === 1 ? ' was' : 's were') + ' never ticked (' +
+      (_sk.length > 3 ? 'latest ' : '') + _skDates + ')' +
+      ', so ' + (_sk.length === 1 ? 'it is' : 'they are') + ' not in this curve. ' +
+      'Tick them in Today if you took them.</span>';
+  }
   return '<div style="' + box + 'color:var(--muted2)">Built on <strong style="color:var(--text)">' + h.length +
          ' checked injection' + (h.length === 1 ? '' : 's') + '</strong> since ' +
-         (d && !isNaN(d.getTime()) ? fmtDate(d) : _esc(first)) + ', plus the plan ahead.</div>';
+         (d && !isNaN(d.getTime()) ? fmtDate(d) : _esc(first)) + ', plus the plan ahead.' +
+         _skHtml + '</div>';
 }
 
 // How many entries in the curve came from a planned protocol rather than the log.
@@ -1829,6 +1912,36 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
   return ok;
 }
 
+// Past-dated doses belonging to a PLAN, not to the record: logged:false. Used when an
+// edited series covers days already gone by. Re-typing a cadence is not a claim that
+// those doses were injected, so this must never write logged:true — that is
+// _tcCreateLoggedInjections' job, and it is called only from the Add sheet where the
+// user is explicitly entering doses they took. Today is the only place a plan becomes
+// a record.
+async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
+  if (typeof authHeaders !== 'function') return 0;
+  var cd   = _tcCompInfo(compId);
+  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
+                                                : {ester:null, half_life_days:null};
+  var cyc  = _tcTargetCycleId() || 'manual';
+  var ok = 0;
+  for (var i = 0; i < dates.length; i++){
+    var body = {cycle_id: cyc, date: dates[i], compound_id: compId,
+                compound_name: cd.name || compId, tier: 'trt',
+                dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
+                time_of_day: null, active: true, logged: false, source: 'tcalc',
+                series_id: seriesId || null,
+                ester: meta.ester, half_life_days: meta.half_life_days, route: null};
+    try{
+      var r = await fetch(AGENT_URL + '/injections',
+                          {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+                           body: JSON.stringify(body)});
+      if (r.ok) ok++; else _logHttp('tcAddPlanInj', r.status, '/injections');
+    }catch(e){ _logErr('tcAddPlanInj', e); }
+  }
+  return ok;
+}
+
 async function _tcConfirmAddSheet() {
   var compEl=document.getElementById('tc-as-comp');
   var doseEl=document.getElementById('tc-as-dose');
@@ -2007,11 +2120,21 @@ function _tcOpenEditSeriesSheet(sid) {
   var doseMg = first.doseMg || '';
   var startDate = first.date || new Date().toISOString().slice(0,10);
   var count = entries.length;
+  // Same MODAL-gap cadence the series card shows. Reading entries[1]-entries[0] made
+  // the sheet disagree with the card the moment a dose was missing — the card said
+  // "every 2 days · 2 missed" while the editor pre-filled 6, so simply opening it and
+  // pressing SAVE rewrote an EOD run to every-6-days.
   var interval = 2;
   if (entries.length >= 2) {
-    var p0 = (entries[0].date||'').split('-'), p1 = (entries[1].date||'').split('-');
-    var d0 = new Date(+p0[0],+p0[1]-1,+p0[2]), d1 = new Date(+p1[0],+p1[1]-1,+p1[2]);
-    interval = Math.max(1, Math.round((d1-d0)/86400000));
+    var _eg = {}, _eBest = 0, _eBestN = 0;
+    for (var _ei = 1; _ei < entries.length; _ei++) {
+      var _p0 = (entries[_ei-1].date||'').split('-'), _p1 = (entries[_ei].date||'').split('-');
+      var _g = Math.round((new Date(+_p1[0],+_p1[1]-1,+_p1[2]) - new Date(+_p0[0],+_p0[1]-1,+_p0[2]))/86400000);
+      if (!(_g > 0)) continue;
+      _eg[_g] = (_eg[_g]||0) + 1;
+      if (_eg[_g] > _eBestN || (_eg[_g] === _eBestN && _g < _eBest)) { _eBest = _g; _eBestN = _eg[_g]; }
+    }
+    interval = Math.max(1, _eBest || 2);
   }
   _tcEditSeriesId = sid;
   var comps = _tcManualComps();
@@ -2169,13 +2292,69 @@ async function _tcSaveEditSeries() {
   var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
   var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
   if(!compId||!startDate||!(doseMg>0)){return;}
+  var _prev=_tcp.manualLog.filter(function(e){ return e.seriesId === sid; });
   _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== sid; });
   var sp=startDate.split('-');
+  var _dates=[];
   for(var i=0;i<count;i++){
     var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
-    var ds=sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0');
-    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
+    _dates.push(sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0'));
   }
+  // ── THE PAST HALF OF AN EDITED SERIES IS RECONCILED, NOT DISCARDED ──────────
+  // Every dose used to be pushed as draft:true. _tcSyncLogToBackend only writes from
+  // today forward and _tcLoadLogFromStack only carries drafts from today forward, so
+  // each save deleted the past-dated doses that were not already logged records —
+  // "10 injections every 2 days" came back as 8, and every further edit shed two more.
+  //
+  // A past-dated dose is written as a PLAN row (logged:false), never as a record. The
+  // user re-typed a cadence; that is not a statement that they injected on those days,
+  // and only Today may turn a plan into a record. Doses already ticked are left exactly
+  // as they are — the record owns the past.
+  var _editTodayK=dateKey(NOW);
+  var cidNow=_tcTargetCycleId();
+  var _pastDates=_dates.filter(function(d){ return d < _editTodayK; });
+  var _loggedOn={};
+  _tcLoggedHistory().forEach(function(e){ _loggedOn[e.compId+'|'+e.date]=true; });
+  // TWO DIFFERENT QUESTIONS, TWO DIFFERENT KEYS. Getting this wrong duplicated rows.
+  //
+  //  _storedAny — "does the record already hold this dose?" Keyed on (compound, date)
+  //  across EVERY series. A dose is a dose: the series it happens to be filed under is
+  //  irrelevant to whether it exists. Filtering this by seriesId meant a run that had
+  //  been split across two cards (or whose rows carried no series_id at all) failed to
+  //  match, so the edit POSTed a SECOND row for a date the record already had. Today
+  //  de-dupes on (compound, slot) and prefers the logged one, so ticking the dose
+  //  marked one row and left its twin unlogged — _tcSkippedPast kept reporting it, the
+  //  curve kept flat-lining, and the tick looked like it had been thrown away on
+  //  restart. Reported as "even if I go and check those they are gone after app
+  //  restart".
+  //
+  //  _storedMine — "may this edit retire the row?" Keyed the same way but restricted to
+  //  THIS series. An edit to one run must never delete another run's doses; that is the
+  //  never-merge-cards rule expressed in code.
+  var _storedAny={}, _storedMine={};
+  (_tcSkippedPast||[]).forEach(function(e){
+    if(!e||!e.date)return;
+    if(cidNow&&String(e.cycleId||'')&&String(e.cycleId||'')!==cidNow)return;
+    _storedAny[e.compId+'|'+e.date]=e;
+    if(e.seriesId===sid) _storedMine[e.compId+'|'+e.date]=e;
+  });
+  // Retire stored plan rows this edit removed from the run. Only unticked ones, and
+  // only this series' own — a ticked dose is a record and an edit never deletes one.
+  var _stale=Object.keys(_storedMine).filter(function(k){
+    return _pastDates.indexOf(_storedMine[k].date)<0 || _storedMine[k].compId!==compId;
+  }).map(function(k){ return _storedMine[k]; });
+  var _toCreate=_pastDates.filter(function(d){
+    return !_loggedOn[compId+'|'+d] && !_storedAny[compId+'|'+d];
+  });
+  for(var _si=0;_si<_stale.length;_si++){
+    if(_stale[_si].injId) await _tcDeleteStoredInjection(_stale[_si].injId);
+  }
+  if(_toCreate.length) await _tcCreatePlannedInjections(compId,doseMg,_toCreate,sid);
+  // The future half stays a draft until it is synced, exactly as before.
+  _dates.forEach(function(ds){
+    if(ds < _editTodayK) return;
+    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
+  });
   _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcSaveProfile();
   _tcCloseEditSeriesSheet();
@@ -2391,13 +2570,52 @@ function _tcFreeTSeries(sorted, hooks) {
   // so a no-bloodwork schedule re-scaled — and its peak dropped — as injections grew).
   // Anchor on the entry that actually carries a dated measurement (see _bwCal below) —
   // the newest entry may be a partial one with no usable value.
+  //
+  // ⚠️ A DRAW DATED IN THE FUTURE CANNOT ANCHOR. TT_base is solved as
+  // TT_at_draw * P / total[anchorDay], so every injection scheduled BEFORE the anchor
+  // raises the divisor and scales the whole curve — today included — down. The comment
+  // below claims appended injections cannot move TT_base; that holds only for injections
+  // AFTER the anchor, and a future-dated draw puts newly planned doses before it. At a
+  // 1 Sep draw, extending a schedule from 13 Aug to 30 Sep dropped today's free T by
+  // 95 pmol/L purely by planning. A level cannot have been measured on a day that has
+  // not happened, so such an entry is not a measurement yet and is skipped here.
+  var _bwTodayKey = (function(){ var _n = new Date(); return _n.getFullYear() + '-' +
+    String(_n.getMonth() + 1).padStart(2, '0') + '-' + String(_n.getDate()).padStart(2, '0'); })();
+  var _bwUsable = (_tcBwEntries || []).filter(function(e){ return e && e.date && e.date <= _bwTodayKey; });
   var _bwAnchorDate = null;
-  if (_tcBwEntries && _tcBwEntries.length) {
-    for (var _ba = 0; _ba < _tcBwEntries.length; _ba++) {
-      var _bae = _tcBwEntries[_ba];
-      if (_bae && _bae.date && (parseDec(_bae.free_t) > 0 || parseDec(_bae.total_t) > 0)) { _bwAnchorDate = _bae.date; break; }
+  if (_bwUsable.length) {
+    for (var _ba = 0; _ba < _bwUsable.length; _ba++) {
+      var _bae = _bwUsable[_ba];
+      if (parseDec(_bae.free_t) > 0 || parseDec(_bae.total_t) > 0) { _bwAnchorDate = _bae.date; break; }
     }
-    if (!_bwAnchorDate) _bwAnchorDate = _tcBwEntries[0].date || null;
+    if (!_bwAnchorDate) _bwAnchorDate = _bwUsable[0].date || null;
+  }
+  // RESOLVE THE FREE-T SOURCE BEFORE CHOOSING THE ANCHOR DAY — the branch below keys on
+  // _ftIsDefault, and the population fallback that sets it used to run ~130 lines later.
+  // An undated reading therefore took the "no bloodwork at all" branch, whose anchor day
+  // depends on _logDays (the LAST injection), so appending future doses flipped the anchor
+  // between day 0 and today and swung the displayed level by ~800 pmol/L. The fallback is
+  // decided here, so the population case reaches the day-0 branch it is documented to take.
+  var _bwCal = null;
+  for (var _bi0 = 0; _bi0 < _bwUsable.length; _bi0++) {
+    var _c0 = _bwUsable[_bi0];
+    if (parseDec(_c0.free_t) > 0 || parseDec(_c0.total_t) > 0) { _bwCal = _c0; break; }
+  }
+  var _bwFT   = _bwCal ? (parseDec(_bwCal.free_t)  || 0) : 0;
+  var _bwTT   = _bwCal ? (parseDec(_bwCal.total_t) || 0) : 0;
+  var _bwSHBG = _bwCal ? (parseDec(_bwCal.shbg)    || 0) : 0;
+  if (_bwFT > 0) { _mftNum = _bwFT; _ftIsDefault = false; }
+  var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
+  // NO DATED LAB -> POPULATION AVERAGE FOR THE USER'S AGE, clearly labelled an estimate.
+  // The curve is always drawn and always in pmol/L. What changes without a lab is the
+  // CONFIDENCE, not the unit and not whether a curve appears at all.
+  // A user's own free T typed in with no date still cannot anchor the curve — the anchor
+  // DAY sets the whole scale, and guessing it is what made a pre-cycle baseline get read
+  // as an accumulated mid-cycle level. So we fall back to the age-based population value,
+  // which is unambiguously an UNTREATED baseline and therefore anchors at day 0.
+  if ((_mftUndated || _ftIsDefault) && !(_bwFT > 0) && !(_bwTT > 0)) {
+    var _popFT = _tcDefaultFT(parseInt(_tcp.birthYear, 10) || 0);
+    if (_popFT > 0) { _mftNum = _popFT; _ftIsDefault = true; }
   }
   var _anchorDay, _anchorCutoffDate;
   var _bwAnchorDay = _bwAnchorDate
@@ -2521,38 +2739,17 @@ function _tcFreeTSeries(sorted, hooks) {
   // only a bloodwork entry (which does) can. The age-based population default is exempt:
   // it is not a measurement of this user at an unknown time, it is an explicit estimate
   // for "now", already surfaced as the 'estimate' tier with a wide band.
-  var _bwCal = null;
-  if (_tcBwEntries && _tcBwEntries.length) {
-    for (var _bi0 = 0; _bi0 < _tcBwEntries.length; _bi0++) {
-      var _c0 = _tcBwEntries[_bi0];
-      if (_c0 && _c0.date && (parseDec(_c0.free_t) > 0 || parseDec(_c0.total_t) > 0)) { _bwCal = _c0; break; }
-    }
-  }
-  // NO DATED LAB -> POPULATION AVERAGE FOR THE USER'S AGE, clearly labelled an estimate.
-  // The curve is always drawn and always in pmol/L. What changes without a lab is the
-  // CONFIDENCE, not the unit and not whether a curve appears at all.
-  // A user's own free T typed in with no date still cannot anchor the curve — the anchor
-  // DAY sets the whole scale, and guessing it is what made a pre-cycle baseline get read
-  // as an accumulated mid-cycle level. So we fall back to the age-based population value,
-  // which is unambiguously an UNTREATED baseline and therefore anchors at day 0.
-  var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
+  // _bwCal / _bwFT / _bwTT / _bwSHBG and the population fallback are resolved UP BY THE
+  // ANCHOR BLOCK — the anchor branch keys on _ftIsDefault, so deciding it here left the
+  // undated case anchoring off _logDays and re-scaling as future doses were appended.
   // READ THE CALIBRATING ENTRY ITSELF — not the _tcp mirrors.
   // _ftIsDefault is derived from _tcp.measuredFT alone, and _tcFetchBwEntries only mirrors
   // free_t/total_t/shbg when the NEWEST entry happens to carry them. So a dated draw with a
   // total T but no free T (a perfectly normal TRT panel) left _ftIsDefault true, and the
-  // block below then REPLACED the user's measured value with the age population average.
+  // fallback then REPLACED the user's measured value with the age population average.
   // The result: bloodwork entered, bloodwork ignored, and a chart captioned
-  // "ESTIMATE - NO BLOODWORK" over it. Take the values from _bwCal, the entry that was
-  // already selected as the one carrying a dated measurement.
-  var _bwFT   = _bwCal ? (parseDec(_bwCal.free_t)  || 0) : 0;
-  var _bwTT   = _bwCal ? (parseDec(_bwCal.total_t) || 0) : 0;
-  var _bwSHBG = _bwCal ? (parseDec(_bwCal.shbg)    || 0) : 0;
-  if (_bwFT > 0) { _mftNum = _bwFT; _ftIsDefault = false; }
-  // Population fallback ONLY when no dated draw can calibrate at all.
-  if ((_mftUndated || _ftIsDefault) && !(_bwFT > 0) && !(_bwTT > 0)) {
-    var _popFT = _tcDefaultFT(parseInt(_tcp.birthYear, 10) || 0);
-    if (_popFT > 0) { _mftNum = _popFT; _ftIsDefault = true; }
-  }
+  // "ESTIMATE - NO BLOODWORK" over it. The values come from _bwCal, the entry already
+  // selected as the one carrying a dated measurement.
   if (_bwSHBG > 0) _shbgMeas0 = _bwSHBG;
   var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
     (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
@@ -2628,7 +2825,11 @@ function _tcFreeTSeries(sorted, hooks) {
   }
   if (calFT && (_shbgMeas > 0 || _popShbg > 0)) {
       // SHBG anchor day: the bloodwork draw if entered, else the free-T calibration anchor.
-      var _bwEntry = (_tcBwEntries && _tcBwEntries[0]) ? _tcBwEntries[0] : null;
+      // Uses the SAME today-or-earlier filter as the free-T anchor (_bwUsable). Reading
+      // _tcBwEntries[0] raw meant a future-dated draw still pinned SHBG at a day whose
+      // modelled T level grows as you plan doses before it — the residual rescaling that
+      // survived the free-T anchor fix (21 pmol/L on the reproduction case).
+      var _bwEntry = _bwUsable.length ? _bwUsable[0] : null;
       var _bwDate = _bwEntry ? _bwEntry.date : null;
       var _shbgRefDay = _bwDate
         ? Math.round((new Date(_bwDate + 'T12:00:00') - firstDate) / 86400000)
@@ -2893,6 +3094,24 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   } else {
     _tcDrawnFT = null;
   }
+
+  // Steady-state peak in pmol/L, taken from the SAME expression the chart plots
+  // (total * calFT_arr). Second half of the series only, matching the ss window
+  // _tcComputeStats uses, so the ramp-up does not read as the plateau.
+  // This is a read, not a calculation: no model call, no re-derivation.
+  (function(){
+    var _ssFrom = Math.floor(totalDays / 2), _ssPk = 0;
+    for (var _si = _ssFrom; _si <= totalDays; _si++) {
+      var _sv = total[_si] * (calFT_arr ? calFT_arr[_si] : scale);
+      if (isFinite(_sv) && _sv > _ssPk) _ssPk = _sv;
+    }
+    // calFT null means the baseline never solved, so the series is not on a
+    // pmol/L scale and a multiple of it would be meaningless.
+    _tcSsPeakPmol = (calFT && _ssPk > 0) ? _ssPk : null;
+    var _el = document.getElementById('tc-exposure-note');
+    if (_el) _el.innerHTML = (typeof _ftExposureHtml === 'function' && _tcSsPeakPmol)
+      ? _ftExposureHtml(_tcSsPeakPmol) : '';
+  })();
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -3165,6 +3384,31 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     ctx.strokeStyle = dot + '99'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(ix, PAD.top + cH); ctx.lineTo(ix, PAD.top + cH + 5); ctx.stroke();
   });
+
+  // ── SCHEDULED BUT NEVER TICKED — marked WHERE THE CURVE GOES FLAT ──────────
+  // These doses are excluded from the model (a plan the user did not confirm taking
+  // is not the past — unchanged rule), which is correct but invisible: the curve
+  // simply stops rising, and with a 56-day depot it can tip into a visible DECLINE
+  // for several days. Reported three times as "the curve flatlines", most recently
+  // read as an artefact of two adjacent series joining — it is not, the join is
+  // seamless. The note under the chart already names the dates; the gap has to be
+  // legible at the point it happens, not only in prose. Drawn as a hollow amber
+  // stem so it reads as "a dose belongs here and is not counted", never as a dose.
+  if (_tcSkippedPast && _tcSkippedPast.length) {
+    ctx.save();
+    _tcSkippedPast.forEach(function(e) {
+      if (!e || !e.date) return;
+      var sd = Math.round((new Date(e.date + 'T12:00:00') - firstDate) / 86400000);
+      if (sd < xStart || sd > xEnd) return;
+      var sx = xOf(sd);
+      ctx.strokeStyle = '#e8a020cc'; ctx.lineWidth = 1; ctx.setLineDash([2,2]);
+      ctx.beginPath(); ctx.moveTo(sx, PAD.top); ctx.lineTo(sx, PAD.top + cH + 5); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(sx, PAD.top + cH + 3, 2.2, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e8a020'; ctx.lineWidth = 1.2; ctx.stroke();
+    });
+    ctx.restore();
+  }
 
   // Bloodwork dots — one per entry that has a free_t value, plotted at their calendar date
   if (_tcBwEntries && calFT) {
@@ -3950,6 +4194,10 @@ function buildTCalc() {
   // number, not as missing data — which is exactly how six weeks of logged TRT went
   // unnoticed until the level looked wrong (2026-08-07).
   html += _tcHistoryNoteHtml();
+  // Filled by _tcDrawManualChart once the curve has been plotted — it reads the
+  // drawn pmol/L values rather than recomputing them, so it cannot disagree with
+  // the chart above it. Empty until then, and empty when the curve is uncalibrated.
+  html += '<div id="tc-exposure-note"></div>';
   if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
@@ -4009,14 +4257,38 @@ function buildTCalc() {
       if(!e.seriesId)return;
       var sid=e.seriesId;
       _seriesTotals[sid]=(_seriesTotals[sid]||0)+1;
-      if(!_seriesMeta[sid]){_seriesMeta[sid]={compId:e.compId,doseMg:e.doseMg,firstDate:e.date,lastDate:e.date};}
+      if(!_seriesMeta[sid]){_seriesMeta[sid]={compId:e.compId,doseMg:e.doseMg,firstDate:e.date,lastDate:e.date,unticked:0};}
       else{if(e.date<_seriesMeta[sid].firstDate)_seriesMeta[sid].firstDate=e.date;if(e.date>_seriesMeta[sid].lastDate)_seriesMeta[sid].lastDate=e.date;}
+      // Past-dated doses in the run that were never ticked. They are in the plan (and
+      // in this count) but out of the curve, so the card has to say so.
+      if(e.unticked)_seriesMeta[sid].unticked++;
     });
     Object.keys(_seriesMeta).forEach(function(sid){
       if((_seriesTotals[sid]||0)<2)return;
       var dates=log.filter(function(e){return e.seriesId===sid;}).map(function(e){return e.date||'';}).sort();
-      var d0=new Date(dates[0].replace(/-/g,'/')),d1=new Date(dates[1].replace(/-/g,'/'));
-      _seriesMeta[sid].interval=Math.round((d1-d0)/86400000);
+      // CADENCE IS THE MOST COMMON GAP, NOT THE FIRST ONE. Reading dates[1]-dates[0]
+      // meant one missing dose at the head of the run silently rewrote the label: an
+      // every-2-days series whose 3rd and 4th doses were never ticked came back as
+      // "8 injections · every 6 days · 8 Aug → 26 Aug" — a span that holds 10 doses at
+      // the real cadence and 8 at the printed one, so the card contradicted itself and
+      // the gap was invisible. The modal gap survives holes anywhere in the run.
+      var _gaps={},_best=0,_bestN=0;
+      for(var _gi=1;_gi<dates.length;_gi++){
+        var _g=Math.round((new Date(dates[_gi].replace(/-/g,'/'))-new Date(dates[_gi-1].replace(/-/g,'/')))/86400000);
+        if(!(_g>0))continue;
+        _gaps[_g]=(_gaps[_g]||0)+1;
+        // Ties go to the SHORTER gap: a hole always reads as a longer-than-true interval,
+        // never a shorter one, so the smaller candidate is the honest cadence.
+        if(_gaps[_g]>_bestN||(_gaps[_g]===_bestN&&_g<_best)){_best=_g;_bestN=_gaps[_g];}
+      }
+      _seriesMeta[sid].interval=_best||Math.round((new Date(dates[1].replace(/-/g,'/'))-new Date(dates[0].replace(/-/g,'/')))/86400000);
+      // How many slots the span holds at that cadence vs how many the run actually has.
+      // Reported on the card so a hole is visible instead of being absorbed by the label.
+      if(_seriesMeta[sid].interval>0){
+        var _span=Math.round((new Date(dates[dates.length-1].replace(/-/g,'/'))-new Date(dates[0].replace(/-/g,'/')))/86400000);
+        var _slots=Math.floor(_span/_seriesMeta[sid].interval)+1;
+        _seriesMeta[sid].missing=Math.max(0,_slots-dates.length);
+      }
     });
     var _tcFmtD=function(iso){if(!iso)return'';var p=iso.split('-');var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return parseInt(p[2],10)+' '+M[parseInt(p[1],10)-1];};
 
@@ -4041,6 +4313,13 @@ function buildTCalc() {
         html += '<div style="display:flex;align-items:center;gap:8px;">';
         html += '<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:#6688cc;text-transform:uppercase">⛓ SERIES</span>';
         html += '<span style="font-size:10px;color:var(--muted2)">' + total + ' injections' + ivLabel + '</span>';
+        // A hole in the run, stated rather than absorbed into the cadence label.
+        // `unticked` = scheduled, in the past, never ticked: in the plan, out of the
+        // curve. `missing` = dates the span does not hold at all.
+        if (meta.unticked > 0)
+          html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.unticked + ' not ticked</span>';
+        else if (meta.missing > 0)
+          html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.missing + ' missed</span>';
         html += '</div>';
         html += '<div style="display:flex;align-items:center;gap:6px;">';
         html += '<button onclick="event.stopPropagation();_tcOpenEditSeriesSheet(\'' + _esc(sid) + '\')" style="' + editBtnStyle + '">EDIT</button>';
