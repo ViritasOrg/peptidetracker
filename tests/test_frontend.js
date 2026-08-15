@@ -1281,7 +1281,7 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and names an active protocol that has no start date',
     /noStart:\(_activeStackIndices\|\|\[\]\)\.reduce/.test(rawScript));
   check('_injHidden is declared alongside the injection cache',
-    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\]\};/.test(rawScript));
+    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\],orphans:\{\}\};/.test(rawScript));
 
   check('Today reports hidden doses instead of "nothing scheduled"',
     /_hid&&_hid\.count/.test(today));
@@ -2930,6 +2930,363 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
 
   G._tcp = _pfSave.tp; G._userStacks = _pfSave.us; G.fetch = _pfSave.f; G.alert = _pfSave.a;
   G._tcHistory = _pfSave.h; G._tcHistoryState = _pfSave.hs; G._injectionsCache = _pfSave.c;
+}
+
+
+// ── Hidden doses are counted and explained, never deleted ────────────────────
+// Reported 2026-08-15: an active protocol carrying Nebido through 26 Aug showed none
+// of it in Today, and 14 Aug held nothing at all — not a peptide, not GH.
+//
+// Two silent drops in refreshInjectionsCache, both of which returned before touching
+// _injHidden, so the app believed nothing was hidden and Today said nothing was wrong:
+//   1. a T-Calc dose bound to a protocol that is not active. Since _genInjBatches
+//      suppresses the ENTIRE trt tier (_isTestosteroneComp('trt',c) is `tier==='trt'`),
+//      T-Calc is the only scheduler of testosterone, so this branch owns every
+//      testosterone dose a user has.
+//   2. a row whose compound_id is not in the active protocol's config — which was also
+//      DELETED from today forward, on an ordinary refresh, unrecoverably.
+console.log('\n── Hidden doses: counted, explained, never deleted ────────');
+{
+  const _hdSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, hid:G._injHidden};
+  const _dels = [];
+  const _dk = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const TODAY = _dk(0);
+
+  const P2 = {id:'P2', name:'Protocol 2', cycle_start:_dk(-50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}],
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]},
+    enhanced:{}};
+  const P1 = {id:'P1', name:'Protocol 1', cycle_start:_dk(-90), cycle_length:12,
+              peptides:[], trt:{}, enhanced:{}};
+  const STORED = [
+    {id:'g1', compound_id:'glow',   tier:'peptide',  cycle_id:'P2',       date:TODAY, dose:'2',   unit:'mg', active:true, logged:false},
+    {id:'n1', compound_id:'nebido', tier:'trt',      cycle_id:'tcalc:P1', date:TODAY, dose:'100', unit:'mg', active:true, logged:false},
+    {id:'h1', compound_id:'hgh',    tier:'enhanced', cycle_id:'P2',       date:TODAY, dose:'1',   unit:'IU', active:true, logged:false},
+  ];
+  G._userStacks = [P2, P1]; G._activeStackIndices = [0]; G._stacksLoaded = true;
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') { _dels.push(String(url)); return {ok:true, status:200, json:async()=>({})}; }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? STORED : []};
+  };
+
+  await G.refreshInjectionsCache();
+  const vis = (G._injectionsCache[TODAY] || []).map(e => e.compound_id);
+
+  check('a cache refresh deletes nothing', _dels.length === 0, JSON.stringify(_dels));
+  check('the active protocol’s own dose still renders',
+    vis.length === 1 && vis[0] === 'glow', JSON.stringify(vis));
+  check('every dropped dose is counted as hidden',
+    G._injHidden.count === 2, `count=${G._injHidden.count}`);
+  check('  …a T-Calc dose names the protocol its plan is saved to',
+    !!G._injHidden.stacks['Protocol 1 (T-Calc plan)'], JSON.stringify(G._injHidden.stacks));
+  check('  …and an unlisted compound is reported by compound, not by protocol',
+    G._injHidden.orphans && G._injHidden.orphans.hgh === 1, JSON.stringify(G._injHidden.orphans));
+
+  // A T-Calc plan bound to the ACTIVE protocol must still render — the fix must not
+  // turn "hidden" into "hidden from everyone".
+  STORED[1].cycle_id = 'tcalc:P2';
+  await G.refreshInjectionsCache();
+  check('a T-Calc dose bound to the ACTIVE protocol still renders',
+    (G._injectionsCache[TODAY] || []).some(e => e.compound_id === 'nebido'));
+  // …as must an unassigned one.
+  STORED[1].cycle_id = 'tcalc';
+  await G.refreshInjectionsCache();
+  check('  …as does an unassigned one', (G._injectionsCache[TODAY] || []).some(e => e.compound_id === 'nebido'));
+
+  G.fetch = _hdSave.f; G._userStacks = _hdSave.us; G._activeStackIndices = _hdSave.ai;
+  G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
+}
+
+// ── Rebuild schedule: refills a gap without disturbing the record ────────────
+// Regeneration only ever ran forward from midnight today, so a day that lost its doses
+// stayed lost — nothing could reach backwards. This drives the real rebuildScheduleFrom()
+// against a stub implementing the ACTUAL POST /injections/batch semantics from the
+// backend's routers/injections.py: for each (cycle_id, compound_id) it drops this user's
+// UNLOGGED rows from from_date onward, keeps logged ones, and refuses to re-insert into a
+// (date, time_of_day) slot that still holds a logged row. The whole feature rests on that
+// contract, so the stub encodes it rather than assuming a friendlier one.
+console.log('\n── Rebuild schedule from a date ───────────────────────────');
+{
+  const _rbSave = {f:G.fetch, doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cf:G.confirm};
+  const _d0 = new Date();
+  const _bk = (n) => { const t = new Date(_d0.getFullYear(), _d0.getMonth(), _d0.getDate()-n, 12,0,0,0);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const HOLE = _bk(1), TICKED = _bk(2);
+
+  G._userStacks = [{id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}], trt:{}, enhanced:{}}];
+  G._activeStackIndices = [0]; G._stacksLoaded = true; G.confirm = () => true;
+
+  let DB = [];
+  for (let i = -50; i <= 60; i++) {
+    const d = _bk(-i);
+    if (d === HOLE) continue;                       // the gap
+    DB.push({id:'x'+i, cycle_id:'P2', compound_id:'glow', tier:'peptide', date:d,
+             dose:'2', unit:'mg', time_of_day:'AM', active:true, logged:(d === TICKED)});
+  }
+  const hadHole = DB.filter(e => e.date === HOLE).length === 0;
+  const tickedBefore = DB.filter(e => e.logged).length;
+
+  G.fetch = async (url, opt) => {
+    const u = String(url);
+    if (opt && opt.method === 'POST' && u.includes('/injections/batch')) {
+      const p = JSON.parse(opt.body);
+      DB = DB.filter(e => !(e.cycle_id === p.cycle_id && e.compound_id === p.compound_id
+                            && (e.date||'') >= p.from_date && !e.logged));
+      const kept = new Set(DB.filter(e => e.cycle_id === p.cycle_id && e.compound_id === p.compound_id
+                            && (e.date||'') >= p.from_date && e.logged).map(e => e.date+'|'+e.time_of_day));
+      for (const en of p.entries) {
+        if (kept.has(en.date+'|'+en.time_of_day)) continue;
+        DB.push(Object.assign({}, en, {id:'n'+DB.length}));
+      }
+      return {ok:true, status:200, json:async()=>({ok:true})};
+    }
+    return {ok:true, status:200, json:async()=>u.includes('/injections') ? DB : []};
+  };
+
+  const _origDoc = G.document;            // capture before swapping, or the stub recurses
+  const _vals = {'s-rebuild-from': _bk(14)};
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id in _vals) return new Proxy(e, {get:(t,k)=> k==='value' ? _vals[id] : t[k], set:()=>true});
+    return e;
+  };
+  G.document = _stub;
+
+  check('the gap exists before the rebuild', hadHole);
+  await G.rebuildScheduleFrom();
+  check('rebuilding refills the missing day',
+    DB.filter(e => e.date === HOLE).length === 1, `${DB.filter(e=>e.date===HOLE).length} row(s)`);
+  check('  …without un-ticking or dropping a recorded dose',
+    DB.filter(e => e.logged).length === tickedBefore &&
+    DB.some(e => e.date === TICKED && e.logged), `ticked ${DB.filter(e=>e.logged).length}/${tickedBefore}`);
+  check('  …and without duplicating any slot', (() => {
+    const c = {}; DB.forEach(e => { const k = e.date+'|'+e.time_of_day; c[k] = (c[k]||0)+1; });
+    return !Object.values(c).some(n => n > 1);
+  })());
+  // It must refuse rather than guess when there is nothing to rebuild.
+  G._activeStackIndices = [];
+  const _before = DB.length;
+  await G.rebuildScheduleFrom();
+  check('no active protocol rebuilds nothing', DB.length === _before);
+
+  G.fetch = _rbSave.f; G.document = _rbSave.doc; G._userStacks = _rbSave.us;
+  G._activeStackIndices = _rbSave.ai; G._stacksLoaded = _rbSave.sl;
+  G._injectionsCache = _rbSave.c; G.confirm = _rbSave.cf;
+}
+
+// ── Today explains testosterone that is configured but never scheduled ───────
+// Since 2026-08-14 T-Calc is the only scheduler of testosterone: _genInjBatches
+// suppresses it in BOTH tiers — the whole trt tier, and any enhanced compound whose
+// NAME contains "testosterone", which the catalogue's "Testosterone Undecanoate
+// (Nebido)" does. So a protocol can display an ester in its Enhanced tier and generate
+// nothing for it. Those doses are not hidden and not counted, because they were never
+// created, so no hidden-dose message can cover this; the explaining banner lives only
+// inside the stack editor's tier tabs, which is not where anyone looks when a dose is
+// missing. Reported: "even though Enhanced has Nebido scheduled there is no injections
+// in Today for testosterone."
+console.log('\n── Today: testosterone configured but not scheduled ───────');
+{
+  const _tnSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, sp:G._syncPending,
+                   cr:G._injCacheReady, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const TODAY = _k(_n);
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  // The generator's own view: the catalogue name is what triggers suppression.
+  check('an Enhanced "Testosterone Undecanoate (Nebido)" is suppressed by the generator',
+    G._isTestosteroneComp('enhanced', {id:'test_u', name:'Testosterone Undecanoate (Nebido)'}) === true);
+  check('  …while a non-testosterone Enhanced compound still generates',
+    G._isTestosteroneComp('enhanced', {id:'hgh', name:'HGH (Somatropin)'}) === false);
+
+  let _alert = '';
+  const _origDoc = G.document;         // capture before swapping, or the stub recurses
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id !== 'today-alerts') return e;
+    return new Proxy(e, {get:(t,k)=> k==='innerHTML' ? _alert : t[k],
+                         set:(t,k,v)=>{ if(k==='innerHTML') _alert=v; else t[k]=v; return true; }});
+  };
+  G.document = _stub;
+  G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+  G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+  G._activeStackIndices = [0];
+  G._userStacks = [{id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow Stack', active:true}], trt:{},
+    enhanced:{enabled:true, compounds:[
+      {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'},
+      {id:'hgh',    name:'HGH (Somatropin)',                  dose:'3',   unit:'IU'}]}}];
+  // Peptides and HGH render; no testosterone anywhere — the reported state.
+  G._injectionsCache = {[TODAY]:[
+    {id:'a', compound_id:'glow', compound_name:'Glow', tier:'peptide',  cycle_id:'P2', date:TODAY, dose:'0.1', unit:'ml', active:true, logged:false, time_of_day:'AM'},
+    {id:'b', compound_id:'hgh',  compound_name:'HGH',  tier:'enhanced', cycle_id:'P2', date:TODAY, dose:'3',   unit:'IU', active:true, logged:false, time_of_day:'AM'}]};
+
+  _alert = ''; G.buildToday();
+  check('Today says testosterone is not scheduled', /Testosterone not scheduled/.test(_alert));
+  check('  …naming the compound and the tier it sits in',
+    /Nebido/.test(_alert) && /Enhanced tier/.test(_alert), _alert.slice(0,120));
+  check('  …and pointing at T-Calc, which is the only thing that schedules it',
+    /T-Calc/.test(_alert) && /tab-btn-tcalc/.test(_alert));
+
+  // Bound plan → scheduled → the note must go away.
+  G._injectionsCache[TODAY].push({id:'c', compound_id:'test_u', tier:'trt', cycle_id:'tcalc:P2',
+    date:TODAY, dose:'250', unit:'mg', active:true, logged:false, time_of_day:'AM'});
+  _alert = ''; G.buildToday();
+  check('a protocol with a T-Calc plan bound gets no such note', !/Testosterone not scheduled/.test(_alert));
+
+  // No ester configured at all → nothing to explain.
+  G._userStacks[0].enhanced.compounds = [{id:'hgh', name:'HGH (Somatropin)', dose:'3', unit:'IU'}];
+  G._injectionsCache[TODAY] = G._injectionsCache[TODAY].filter(e => e.compound_id !== 'test_u');
+  _alert = ''; G.buildToday();
+  check('  …nor does one with no testosterone configured', !/Testosterone not scheduled/.test(_alert));
+
+  G.document = _tnSave.doc; G._userStacks = _tnSave.us; G._activeStackIndices = _tnSave.ai;
+  G._stacksLoaded = _tnSave.sl; G._injectionsCache = _tnSave.c; G._syncPending = _tnSave.sp;
+  G._injCacheReady = _tnSave.cr; G._injHidden = _tnSave.hid;
+}
+
+// ── A T-Calc plan saved into a protocol reaches Today ────────────────────────
+// T-Calc canonicalises testosterone on WRITE: _TC_TESTO_ALIAS maps the enhanced
+// catalogue's test_u/test_e/test_c/test_p onto nebido/enanthate/cypionate/propionate,
+// so a plan saved into a protocol stores compound_id 'nebido'. _getProtocolCompoundIds
+// reads the protocol's config and returns 'test_u'. Raw string equality never matched,
+// so EVERY T-Calc testosterone dose in an Enhanced-tier protocol was treated as an
+// orphan — dropped from the cache, and before the delete was removed, deleted from the
+// record from today forward.
+//
+// Reported: "Injections are saved in protocol 2 that is active but there is zero Nebido
+// injections in Today", while Levels showed 25 checked injections and a calibrated curve
+// for the same protocol. Both were right — T-Calc reads /injections directly and never
+// passes this filter; Today renders only what survives it.
+console.log('\n── T-Calc plan ids reach Today ────────────────────────────');
+{
+  const _idSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   sn:G._stacksNormalized, c:G._injectionsCache, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const TODAY = _k(_n);
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  const P2 = {id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', active:true}], trt:{},
+    enhanced:{enabled:true, compounds:[
+      {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'},
+      {id:'hgh',    name:'HGH (Somatropin)',                  dose:'3',   unit:'IU'}]}};
+  G._userStacks = [P2]; G._activeStackIndices = [0];
+  G._stacksLoaded = true; G._stacksNormalized = true;
+
+  // The mismatch this guards against, stated as data rather than trusted:
+  check('the protocol lists the catalogue id, T-Calc writes the canonical one',
+    G._getProtocolCompoundIds(P2).includes('test_u') && G._tcCanonCompId('test_u') === 'nebido');
+
+  const _dels = [];
+  const STORED = [
+    {id:'g',  compound_id:'glow',   tier:'peptide', cycle_id:'P2', date:TODAY,   dose:'0.1', unit:'ml', active:true, logged:false},
+    {id:'n1', compound_id:'nebido', tier:'trt',     cycle_id:'P2', date:TODAY,   dose:'250', unit:'mg', active:true, logged:false},
+    {id:'n2', compound_id:'nebido', tier:'trt',     cycle_id:'P2', date:_bk(1),  dose:'250', unit:'mg', active:true, logged:true},
+  ];
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') { _dels.push(String(url)); return {ok:true, status:200, json:async()=>({})}; }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? STORED : []};
+  };
+  await G.refreshInjectionsCache();
+  const vis = (G._injectionsCache[TODAY] || []).map(e => e.compound_id);
+
+  check('a T-Calc dose saved into the protocol renders in Today',
+    vis.includes('nebido'), JSON.stringify(vis));
+  check('  …and is not counted as an orphan',
+    G._injHidden.count === 0 && !(G._injHidden.orphans || {}).nebido, JSON.stringify(G._injHidden.orphans));
+  check('  …nor deleted from the record', _dels.length === 0, JSON.stringify(_dels));
+  check('  …so the protocol reads as having testosterone scheduled',
+    G._stackHasScheduledTrt('P2') === true);
+
+  // A genuinely unlisted compound must STILL be caught — the fix widens the match to
+  // canonical ids, it does not disable the check.
+  STORED.push({id:'z', compound_id:'nandrolone', tier:'enhanced', cycle_id:'P2',
+               date:TODAY, dose:'200', unit:'mg', active:true, logged:false});
+  await G.refreshInjectionsCache();
+  check('a compound the protocol really does not list is still reported',
+    (G._injHidden.orphans || {}).nandrolone === 1, JSON.stringify(G._injHidden.orphans));
+  check('  …and still never deleted', _dels.length === 0);
+
+  G.fetch = _idSave.f; G._userStacks = _idSave.us; G._activeStackIndices = _idSave.ai;
+  G._stacksLoaded = _idSave.sl; G._stacksNormalized = _idSave.sn;
+  G._injectionsCache = _idSave.c; G._injHidden = _idSave.hid;
+}
+
+// ── Saving a T-Calc plan actually creates its injections ────────────────────
+// _tcWritePlanToStack deletes the ester's future rows and then rebuilt them by calling
+// generateAndPushInjections. Since 2026-08-14 _genInjBatches SUPPRESSES testosterone in
+// both tiers (_isTestosteroneComp is `tier==='trt'` for the whole TRT tier), so that
+// call returns nothing for testosterone and saving a plan was a delete followed by
+// silence. Reported as "no Nebido injections scheduled" on a protocol whose T-Calc card
+// read "Injections are saved into Protocol 2": the configuration saved, the injections
+// destroyed. The plan's rows are now written directly by _tcPostPlanInjections.
+console.log('\n── T-Calc: saving a plan writes its injections ────────────');
+{
+  const _spSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, ssb:G.saveStacksToBackend};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+  const TODAY = _k(_n);
+
+  const st = {id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44, peptides:[],
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'250', unit:'mg', freqVal:2, freqUnit:'days'}]},
+    enhanced:{}};
+  G._userStacks = [st]; G._activeStackIndices = [0]; G._stacksLoaded = true;
+  G.saveStacksToBackend = async () => {};
+
+  // The gap this closes, as data: the generator produces no testosterone for this stack.
+  const _gen = G._genInjBatches(st, 'P2', new Date(_n.getFullYear(), _n.getMonth(), _n.getDate(), 12,0,0,0));
+  check('the stack generator produces no testosterone rows',
+    !_gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
+
+  const POSTED = [], DELETED = [];
+  G.fetch = async (url, opt) => {
+    const u = String(url);
+    if (opt && opt.method === 'DELETE') { DELETED.push(u); return {ok:true, status:200, json:async()=>({})}; }
+    if (opt && opt.method === 'POST' && u.includes('/injections/batch')) {
+      POSTED.push(JSON.parse(opt.body)); return {ok:true, status:200, json:async()=>({ok:true})};
+    }
+    return {ok:true, status:200, json:async()=>[]};
+  };
+  await G._tcWritePlanToStack(st, {compId:'nebido', doseMg:'250', cadenceN:2, cadenceUnit:'day',
+                                   cadenceDays:2, startDate:_bk(50)});
+  const testo = POSTED.filter(p => p.compound_id === 'nebido');
+  const rows  = testo.reduce((a,p) => a + (p.entries||[]).length, 0);
+  check('saving a plan writes the ester\'s injections', rows > 0, `${rows} rows`);
+  check('  …clearing the old ones first, so the save is not additive', DELETED.length > 0);
+  check('  …writing only from today onward, never over the record',
+    testo.every(p => (p.entries||[]).every(e => e.date >= TODAY)));
+  check('  …as PLANNED rows, not as administered ones',
+    testo.every(p => (p.entries||[]).every(e => e.logged === false && e.tier === 'trt')));
+  check('  …on the plan\'s own cadence', (() => {
+    if (!testo.length || !(testo[0].entries||[]).length) return false;   // fail, don't throw
+    const ds = testo[0].entries.map(e => e.date).slice(0,3);
+    if (ds.length < 3) return false;
+    const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
+    return gap(ds[0],ds[1]) === 2 && gap(ds[1],ds[2]) === 2;
+  })(), JSON.stringify((testo[0]&&testo[0].entries||[]).slice(0,3).map(e=>e.date)));
+  // A protocol that ends must not be scheduled past its end.
+  check('  …and never past the protocol\'s own cycle end', (() => {
+    const cs = new Date(_bk(50)+'T12:00:00');
+    const ce = new Date(cs.getTime() + 44*7*86400000);
+    return testo.every(p => (p.entries||[]).every(e => new Date(e.date+'T12:00:00') <= ce));
+  })());
+
+  G.fetch = _spSave.f; G._userStacks = _spSave.us; G._activeStackIndices = _spSave.ai;
+  G._stacksLoaded = _spSave.sl; G._injectionsCache = _spSave.c;
+  G.saveStacksToBackend = _spSave.ssb;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -10414,22 +10771,33 @@ console.log('\n─────────────────────�
 // half-built list and destroy live peptide injections. (TRT survived because
 // cycle_id 'tcalc' bypasses the orphan check entirely.)
 {
-  check('_stacksNormalized flag exists', /let _stacksNormalized=false;/.test(rawScript));
-  check('it is set true only when normalisation completes',
-    /_stacksNormalized=true;\s*\}catch\(_e\)\{_stacksNormalized=false;_logErr\('loadStacks:normalize'/.test(rawScript));
-  check('the orphan DELETE is gated on it',
-    /var _ockeys=_stacksNormalized\?Object\.keys\(_orphanBulkDel\):\[\];/.test(rawScript));
-  check('skipping the prune is recorded, not silent',
-    /_logErr\('orphanDelSkipped'/.test(rawScript));
-
-  // The delete must remain reachable on a healthy load — this guard must not become
-  // a permanent disable.
+  // 2026-08-15: THE ORPHAN DELETE IS GONE ENTIRELY, so the checks that used to assert
+  // it was correctly *gated* are replaced by one asserting it does not exist.
+  //
+  // Gating it was never enough. A compound id that merely fails to MATCH the active
+  // protocol's config — renamed, rebuilt, canonicalised, or a tier whose scheduler
+  // moved — is indistinguishable here from one deliberately removed, and either way the
+  // row was destroyed on an ordinary cache refresh with nothing counted or shown. The
+  // delete ran from today forward and every regeneration path also starts at midnight
+  // today (_regenFrom, tab-stack 116/239/520, tab-tcalc 1063), so anything it removed
+  // was never backfilled: one refresh, one permanent hole in the schedule. Reported as
+  // an active protocol quietly losing doses, with 14 Aug empty of everything.
+  //
+  // refreshInjectionsCache renders a cache. It must not write to the record at all.
   const ref = rawScript.slice(rawScript.indexOf('async function refreshInjectionsCache()'),
                               rawScript.indexOf('_injCacheReady=true'));
-  check('the DELETE call still exists for the healthy path',
-    /method:'DELETE'/.test(ref) && /from_date='\+_todayKey/.test(ref));
-  check('  …and still only targets today onward, never the past',
-    !/from_date='\+dateKey\(from\)/.test(ref));
+  check('refreshInjectionsCache issues NO DELETE — it renders, it does not prune',
+    !/method:'DELETE'/.test(ref));
+  check('  …and no request of any other method either',
+    !/method:'(POST|PUT|PATCH)'/.test(ref));
+  check('  …with the orphan-delete machinery removed, not just bypassed',
+    !/_orphanBulkDel/.test(rawScript) && !/orphanDelSkipped/.test(rawScript));
+  check('an unlisted compound is counted as hidden instead of deleted',
+    /_injHidden\.orphans\[e\.compound_id\]=\(_injHidden\.orphans\[e\.compound_id\]\|\|0\)\+1;/.test(rawScript));
+  // The flag that gated the delete is still set on load; nothing reads it now. Left in
+  // place deliberately rather than removed in the same change as a data-loss fix.
+  check('_stacksNormalized is still maintained', /let _stacksNormalized=false;/.test(rawScript) &&
+    /_stacksNormalized=true;\s*\}catch\(_e\)\{_stacksNormalized=false;_logErr\('loadStacks:normalize'/.test(rawScript));
 }
 
 
