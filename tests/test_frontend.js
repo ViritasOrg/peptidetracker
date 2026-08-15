@@ -34,6 +34,10 @@ const patchedScript = rawScript
   .replace("let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};",
            "var _tabVis={};var _currentTab='today';var _currentPrimary='today';var _lastSub={};")
   .replace('let _viewDate=',          'var _viewDate=')
+  // buildToday returns at its spinner guard while this is true, so a test that renders
+  // the empty state has to be able to clear it. As a top-level `let` it is not a
+  // sandbox property and cannot be set from outside at all.
+  .replace('let _syncPending=',       'var _syncPending=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
 .replace('let _reconStackPicked=',  'var _reconStackPicked=')
   .replace('let _reconState=',        'var _reconState=')
@@ -1881,6 +1885,102 @@ console.log(`\n${'─'.repeat(59)}`);
     G._tcCurveLog().filter(e => e.seriesId === 'r1').length === 3);
 
   G._tcHistory = _svH; G._tcHistoryState = _svHS; G._injectionsCache = _svC; G._tcp = _svP;
+}
+
+
+// ── Ticking a dose keeps the curve and the record in agreement ───────────────
+// _tcHistory is fetched ONCE per session — _tcFetchHistory returns early on a warm
+// cache and buildTCalc only calls it while the state is 'idle'. Everything else the
+// curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on
+// every refresh, so before this was fixed the two drifted apart the moment a logged
+// flag changed in Today, and stayed apart for the rest of the session:
+//   untick — the dose left the record but stayed in _tcHistory, so the curve KEPT it
+//   tick   — the dose entered the record but not _tcHistory, and both
+//            _tcProtocolInjections and _tcLoadLogFromStack skip logged rows, so the
+//            curve LOST it once anything rebuilt manualLog
+// Display-only and cleared on restart, which is exactly what made it hard to place:
+// six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L
+// while the record said 25 / 28 Jul / 1018 (2026-08-15).
+//
+// This drives the REAL toggleInjection against a backend that actually flips the row,
+// so it fails if the re-read is dropped — a source-text assertion would not.
+console.log('\n── Today tick ⇄ T-Calc history ────────────────────────────');
+{
+  const _tkSave = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast,
+                   tp:G._tcp, c:G._injectionsCache, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, sn:G._stacksNormalized, bw:G._tcBwEntries, bl:G._tcBwLoading};
+  const CYC = 'tk1';
+  const _tkD = (o) => { const t = new Date(); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const STORED = [];
+  for (let i = -30; i <= 30; i += 2)
+    STORED.push({id:'tk'+i, compound_id:'nebido', tier:'trt', cycle_id:CYC,
+                 date:_tkD(i), dose:'100', unit:'mg', logged:i<0, active:true});
+
+  G._userStacks = [{id:CYC, name:'Tick', cycle_start:_tkD(-60), peptides:[],
+                    trt:{enabled:true, compounds:[{id:'nebido',name:'T',dose:'100',unit:'mg',freq_days:2}]}}];
+  G._activeStackIndices = [0]; G._stacksLoaded = true; G._stacksNormalized = true;
+  G._tcBwEntries = []; G._tcBwLoading = true;      // bloodwork is not part of this path
+  G._tcp = {targetStackId:CYC, plannerMode:'advanced', manualLog:[], measuredFT:'350', birthYear:'1980'};
+  G._tcHistory = STORED.filter(e => e.logged)
+    .map(e => ({compId:'nebido', doseMg:'100', date:e.date, injId:e.id, source:'logged'}));
+  G._tcHistoryState = 'ready'; G._tcSkippedPast = [];
+  // A backend that honours the PUT: the record really changes under the curve.
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'PUT') {
+      const row = STORED.find(e => e.id === String(url).split('/injections/')[1]);
+      if (row) row.logged = JSON.parse(opt.body).logged;
+      return {ok:true, status:200, json:async()=>({})};
+    }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections')?STORED:[]};
+  };
+
+  const shape = () => { const l = G._tcCurveLog(); return {n:l.length, first:l.length?l[0].date:null}; };
+  // AWAITED, not fire-and-forget. This block lives inside the wizSave().then(async …)
+  // chain that ends in process.exit(), so an unawaited IIFE races that exit and its
+  // checks vanish silently — the same trap the note above the exit call describes.
+  await (async () => {
+    await G.refreshInjectionsCache(); G.buildTCalc();
+    const before = shape();
+    const first6 = STORED.filter(e => e.logged).slice(0, 6).map(e => e.id);
+    for (const id of first6) await G.toggleInjection(id, true);       // untick six
+    const live = shape();
+    check('unticking six doses drops them from the curve',
+      live.n === before.n - 6, `${before.n} -> ${live.n}`);
+    check('  …and moves the "since" date off the dose that was undone',
+      live.first !== before.first, `first still ${live.first}`);
+    // A reload must agree with what was already on screen — that gap WAS the bug.
+    G._tcHistory = null; G._tcHistoryState = 'idle'; G._tcSkippedPast = [];
+    await G._tcFetchHistory(true); await G.refreshInjectionsCache(); G.buildTCalc();
+    const reload = shape();
+    check('  …and a reload shows the same curve, not a corrected one',
+      reload.n === live.n && reload.first === live.first,
+      `live ${live.n}/${live.first} vs reload ${reload.n}/${reload.first}`);
+    // The other direction. Ticking used to LOSE the dose as soon as anything rebuilt
+    // manualLog, because it left the plan without entering the history. Asserting a
+    // fixed count here would be wrong — three of these were just unticked above, so
+    // re-ticking them legitimately puts them back. The invariant that actually holds
+    // in both directions is the one that was broken: what is on screen equals what a
+    // reload would show.
+    const due = STORED.filter(e => !e.logged).slice(0, 3).map(e => e.id);
+    for (const id of due) { await G.toggleInjection(id, false); await G.refreshInjectionsCache(); G.buildTCalc(); }
+    const tickLive = shape();
+    G._tcHistory = null; G._tcHistoryState = 'idle'; G._tcSkippedPast = [];
+    await G._tcFetchHistory(true); await G.refreshInjectionsCache(); G.buildTCalc();
+    const tickReload = shape();
+    check('ticking a dose does not drop it from the curve on the next rebuild',
+      tickLive.n === tickReload.n && tickLive.first === tickReload.first,
+      `live ${tickLive.n}/${tickLive.first} vs reload ${tickReload.n}/${tickReload.first}`);
+    check('  …and the history it is read from is a forced re-read of the record',
+      /else if\(typeof _tcFetchHistory==='function'\)\{[\s\S]*?await _tcFetchHistory\(true\);\}/
+        .test(require('fs').readFileSync(require('path').join(__dirname,'../tab-today.js'),'utf8')));
+
+    G.fetch = _tkSave.f; G._tcHistory = _tkSave.h; G._tcHistoryState = _tkSave.hs;
+    G._tcSkippedPast = _tkSave.sk; G._tcp = _tkSave.tp; G._injectionsCache = _tkSave.c;
+    G._userStacks = _tkSave.us; G._activeStackIndices = _tkSave.ai;
+    G._stacksLoaded = _tkSave.sl; G._stacksNormalized = _tkSave.sn;
+    G._tcBwEntries = _tkSave.bw; G._tcBwLoading = _tkSave.bl;
+  })();
 }
 
 
@@ -6568,9 +6668,26 @@ console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
   // after they were added on 2026-08-02 — which is what pinned prod at v1.271 while
   // the promote PRs piled up unmerged.
   //
-  // Scoped to the repo they are about, not weakened: with no GITHUB_REPOSITORY (local
-  // runs) or on any -staging/-stage repo they run in full and still fail loudly.
+  // Scoped to the repo they are about, not weakened: on any -staging/-stage repo, or
+  // a checkout that cannot be identified at all, they run in full and still fail loudly.
+  //
+  // WHICH REPO IS THIS CHECKOUT? On CI, GITHUB_REPOSITORY says so. Locally it is unset,
+  // and the old fallback — "no env var means run them" — was wrong in a PROD checkout:
+  // these five then asserted staging's workflow against prod's own copy of
+  // promote-to-prod.yml, which legitimately differs, and failed on every local run with
+  // nothing actually broken. Not hypothetical — that is exactly how prod came to be
+  // reported as having "5 pre-existing failures" while its CI was green (2026-08-15).
+  // The origin remote names the repo the working tree came from, so ask that instead.
   var _pgRepo = process.env.GITHUB_REPOSITORY || '';
+  if (!_pgRepo) {
+    try {
+      var _pgCfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
+      var _pgM = _pgCfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
+      if (_pgM) _pgRepo = _pgM[1].replace(/\.git$/, '');
+    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
+  }
+  // Indeterminate stays LOUD: an unidentifiable checkout runs them rather than skipping,
+  // so a real regression in staging's gate can never hide behind a missing remote.
   var _pgIsProd = _pgRepo && !/-(staging|stage)$/.test(_pgRepo);
   if (_pgIsProd) {
     console.log('  – skipped on ' + _pgRepo + ' (staging-only workflow)');
@@ -10694,4 +10811,66 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // deliberately absent.
   check('  …and the destination is a single dropdown, not a list of buttons',
     /<select id="tc-save-stack-sel"/.test(_tcSrc2) && !/>New protocol<\/div>/.test(_tcSrc2));
+}
+
+// ── Today: a finished cycle says so ──────────────────────────────────────────
+// Every generator stops at `days >= cycle_length*7`, so a protocol past its end date
+// schedules nothing. Today's empty state had no branch for that and fell through to the
+// hidden-doses message, which blamed unrelated inactive protocols: a real 12-week
+// protocol that ended on 10 Aug rendered "66 doses hidden — they belong to 'a protocol
+// that no longer exists' and 'Enhanced', which are not active" (2026-08-15). True, and
+// not the reason. Renders the real buildToday and reads the HTML it produces, so it
+// fails if the branch is dropped — a source grep would not.
+console.log('\n── Today: finished cycle empty state ──────────────────────');
+{
+  const _ceSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cr:G._injCacheReady,
+                   sp:G._syncPending, hid:G._injHidden};
+  let _html = '';
+  const _stub = Object.create(_ceSave.doc);
+  _stub.getElementById = (id) => {
+    const e = _ceSave.doc.getElementById(id);
+    if (id !== 'today-checklist') return e;
+    return new Proxy(e, {
+      get: (t, k) => k === 'innerHTML' ? _html : t[k],
+      set: (t, k, v) => { if (k === 'innerHTML') _html = v; else t[k] = v; return true; },
+    });
+  };
+  G.document = _stub;
+  G._injectionsCache = {}; G._injCacheReady = true; G._syncPending = false;
+  G._injHidden = {count:66, stacks:{'a protocol that no longer exists':37, 'Enhanced':29}, noStart:[]};
+  G._stacksLoaded = true;
+  G._activeStackIndices = [0];
+
+  // Started 18 May, 12 weeks → ended 10 Aug. Anchored to NOW so it cannot go stale.
+  const _dk = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _startBack = (days) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()-days); return _dk(t); };
+
+  // 89 days in on a 12-week (84-day) cycle — over by 5 days, as reported.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(89), cycle_length:12,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('a finished cycle is reported as finished, not as hidden doses',
+    /Cycle finished/.test(_html) && !/doses hidden/.test(_html), _html.slice(0, 160));
+  check('  …naming the protocol and the date it ended',
+    /Main/.test(_html) && /12-week/.test(_html), _html.slice(0, 160));
+  check('  …and pointing at the thing that changes it',
+    /Extend it or remove its end date/.test(_html));
+
+  // Still inside the cycle: the hidden-doses message is the right one and must stay.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(10), cycle_length:12,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('a live cycle still reports hidden doses, not a false ending',
+    /doses hidden/.test(_html) && !/Cycle finished/.test(_html), _html.slice(0, 160));
+
+  // No end date: a cycle that cannot end must never be called finished.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(400), cycle_length:0,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('  …and "no end date" never reports one', !/Cycle finished/.test(_html));
+
+  G.document = _ceSave.doc; G._userStacks = _ceSave.us; G._activeStackIndices = _ceSave.ai;
+  G._stacksLoaded = _ceSave.sl; G._injectionsCache = _ceSave.c; G._injCacheReady = _ceSave.cr;
+  G._syncPending = _ceSave.sp; G._injHidden = _ceSave.hid;
 }
