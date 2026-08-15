@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.288</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -160,6 +160,7 @@
     <div id="s-appearance-card" style="margin-top:14px"></div>
     <div id="s-refs-card" style="margin-top:14px"></div>
     <div id="s-cache-card" style="margin-top:14px"></div>
+    <div id="s-rebuild-card" style="margin-top:14px"></div>
     <div id="s-stagecopy-card" style="margin-top:14px"></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
       <div class="s-sec-hdr" onclick="toggleSSec('data')">Data<span class="s-chev">▾</span></div>
@@ -280,7 +281,7 @@ let _syncPending=true;
 var _injectionsCache={};
 // Set by refreshInjectionsCache: how many stored injections were filtered out and
 // which protocol each belonged to. Read by buildToday's empty state.
-var _injHidden={count:0,stacks:{},noStart:[]};
+var _injHidden={count:0,stacks:{},noStart:[],orphans:{}};
 // Set by _genInjBatches: compounds a stack deliberately did NOT schedule because the
 // same molecule is already scheduled by another tier of that stack (today: enhanced
 // testosterone, when the TRT tier carries testosterone). Keyed by stack id. The stack
@@ -687,7 +688,7 @@ function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id)
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
 function _renderAuthDebug(){var el=document.getElementById('s-session');if(!el)return;var st=localStorage.getItem('session_token')||'';var gt=localStorage.getItem('google_token')||'';var using=(_sessionToken?'session':(_googleToken?'google':'none'));el.textContent=st?'Present':(gt?'Google only':'None');el.style.color=st?'#3cffa0':'#f59e0b';function human(d){return d<0?'EXPIRED':d>1440?(Math.round(d/1440)+'d left'):d>60?(Math.round(d/60)+'h left'):d+'m left';}function line(label,tok){if(!tok)return'<div>'+label+': <b>absent</b></div>';var e=_fmtTokExp(tok);if(!e)return'<div>'+label+': present (no exp)</div>';return'<div>'+label+': '+human(e.leftMin)+' ('+e.exp.toLocaleString()+')</div>';}var det=document.getElementById('s-session-detail');if(det)det.innerHTML=line('Session',st)+line('Google',gt)+'<div>Using: <b>'+using+'</b></div>';}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildRebuildCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 const PROMOTE_STEPS=['Checkout staging','Checkout prod','Sync files into prod branch','Open PR on prod','Wait for CI and merge prod PR'];let _prodVer=null;let _lastPushData=null;let _pollErrs=0;let _prevProdVer=null;let _prodArtifacts=null;let _stagingVer=null;function pushToProd(){const btn=document.getElementById('push-to-prod-btn');const statusEl=document.getElementById('push-to-prod-status');if(btn){btn.textContent='Pushing...';btn.disabled=true;}_prodVer=null;_pollErrs=0;_prevProdVer=null;_stagingVer=VERSION;fetch('https://viritasorg.github.io/peptidetracker/version.json',{cache:'no-store'}).then(r=>r.json()).then(d=>{_prevProdVer=d.version||null;}).catch(()=>{});renderPromoteStatus({status:'queued',steps:PROMOTE_STEPS.map(n=>({name:n,status:'queued',conclusion:null}))},statusEl);fetch(AGENT_URL+'/promote-to-prod',{method:'POST',headers:authHeaders()}).then(r=>{if(!r.ok)return r.json().catch(()=>({})).then(j=>{throw new Error('HTTP '+r.status+(j.detail?' — '+j.detail:''));});return r.json();}).then(data=>{pollPromoteStatus(0,data.dispatched_at||new Date().toISOString().replace(/\.\d{3}Z$/,'Z'));}).catch(e=>{if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.textContent='Failed: '+e.message;});}
 function pollPromoteStatus(attempt,since){if(attempt>100){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Timed out — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}fetch(AGENT_URL+'/promote-to-prod/status?since='+encodeURIComponent(since),{headers:authHeaders()}).then(r=>r.json()).then(data=>{_pollErrs=0;const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');renderPromoteStatus(data,statusEl);if(data.status==='completed'){_lastPushData=data;saveLastPush(data,null,_stagingVer);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(data.pr_url)pollProdVersion(0);}else{setTimeout(()=>pollPromoteStatus(attempt+1,since),3000);}}).catch(()=>{_pollErrs++;if(_pollErrs>=5){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Connection lost — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}setTimeout(()=>pollPromoteStatus(attempt+1,since),5000);});}
 function pollProdVersion(attempt){if(attempt>40)return;fetch('https://viritasorg.github.io/peptidetracker/version.json',{cache:'no-store'}).then(r=>r.json()).then(function(d){var v=d.version||'?';var row=document.getElementById('push-to-prod-prod-row');if(_prevProdVer!==null&&v===_prevProdVer){if(row)row.innerHTML='<span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Pages deploying...</span>';setTimeout(function(){pollProdVersion(attempt+1);},20000);return;}_prodVer=v;if(row)row.innerHTML='<span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v'+v+'</span>';saveLastPush(_lastPushData,v,_stagingVer);pollProdArtifacts(0);}).catch(function(){setTimeout(function(){pollProdVersion(attempt+1);},5000);});}
@@ -1107,7 +1108,7 @@ async function refreshInjectionsCache(){
     if(!st)return;
     if(st.cycle_start)_ownerOf[_stackCycleId(st)]={name:st.name||('Protocol '+(i+1)),active:_activeStackIndices.indexOf(i)>=0};
   });
-  _injHidden={count:0,stacks:{},noStart:(_activeStackIndices||[]).reduce(function(a,si){
+  _injHidden={count:0,stacks:{},orphans:{},noStart:(_activeStackIndices||[]).reduce(function(a,si){
     var st=_userStacks[si];
     if(st&&!st.cycle_start)a.push(st.name||('Protocol '+(si+1)));
     return a;
@@ -1124,8 +1125,6 @@ async function refreshInjectionsCache(){
   var to=new Date(today0.getTime()+90*86400000);
   var entries=await fetchInjectionsForRange(dateKey(from),dateKey(to));
   _injectionsCache={};
-  var _todayKey=dateKey(today0);
-  var _orphanBulkDel={};
   entries.forEach(function(e){
     var _cyc=e.cycle_id||'';
     // T-Calc testosterone: unassigned ('tcalc') is global and always shows;
@@ -1135,6 +1134,22 @@ async function refreshInjectionsCache(){
       if(_tcalcEntryVisible(e,activeCycleIds)){
         if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
         _injectionsCache[e.date].push(e);
+      }else{
+        // A HIDDEN T-CALC DOSE IS STILL A DOSE — COUNT IT.
+        // This branch used to `return` without touching _injHidden, so a plan saved to
+        // a different protocol vanished with the app believing nothing was hidden:
+        // Today then rendered its plain "nothing scheduled" state and there was no way
+        // to find out where the doses went. Reported 2026-08-15 — a protocol carrying
+        // Nebido through 26 Aug showed none of it, because the T-Calc plan was still
+        // bound to the previously-active protocol. Since testosterone is scheduled by
+        // T-Calc and by nothing else (_genInjBatches suppresses the whole TRT tier),
+        // this branch owns EVERY testosterone dose, and staying silent here means the
+        // one compound a user is most likely to be tracking disappears without a word.
+        _injHidden.count++;
+        var _towId=(typeof _injOwnerStackId==='function')?_injOwnerStackId(e):'';
+        var _towSt=(_userStacks||[]).filter(function(s){return s&&s.id===_towId;})[0];
+        var _tnm=(_towSt?(_towSt.name||'another protocol'):'a protocol that no longer exists')+' (T-Calc plan)';
+        _injHidden.stacks[_tnm]=(_injHidden.stacks[_tnm]||0)+1;
       }
       return;
     }
@@ -1153,29 +1168,56 @@ async function refreshInjectionsCache(){
       return;
     }
     var _vids=_validCids[e.cycle_id]||[];
-    if(_vids.length&&!_vids.includes(e.compound_id)){
-      if(e.date>=_todayKey){
-        if(!_orphanBulkDel[e.cycle_id])_orphanBulkDel[e.cycle_id]={};
-        _orphanBulkDel[e.cycle_id][e.compound_id]=true;
-      }
+    // COMPARE CANONICAL IDS, NOT RAW ONES.
+    // T-Calc canonicalises testosterone on WRITE — _TC_TESTO_ALIAS maps the catalogue's
+    // test_u/test_e/test_c/test_p onto nebido/enanthate/cypionate/propionate — so a plan
+    // saved into a protocol stores compound_id 'nebido'. _getProtocolCompoundIds reads
+    // the protocol's own config and returns the catalogue id 'test_u'. Raw string
+    // equality therefore never matched, and EVERY T-Calc testosterone dose belonging to
+    // an Enhanced-tier protocol was treated as an orphan — dropped from the cache here
+    // and, before the delete was removed, deleted from the record from today forward.
+    //
+    // Reported 2026-08-15: "Injections are saved in protocol 2 that is active but there
+    // is zero Nebido injections in Today", while Levels showed 25 checked injections and
+    // a calibrated curve for that same protocol. Both were right. T-Calc reads
+    // /injections directly (_tcFetchHistory) and never passes through this filter; Today
+    // renders only what survives it. Same record, opposite answers.
+    var _cn=function(x){return (typeof _tcCanonCompId==='function')?_tcCanonCompId(x):x;};
+    var _rowCid=_cn(e.compound_id);
+    var _cidMatch=_vids.some(function(v){return v===e.compound_id||_cn(v)===_rowCid;});
+    if(_vids.length&&!_cidMatch){
+      // ⚠️ HIDE AND REPORT. NEVER DELETE.
+      // This used to queue a DELETE of every future row for the compound
+      // (?cycle_id=…&compound_id=…&from_date=<today>&unlogged_only=true) on the theory
+      // that a compound absent from the protocol's config is an orphan. The theory is
+      // not safe: an id that merely fails to MATCH the config — a renamed compound, a
+      // rebuilt protocol, a canonicalised id, a tier whose scheduler moved — is
+      // indistinguishable here from one that was deliberately removed, and the row is
+      // destroyed either way, silently, on an ordinary cache refresh.
+      //
+      // Reported 2026-08-15: an active protocol was losing scheduled doses, and 14 Aug
+      // held nothing at all — not a peptide, not GH. The delete runs from today
+      // forward and EVERY regeneration path also starts at midnight today
+      // (index.html _regenFrom, tab-stack 116/239/520, tab-tcalc 1063), so whatever a
+      // delete removes on the day it fires is never backfilled. One refresh, one
+      // permanent hole.
+      //
+      // Nothing here was ever counted either, so _injHidden read 0 and Today reported
+      // nothing wrong while rows were being deleted underneath it. Deleting is not this
+      // function's job — it renders a cache. The log is the record (CLAUDE.md), every
+      // delete is global, and a stale row costs a line on a screen while a wrong delete
+      // costs a dose. Report it and let the user decide.
+      _injHidden.count++;
+      _injHidden.orphans[e.compound_id]=(_injHidden.orphans[e.compound_id]||0)+1;
       return;
     }
     if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
     _injectionsCache[e.date].push(e);
   });
-  // Never delete on a partial compound list — see _stacksNormalized. The entries stay
-  // hidden this pass (the filter above already returned) but nothing is destroyed, and
-  // the next clean load re-evaluates them.
-  var _ockeys=_stacksNormalized?Object.keys(_orphanBulkDel):[];
-  if(!_stacksNormalized&&Object.keys(_orphanBulkDel).length)_logErr('orphanDelSkipped','normalisation failed — '+Object.keys(_orphanBulkDel).length+' cycle(s) not pruned');
-  for(var _ci=0;_ci<_ockeys.length;_ci++){
-    var _cid=_ockeys[_ci];
-    var _cmpIds=Object.keys(_orphanBulkDel[_cid]);
-    for(var _oi=0;_oi<_cmpIds.length;_oi++){
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&compound_id='+encodeURIComponent(_cmpIds[_oi])+'&from_date='+_todayKey+'&unlogged_only=true',{method:'DELETE',headers:authHeaders()});}
-      catch(e){_logErr('delOrphanInj',e);}
-    }
-  }
+  // The orphan-pruning DELETE that stood here is gone — see the hide-and-report note in
+  // the filter above. This function renders a cache and no longer writes to the record
+  // at all, which is why the _stacksNormalized guard that used to gate the delete is no
+  // longer consulted here: with nothing destructive left there is nothing to gate.
   }catch(_e){_logErr('refreshInjCache',_e);}
   finally{ _injCacheReady=true; }
 }
@@ -1913,7 +1955,7 @@ function obFinish(){
   kv['pep-profile']=profile;
   if(Object.keys(kv).length)pushPepSettingsToAgent(kv);
   document.getElementById('onboarding-overlay').classList.add('hidden');
-  buildAppearanceCard();buildCacheCard();buildStageCopyCard();
+  buildAppearanceCard();buildCacheCard();buildRebuildCard();buildStageCopyCard();
   // Route the starting-point choice made on the final step. A choice of a template
   // schedules it immediately (useTemplate starts today + regenerates injections);
   // 'build' opens the stack wizard; 'explore' lands on Today (empty-state coaching
@@ -1995,6 +2037,78 @@ async function pushPepSettingsToAgent(kv){try{const r=await fetch(AGENT_URL+'/us
 // how you get real data over there to test against. One-way — it only ever writes
 // to the staging namespace, never back. Shown in production only: from staging
 // there is nothing to copy.
+// ── Rebuild schedule from a date ─────────────────────────────────────────────
+// Regeneration has only ever run FORWARD from midnight today (_regenFrom here, and
+// tab-stack 116/239/520, tab-tcalc 1063), so a day that lost its doses stayed lost:
+// nothing in the app could reach backwards to refill it. A protocol was reported with
+// 14 Aug holding nothing at all — not a peptide, not GH — after the orphan DELETE (now
+// removed) pruned it and every later regeneration started after the hole.
+//
+// Safe because of what POST /injections/batch actually does, which is worth stating
+// since the whole card rests on it: for each (cycle_id, compound_id) it removes this
+// user's UNLOGGED rows from from_date onward, PRESERVES logged ones, and skips
+// re-inserting any (date, time_of_day) slot that still holds a logged row. So a dose
+// already ticked off is never moved, duplicated or un-ticked by this — only planned
+// rows are rewritten, from the protocol's own configuration.
+//
+// Deliberately NOT automatic. Rebuilding discards hand-edits to planned future doses
+// (they regenerate from config), and silently reaching into the past is how doses the
+// user deleted on purpose would come back. The user picks the date and confirms.
+function buildRebuildCard(){
+  var card=document.getElementById('s-rebuild-card');if(!card)return;
+  var _d=new Date(NOW);_d.setDate(_d.getDate()-14);
+  var _def=dateKey(_d);
+  var _act=(_activeStackIndices||[]).map(function(si){var s=_userStacks[si];return s?(s.name||'Protocol'):null;}).filter(Boolean);
+  card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    +sSecHdr('rebuild','Rebuild Schedule')+sSecBody('rebuild')
+    +'<div style="padding:14px 16px;">'
+    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.55">'
+    +'Regenerates planned doses for '+(_act.length?('“'+_esc(_act.join('”, “'))+'”'):'the active protocol')
+    +' from a date you choose, using the protocol’s own configuration. Use it to refill a day that lost its doses.'
+    +'<br><br>Testosterone is not included — it is scheduled in T-Calc, so rebuild it there by saving its plan again.'
+    +'<br><br><strong style="color:var(--text)">Doses you have already ticked off are never touched</strong> — they are preserved exactly as recorded. '
+    +'Planned doses from that date onward are rebuilt, so any hand-edits to them are discarded.'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<input type="date" id="s-rebuild-from" value="'+_def+'" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;font-family:inherit">'
+    +'<button id="s-rebuild-btn" onclick="rebuildScheduleFrom()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Rebuild from this date</button>'
+    +'</div>'
+    +'<div id="s-rebuild-status" style="font-size:11px;color:var(--muted2);margin-top:10px"></div>'
+    +'</div></div></div>';
+}
+async function rebuildScheduleFrom(){
+  var inp=document.getElementById('s-rebuild-from');
+  var btn=document.getElementById('s-rebuild-btn');
+  var out=document.getElementById('s-rebuild-status');
+  var ds=inp?inp.value:'';
+  if(!ds){if(out)out.textContent='Pick a date first.';return;}
+  var from=parseLocalDate(ds);
+  if(!from||isNaN(from.getTime())){if(out)out.textContent='That date could not be read.';return;}
+  if(!(_activeStackIndices&&_activeStackIndices.length&&_userStacks[_activeStackIndices[0]])){
+    if(out)out.textContent='No active protocol to rebuild.';return;
+  }
+  if(!confirm('Rebuild planned doses from '+ds+' onward?\n\nDoses you have already ticked off are preserved. Planned doses from that date are regenerated from the protocol, so hand-edits to them are lost.'))return;
+  if(btn){btn.disabled=true;btn.textContent='Rebuilding…';}
+  if(out)out.textContent='';
+  try{
+    await generateInjectionsForActiveStacks(from);
+    // Testosterone is NOT rebuilt here. _genInjBatches suppresses it (T-Calc owns it),
+    // so this regenerates every other tier and deliberately leaves the ester alone: the
+    // plan's rows are written by T-Calc's own save path (_tcPostPlanInjections), and
+    // re-deriving them from a protocol config that no longer schedules them would write
+    // nothing while looking like it had. The card says so rather than implying otherwise.
+    await refreshInjectionsCache();
+    try{buildWeekStrip();}catch(_e){}
+    try{buildToday();}catch(_e){}
+    try{buildSchedule();}catch(_e){}
+    var _n=Object.keys(_injectionsCache||{}).reduce(function(a,k){return a+(_injectionsCache[k]||[]).length;},0);
+    if(out)out.textContent='Rebuilt from '+ds+'. '+_n+' dose'+(_n===1?'':'s')+' now in view.';
+  }catch(e){
+    _logErr('rebuildSchedule',e);
+    if(out)out.textContent='Rebuild failed — nothing was changed. Try again.';
+  }
+  if(btn){btn.disabled=false;btn.textContent='Rebuild from this date';}
+}
 function buildStageCopyCard(){
   var card=document.getElementById('s-stagecopy-card');if(!card)return;
   if(IS_STAGING){card.innerHTML='';return;}
@@ -2163,19 +2277,19 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.287"></script>
-<script src="tab-macros.js?v=1.287"></script>
-<script src="tab-stack.js?v=1.287"></script>
-<script src="tab-today.js?v=1.287"></script>
-<script src="tab-schedule.js?v=1.287"></script>
-<script src="tab-timeline.js?v=1.287"></script>
-<script src="tab-body.js?v=1.287"></script>
-<script src="tab-recon.js?v=1.287"></script>
-<script src="tab-blood.js?v=1.287"></script>
-<script src="tab-labs.js?v=1.287"></script>
-<script src="tab-tcalc.js?v=1.287"></script>
-<script src="tab-thist.js?v=1.287"></script>
-<script src="tab-supplements.js?v=1.287"></script>
+<script src="tab-cycles.js?v=1.288"></script>
+<script src="tab-macros.js?v=1.288"></script>
+<script src="tab-stack.js?v=1.288"></script>
+<script src="tab-today.js?v=1.288"></script>
+<script src="tab-schedule.js?v=1.288"></script>
+<script src="tab-timeline.js?v=1.288"></script>
+<script src="tab-body.js?v=1.288"></script>
+<script src="tab-recon.js?v=1.288"></script>
+<script src="tab-blood.js?v=1.288"></script>
+<script src="tab-labs.js?v=1.288"></script>
+<script src="tab-tcalc.js?v=1.288"></script>
+<script src="tab-thist.js?v=1.288"></script>
+<script src="tab-supplements.js?v=1.288"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
