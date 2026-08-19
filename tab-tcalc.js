@@ -1707,6 +1707,91 @@ function _tcProtocolInjections(){
 // dose they actually took; a protocol entry is a plan for that day. Where both
 // describe the same compound on the same date they are the same injection, and
 // counting both would double it.
+// ── THE CURVE IS DRAWN ONCE, FROM COMPLETE INPUTS ────────────────────────────
+// It rests on three sources that arrive at DIFFERENT TIMES: the logged history
+// (_tcFetchHistory), the injection cache (refreshInjectionsCache) and the bloodwork that
+// calibrates it (_tcFetchBwEntries). Drawing before they have all landed renders a curve
+// built from whatever happens to have arrived, and it changes under the user as the rest
+// turns up — which reads as the curve inflating on its own.
+//
+// Captured in the field on 2026-08-16, one page load, eight seconds apart:
+//   peak 1969, calFT 340   — bloodwork absent, so the age-based population default
+//   peak 1176, cache 0     — injection cache empty, 31 doses, plan ending 26 Aug
+//   peak 1690, cache 30    — cache arrived: 51 doses to 5 Oct, the real record
+// Only the last was the whole truth. The first two were not "wrong maths" — they were
+// correct maths on partial data, which is worse, because they look authoritative.
+//
+// Nothing here changes what the curve MEANS. It defers the drawing until the inputs are
+// all in, and each fetch already calls buildTCalc when it completes, so the wait ends by
+// itself.
+function _tcInputsReady(){
+  if (typeof _tcHistoryState !== 'undefined' && _tcHistoryState !== 'ready' && _tcHistoryState !== 'error') return false;
+  if (typeof _injCacheReady !== 'undefined' && !_injCacheReady) return false;
+  if (typeof _tcBwEntries !== 'undefined' && _tcBwEntries === null) return false;
+  return true;
+}
+
+// ── STORED DOSES (diagnostic) ────────────────────────────────────────────────
+// Testosterone doses are surviving a delete that should reach them. The delete keys on
+// (cycle_id, compound_id), and both of those are invisible from the UI — the curve shows
+// a canonicalised compId, not what is actually stored — so the field reports and my
+// reading of the code cannot be reconciled without seeing the raw rows.
+//
+// Read-only: one GET, no writes, nothing cached. Remove once the cause is found.
+var _tcStoredRows = null;
+async function _tcLoadStoredRows(){
+  var out = document.getElementById('tc-stored-out');
+  if (out) out.textContent = 'Loading…';
+  try{
+    var h = (typeof authHeaders === 'function') ? authHeaders() : null;
+    if (!h){ if (out) out.textContent = 'Not signed in.'; return; }
+    var r = await fetch(AGENT_URL + '/injections?active_only=false', {headers: h});
+    if (!r.ok){ if (out) out.textContent = 'Fetch failed: ' + r.status; return; }
+    var all = await r.json();
+    var todayK = dateKey(NOW);
+    // Testosterone only, and only what is still ahead — that is where the strays are.
+    var rows = (Array.isArray(all) ? all : []).filter(function(e){
+      if (!e || !e.date || e.date < todayK) return false;
+      var id = String(e.compound_id || '');
+      return (typeof _tcIsTestoRow === 'function') ? _tcIsTestoRow(e.tier, id)
+           : /test|nebido|enanth|cypion|propion|sustanon/i.test(id);
+    });
+    rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : 1; });
+    _tcStoredRows = rows;
+    // Group by the two fields the delete actually keys on, which is the whole question.
+    var groups = {};
+    rows.forEach(function(e){
+      var k = (e.cycle_id||'(none)') + '  |  ' + (e.compound_id||'(none)') + '  |  tier=' + (e.tier||'?');
+      if (!groups[k]) groups[k] = {n:0, logged:0, first:e.date, last:e.date};
+      var g = groups[k];
+      g.n++; if (e.logged) g.logged++;
+      if (e.date < g.first) g.first = e.date;
+      if (e.date > g.last)  g.last  = e.date;
+    });
+    var txt = rows.length + ' testosterone dose(s) stored from today onward\n\n';
+    Object.keys(groups).sort().forEach(function(k){
+      var g = groups[k];
+      txt += k + '\n    ' + g.n + ' rows, ' + g.logged + ' logged, ' + g.first + ' \u2192 ' + g.last + '\n\n';
+    });
+    txt += 'The delete targets cycle_id = ' +
+           ((typeof _tcTargetCycleId === 'function') ? (_tcTargetCycleId() || '(none)') : '?') + '\n';
+    if (out) out.textContent = txt;
+  }catch(e){ if (out) out.textContent = 'Error: ' + (e && e.message || e); }
+}
+function buildStoredRowsCard(){
+  var card = document.getElementById('s-stored-card');
+  if (!card) return;
+  card.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    + sSecHdr('stored','Stored Doses') + sSecBody('stored')
+    + '<div style="padding:14px 16px;">'
+    + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
+    + 'Lists the testosterone doses actually stored from today onward, grouped by the '
+    + 'cycle id and compound id a delete keys on. Read-only.</div>'
+    + '<button onclick="_tcLoadStoredRows()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Load</button>'
+    + '<pre id="tc-stored-out" style="white-space:pre-wrap;word-break:break-all;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:11px;line-height:1.45;color:#ccc;max-height:360px;overflow:auto;margin:10px 0 0">Tap Load.</pre>'
+    + '</div></div></div>';
+}
+
 function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
@@ -2513,6 +2598,16 @@ async function _tcSaveEditSeries() {
   // the edit away and then wrote the pre-edit state back, so nothing ever saved.
   await _tcSyncLogToBackend();
   await _tcFetchHistory(true);
+  // AND RE-READ THE INJECTION CACHE. The sync above cleans the RECORD, but the curve
+  // also draws on _injectionsCache via _tcProtocolInjections, and nothing here refreshed
+  // it — so an edit that shortened a series left the removed doses in the cache and the
+  // curve kept drawing them. Reported 2026-08-16: shortening a Nebido run to 16 Aug left
+  // the curve running to October, apparently ignoring the edit. _tcConfirmAddSheet has
+  // always done this; the edit path simply never did.
+  //
+  // Order matters: history, then cache, then _tcLoadLogFromStack — which reads the cache
+  // for this stack's future rows and would otherwise rebuild manualLog from stale data.
+  if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
   _tcLoadLogFromStack();
   buildTCalc();
 }
@@ -4187,12 +4282,33 @@ async function _tcSyncLogToBackend() {
     // only testosterone. Looping the known esters still "covers removed compounds
     // too" (the original intent), because it clears every testosterone id under the
     // cycle whether or not it is still in the plan.
-    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
-    for(var _tj=0;_tj<_tid2.length;_tj++){
-      await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
-        +'&compound_id='+encodeURIComponent(_tid2[_tj])
-        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    // BOTH SPELLINGS, OR THE DELETE MISSES HALF THE RECORD.
+    // _tcAllCompIds returns the TRT catalogue (nebido, testoviron, enanthate…). The
+    // ENHANCED catalogue keys the same esters differently — test_u, test_e, test_c,
+    // test_p — and a protocol carrying its testosterone in the Enhanced tier stores rows
+    // under those ids. Deleting by the TRT ids alone never touched them, so a plan that
+    // was shortened kept its old doses: reported 2026-08-16 as a Nebido series cut to
+    // 16 Aug whose curve went on running to October, with the series card and the chart
+    // disagreeing on screen.
+    //
+    // _TC_TESTO_ALIAS is exactly the enhanced-id set, and it is already the map every
+    // other part of this file canonicalises through, so it is the right source rather
+    // than a second hand-maintained list. _tcAllCompIds itself is left alone — it also
+    // populates the ester dropdown, where the aliases would appear as duplicates.
+    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds().slice():[];
+    if (typeof _TC_TESTO_ALIAS !== 'undefined' && _TC_TESTO_ALIAS){
+      Object.keys(_TC_TESTO_ALIAS).forEach(function(_a){ if (_tid2.indexOf(_a) === -1) _tid2.push(_a); });
     }
+    // In PARALLEL, not one after another. This is ~10 ids now that both catalogue
+    // spellings are covered, and awaiting each in turn made every save ten sequential
+    // round-trips — slow on a phone, and it pushed the write far enough down the
+    // microtask queue to change when callers observe it.
+    await Promise.all(_tid2.map(function(_id){
+      return fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
+        +'&compound_id='+encodeURIComponent(_id)
+        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h})
+        .catch(function(){});   // one failed prune must not abort the rest, nor the write
+    }));
   }catch(_e){}
 
   var compIds=Object.keys(byComp);
@@ -4579,7 +4695,14 @@ function buildTCalc() {
   // drawn pmol/L values rather than recomputing them, so it cannot disagree with
   // the chart above it. Empty until then, and empty when the curve is uncalibrated.
   html += '<div id="tc-exposure-note"></div>';
-  if (validLog.length > 0) {
+  // Say the curve is still loading rather than drawing a partial one. See
+  // _tcInputsReady — each outstanding fetch calls buildTCalc when it lands, so this
+  // resolves on its own within a second or two.
+  if (!_tcInputsReady()) {
+    html += '<div style="padding:8px 16px 18px;font-size:11px;color:var(--muted2)">'
+         + 'Loading your injections and bloodwork\u2026 the curve is drawn once they are all in, '
+         + 'so it cannot change under you.</div>';
+  } else if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
     ['today','week','month','3mo','whole'].forEach(function(z) {
