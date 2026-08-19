@@ -53,7 +53,7 @@ const patchedScript = rawScript
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,measureText:()=>({width:0})};
 const mockEl = () => {
-  const el = {style:{},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,getContext:()=>mockCtx};
+  const el = {style:{},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,offsetLeft:0,scrollLeft:0,clientWidth:300,dataset:{},getContext:()=>mockCtx};
   Object.defineProperty(el,'innerHTML',  {get:()=>'',set:noop});
   Object.defineProperty(el,'textContent',{get:()=>'',set:noop});
   Object.defineProperty(el,'value',      {get:()=>'0',set:noop});
@@ -2173,7 +2173,18 @@ if (typeof G._tcFreeTSeries === 'function') {
   const _anSpread = (label, tp, bw) => {
     G._tcp = Object.assign({}, _anSave.tp||{}, tp);
     G._tcBwEntries = bw; G._tcGhStack = [];
-    const v = ['2026-08-13','2026-08-26','2026-09-30','2026-12-31']
+    // HORIZONS MUST BE RELATIVE TO TODAY, NOT HARDCODED.
+    // The assertion is that extending a plan FURTHER AHEAD cannot move today's value.
+    // These were fixed dates, and on 2026-08-16 the shortest ('2026-08-13') fell into
+    // the past: its last dose landed three days before today, so that series had stopped
+    // dosing while the others were still running. It then read 869.5 against 888.0 —
+    // correct pharmacology (a plan that ended really does give a lower level) measuring
+    // something the test was never written to measure. All seven _anSpread cases broke
+    // together the day it expired, and the three horizons still covering today agreed to
+    // the digit throughout, which is the invariant holding. Anchored to NOW it cannot
+    // rot again.
+    const _anFw = (n) => new Date(Date.now() + n*86400000).toISOString().slice(0,10);
+    const v = [_anFw(7), _anFw(30), _anFw(90), _anFw(180)]
       .map(e => _anToday(_anT.concat(_anEod(e))));
     const spread = Math.max(...v) - Math.min(...v);
     check('today is unchanged by the plan ahead — ' + label,
@@ -2195,7 +2206,8 @@ if (typeof G._tcFreeTSeries === 'function') {
   // The unit NEVER changes (CLAUDE.md): confidence degrades, pmol/L does not.
   G._tcp = Object.assign({}, _anSave.tp||{}, _anBase);
   G._tcBwEntries = [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]; G._tcGhStack = [];
-  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod('2026-08-26')).sort((a,b)=>a.date<b.date?-1:1), {});
+  const _anFutEnd = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);   // relative, for the same reason
+  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod(_anFutEnd)).sort((a,b)=>a.date<b.date?-1:1), {});
   check('a future-dated draw does not calibrate the curve', _anFut.measuredFT !== 217);
   check('  …and the curve is still drawn in pmol/L', _anFut.unitLabel === 'pmol/L');
 
@@ -2884,8 +2896,11 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
             manualLog:[{compId:'nebido', doseMg:'100', date:_d(3), seriesId:'sx'}]};
   let _calls = _arm();
   G._tcSetManualField(0, 'doseMg', '125');
-  await _flush();
+  // Assert the LOCAL edit before flushing. The sync that follows calls
+  // _tcLoadLogFromStack, which rebuilds manualLog from the record — empty in this
+  // fixture — so after the flush there is legitimately no row 0 to read.
   check('editing a dose updates the entry', G._tcp.manualLog[0].doseMg === '125');
+  await _flush();
   check('  …and reaches the backend, not just the local object',
     _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'),
     'calls: ' + _calls.map(c => c.method + ' ' + c.url.split('/').pop()).join(', '));
@@ -3287,6 +3302,97 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
   G.fetch = _spSave.f; G._userStacks = _spSave.us; G._activeStackIndices = _spSave.ai;
   G._stacksLoaded = _spSave.sl; G._injectionsCache = _spSave.c;
   G.saveStacksToBackend = _spSave.ssb;
+}
+
+// ── The cycle header states what is stored, and enhanced testo is matched by id ──
+// Two fixes, both about a claim the app made without the data to back it:
+//  1. buildToday's cycle line read `_st.cycle_length||12`, so a protocol with NO end
+//     date still printed "Week 12 of 12 · Ends <date>". That invented cycle was read as
+//     evidence a cycle had ended and sent a whole investigation to the wrong protocol.
+//  2. _isEnhTestosterone matched only on the NAME containing "testosterone". _TC_TESTO_
+//     ALIAS is the ester-id list T-Calc, the PK model and the curve all key on, so it is
+//     what "is this testosterone" means. Sustanon 250 and Testoviron Depot do not carry
+//     the word; such a compound would generate its own stream AND stay invisible to the
+//     curve — two streams for one molecule.
+console.log('\n── Cycle header + enhanced testosterone identity ──────────');
+{
+  const _hxSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cr:G._injCacheReady,
+                   sp:G._syncPending, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  // ── 2. identity-based detection ──
+  check('an enhanced ester is testosterone by its ID',
+    G._isEnhTestosterone({id:'test_u', name:'Testosterone Undecanoate (Nebido)'}) === true);
+  check('  …including one whose name never says "testosterone"',
+    G._isEnhTestosterone({id:'sustanon', name:'Sustanon 250'}) === true);
+  check('  …with the name check kept, so nothing detected before stops being detected',
+    G._isEnhTestosterone({id:'weird_id', name:'Testosterone Enanthate'}) === true);
+  check('  …and a non-testosterone compound is still not one',
+    G._isEnhTestosterone({id:'hgh', name:'HGH (Somatropin)'}) === false &&
+    G._isEnhTestosterone({id:'nandrolone', name:'Nandrolone Decanoate'}) === false);
+
+  // ── 1. the header ──
+  let _hdr = '';
+  const _origDoc = G.document;
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id !== 'today-cycle-info') return e;
+    return new Proxy(e, {get:(t,k)=> k==='textContent' ? _hdr : t[k],
+                         set:(t,k,v)=>{ if(k==='textContent') _hdr=v; else t[k]=v; return true; }});
+  };
+  G.document = _stub;
+  G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+  G._injectionsCache = {}; G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+  G._activeStackIndices = [0];
+
+  const _mk = (cl) => [{id:'A', name:'P', cycle_start:_bk(60), cycle_length:cl,
+                        peptides:[], trt:{}, enhanced:{}}];
+
+  G._userStacks = _mk(44); _hdr = ''; G.buildToday();
+  check('a real cycle length is still reported in full',
+    /Week \d+ of 44/.test(_hdr) && /Ends /.test(_hdr), _hdr);
+
+  G._userStacks = _mk(0); _hdr = ''; G.buildToday();
+  check('a protocol with no end date says so', /No end date/.test(_hdr), _hdr);
+  check('  …and never invents a 12-week cycle',
+    !/of 12/.test(_hdr) && !/Ends /.test(_hdr), _hdr);
+
+  G._userStacks = _mk(undefined); _hdr = ''; G.buildToday();
+  check('  …same when the length is absent entirely',
+    /No end date/.test(_hdr) && !/of 12/.test(_hdr), _hdr);
+  check('  …while still saying when it started',
+    /^Started /.test(_hdr), _hdr);
+
+  G.document = _hxSave.doc; G._userStacks = _hxSave.us; G._activeStackIndices = _hxSave.ai;
+  G._stacksLoaded = _hxSave.sl; G._injectionsCache = _hxSave.c;
+  G._injCacheReady = _hxSave.cr; G._syncPending = _hxSave.sp; G._injHidden = _hxSave.hid;
+}
+
+// ── Editing a series re-reads the injection cache ────────────────────────────
+// _tcSaveEditSeries synced the record and refetched the history, but never refreshed
+// _injectionsCache — and the curve also draws on that, via _tcProtocolInjections. So
+// shortening a series removed the doses from the record and left them in the cache, and
+// the curve kept drawing them: a Nebido run cut to 16 Aug still ran to October, looking
+// like the edit had been ignored. _tcConfirmAddSheet had always done this; the edit path
+// never did. Order matters — the cache must be refreshed BEFORE _tcLoadLogFromStack,
+// which reads it to rebuild manualLog.
+console.log('\n── T-Calc: an edit re-reads the cache ─────────────────────');
+{
+  const _esSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  const _i = _esSrc.indexOf('async function _tcSaveEditSeries()');
+  const _body = _esSrc.slice(_i, _i + 6000);
+  check('the edit path exists', _i > 0);
+  check('editing a series refreshes the injection cache, not just the history',
+    /refreshInjectionsCache/.test(_body));
+  check('  …in the order sync → history → cache → rebuild',
+    /_tcSyncLogToBackend\(\)[\s\S]*?_tcFetchHistory\(true\)[\s\S]*?refreshInjectionsCache[\s\S]*?_tcLoadLogFromStack\(\)/.test(_body));
+  // The delete path shares the hazard and already got this right — keep it that way.
+  const _d = _esSrc.indexOf('async function _tcRemoveSeries(');
+  check('  …and deleting a series does the same', /refreshInjectionsCache/.test(_esSrc.slice(_d, _d + 3000)));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -10632,8 +10738,12 @@ console.log('\n─────────────────────�
 
   const refIdx = rawScript.indexOf('async function refreshInjectionsCache()');
   const ref = rawScript.slice(refIdx, rawScript.indexOf('\n}', rawScript.indexOf('_injCacheReady=true', refIdx)));
+  // Still a finally, so a throw cannot leave Today spinning forever — the point of the
+  // original check. It now also wakes the plasma curve, which waits on this cache.
   check('refreshInjectionsCache sets _injCacheReady in a finally',
-    /finally\{\s*_injCacheReady=true;\s*\}/.test(ref));
+    /finally\{\s*_injCacheReady=true;/.test(ref));
+  check('  …and tells the curve the cache has landed',
+    /finally\{[\s\S]{0,400}?buildTCalc\(\)/.test(ref));
   check('  …and catches its own throws', /catch\(_e\)\{_logErr\('refreshInjCache',_e\);\}/.test(ref));
 
   // The gate itself must stay — the fix is that the flags always resolve, not that
@@ -11241,4 +11351,145 @@ console.log('\n── Today: finished cycle empty state ────────
   G.document = _ceSave.doc; G._userStacks = _ceSave.us; G._activeStackIndices = _ceSave.ai;
   G._stacksLoaded = _ceSave.sl; G._injectionsCache = _ceSave.c; G._injCacheReady = _ceSave.cr;
   G._syncPending = _ceSave.sp; G._injHidden = _ceSave.hid;
+}
+
+// ── Week strip: a year of history ─────────────────────────────────────────────
+// Henrik, 2026-08-17: "Make Today views day selector scrollable backwards in time
+// for a year." The strip ran NOW-7 .. NOW+6, so nothing older than last week could
+// be opened from Today at all.
+console.log('\n── Week strip: a year back ────────────────────────────────');
+{
+  const _wsSave = {doc:G.document, cache:G._injectionsCache, plog:G.window._peptideLog};
+  let _layout = false;                       // false = element has no layout yet
+  const _strip = {dataset:{}, scrollLeft:0, clientWidth:350, children:[],
+                  set innerHTML(v){ if(v==='') this.children=[]; }, get innerHTML(){ return ''; },
+                  appendChild(el){ el.offsetLeft = _layout ? (this.children.length+1)*50 : 0;
+                                   this.children.push(el); }};
+  G.document = Object.assign({}, _wsSave.doc, {
+    getElementById:(id)=> id==='week-strip' ? _strip : _wsSave.doc.getElementById(id),
+    createElement:()=>({style:{}, className:'', innerHTML:'', onclick:null,
+                        offsetLeft:0, offsetWidth:44}),
+  });
+  G._injectionsCache = {};
+  G.window._peptideLog = [];
+
+  G.buildWeekStrip();
+  check('the strip reaches a year back',            G.WEEK_STRIP_BACK === 365);
+  check('  …and the forward window is unchanged',   G.WEEK_STRIP_FWD === 6);
+  check('  …so it renders back + today + forward, plus the calendar card',
+    _strip.children.length === 373, `got ${_strip.children.length}`);
+  check('  …with the calendar card at the far-left end of the strip',
+    /week-cal/.test(_strip.children[0].className));
+  check('  …with exactly one tile marked today',
+    _strip.children.filter(e=>/(^|\s)today(\s|$)/.test(e.className)).length === 1);
+
+  // A build before the tab is laid out cannot centre anything, and must not claim it
+  // did — init() builds once immediately and again 100ms later.
+  check('a pre-layout build does not claim the strip is positioned',
+    _strip.dataset.wsCentered !== '1');
+
+  _layout = true;
+  G.buildWeekStrip();
+  const _centred = _strip.scrollLeft;
+  check('once laid out it centres on today',        _centred > 0);
+  check('  …and records that it did',               _strip.dataset.wsCentered === '1');
+
+  // The strip is rebuilt on every tick. Re-centring there would yank the user back
+  // from wherever they had scrolled, which makes a year of history unusable.
+  _strip.scrollLeft = 42;
+  G.buildWeekStrip();
+  check('a rebuild holds the scroll position instead of jumping to today',
+    _strip.scrollLeft === 42, `got ${_strip.scrollLeft}`);
+  check('  …and still renders the whole year',      _strip.children.length === 373);
+
+  G.document = _wsSave.doc; G._injectionsCache = _wsSave.cache;
+  G.window._peptideLog = _wsSave.plog;
+}
+
+// ── Month calendar ───────────────────────────────────────────────────────────
+// Henrik, 2026-08-19: "add a card last (to the left in the carousel) that opens a
+// new view with a traditional month/day table view. To access historic injections"
+console.log('\n── Month calendar ─────────────────────────────────────────');
+{
+  const _cSave = {doc:G.document, cache:G._injectionsCache, plog:G.window._peptideLog,
+                  vd:G._viewDate, sdi:G.showDayInline, st:G.switchTab};
+  const _mk = () => {
+    const el = {children:[], className:'', textContent:'', onclick:null, parentNode:null,
+                style:{cssText:''}, offsetLeft:0, offsetWidth:44, dataset:{},
+                appendChild(c){ c.parentNode = el; el.children.push(c); return c; },
+                removeChild(c){ el.children = el.children.filter(x=>x!==c); return c; }};
+    Object.defineProperty(el,'innerHTML',{get:()=>'', set(v){ if(v==='') el.children=[]; }});
+    return el;
+  };
+  const _body = _mk();
+  G.document = Object.assign({}, _cSave.doc, {createElement:()=>_mk(), body:_body,
+                                              getElementById:()=>null});
+  G._injectionsCache = {}; G.window._peptideLog = []; G._viewDate = null;
+  let _opened = null;
+  G.showDayInline = (d) => { _opened = d; };
+  G.switchTab = () => {};
+
+  G.showMonthCalendar();
+  const _ov = _body.children[_body.children.length-1];
+  const _sheet = _ov.children[0];
+  const _grid = _sheet.children[1];
+  check('the card opens a month view', !!_ov && !!_grid);
+
+  // CLAUDE.md: weeks start on Monday, everywhere.
+  check('the weekday header is Monday-first',
+    _grid.children.slice(0,7).map(c=>c.textContent).join('') === 'MTWTFSS',
+    _grid.children.slice(0,7).map(c=>c.textContent).join(''));
+
+  const _now = new Date();
+  const _dim = new Date(_now.getFullYear(), _now.getMonth()+1, 0).getDate();
+  const _lead = [1,2,3,4,5,6,0].indexOf(new Date(_now.getFullYear(), _now.getMonth(), 1).getDay());
+  const _cells = _grid.children.slice(7);
+  check('  …the month starts on the right weekday',
+    _cells.filter(c=>c.className==='cal-pad').length === _lead, `lead ${_lead}`);
+  check('  …and every day of the month has a cell',
+    _cells.filter(c=>/cal-day/.test(c.className)).length === _dim, `expected ${_dim}`);
+  check('  …with today marked',
+    _cells.filter(c=>/cal-today/.test(c.className)).length === 1);
+
+  // The calendar navigates; showDayInline is still the only thing that renders or
+  // ticks a day's doses, so there is no second copy of that logic.
+  const _firstDay = _cells.filter(c=>/cal-day/.test(c.className))[0];
+  _firstDay.onclick();
+  // _opened is a Date from the sandbox realm, so instanceof against this file's Date
+  // is false — duck-type it instead.
+  check('tapping a day opens it in Today',
+    !!_opened && typeof _opened.getDate === 'function' &&
+    _opened.getDate() === 1 && _opened.getMonth() === _now.getMonth());
+  check('  …and closes the calendar', _body.children.indexOf(_ov) === -1);
+
+  // Stepping back a month is how you reach anything older than the strip.
+  G.showMonthCalendar();
+  const _ov2 = _body.children[_body.children.length-1];
+  const _sheet2 = _ov2.children[0];
+  const _title = () => _sheet2.children[0].children[1].textContent;
+  const _thisMonth = _title();
+  _sheet2.children[0].children[0].onclick();          // ‹
+  check('‹ steps to the previous month', _title() !== _thisMonth);
+  _sheet2.children[0].children[2].onclick();          // ›
+  check('  …and › comes back', _title() === _thisMonth);
+
+  // Dots follow the same rules as the strip: logged wins, scheduled-not-ticked is dim.
+  const _dk = (o) => { const t = new Date(); t.setDate(t.getDate()+o);
+                       return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const _yst = new Date(); _yst.setDate(_yst.getDate()-1);
+  G._injectionsCache = {[_dk(-1)]:[{dot:'#aaa', active:true, logged:true},
+                                   {dot:'#bbb', active:true, logged:false}]};
+  let _info = G._calDots(_yst);
+  check('a past day shows its logged doses only', _info.dots.join(',') === '#aaa' && _info.logged === true);
+  G._injectionsCache = {[_dk(-1)]:[{dot:'#bbb', active:true, logged:false}]};
+  _info = G._calDots(_yst);
+  check('  …and a missed scheduled dose shows dim', _info.dim === true && _info.dots.join(',') === '#bbb');
+
+  const _tmr = new Date(); _tmr.setDate(_tmr.getDate()+1);
+  G._injectionsCache = {[_dk(1)]:[{dot:'#ccc', active:true, logged:false}]};
+  _info = G._calDots(_tmr);
+  check('a future day shows what is scheduled', _info.dots.join(',') === '#ccc' && _info.dim === false);
+
+  G.document = _cSave.doc; G._injectionsCache = _cSave.cache; G.window._peptideLog = _cSave.plog;
+  G._viewDate = _cSave.vd; G.showDayInline = _cSave.sdi; G.switchTab = _cSave.st;
 }
