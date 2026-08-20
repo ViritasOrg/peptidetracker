@@ -62,7 +62,15 @@ function _wizFlow(){
   // Testosterone base is chosen first — every enhanced cycle runs on one, and which
   // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
   // recommendation), then the raw Enhanced compound list.
-  if(hasEnhanced){steps.push('base');steps.push('advise');steps.push('enhanced');}
+  // 'base' picks the testosterone an enhanced cycle runs on. With the single Compounds
+  // toggle both flags are set together, so the 'trt' step above has ALREADY asked for
+  // the ester, dose and cadence — pushing 'base' as well would ask for testosterone
+  // twice in one run and let the two answers disagree. It stays for the path that has
+  // enhanced without TRT, which is how an older draft can still arrive here.
+  if(hasEnhanced){
+    if(!hasTRT)steps.push('base');
+    steps.push('advise');steps.push('enhanced');
+  }
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
   var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
@@ -86,9 +94,43 @@ function wizRender(){
   var body=document.getElementById('wiz-body');
   var footer=document.getElementById('wiz-footer');
   body.scrollTop=0;
-  (_WIZ_RENDERERS[flow[idx]]||wizStepReview)(body,footer);
+
+  // ── A STEP THAT IS NOT READY YET MUST SAY SO ──────────────────────────────
+  // Henrik, 2026-08-20: "The wizard needs a loading spinner between screens, I am
+  // having slow internet and you are sometimes presented with an empty screen for a
+  // while."
+  //
+  // wizRender used to hand `body` straight to the renderer without clearing it. A step
+  // that needs backend data — the compound catalogue, a recommendation — returns early
+  // and fills the body later, so on a slow connection the user sat looking at whatever
+  // happened to be there: the previous step, or nothing.
+  //
+  // Painting the spinner FIRST costs nothing when the step is ready. This is one
+  // synchronous tick: a renderer that writes immediately replaces the spinner before
+  // the browser paints, so there is no flash. Only a renderer that returns without
+  // writing leaves it up — which is exactly when it should be up.
+  //
+  // The footer goes disabled with it, so Next cannot be pressed through a half-loaded
+  // step. Whatever the renderer writes replaces both.
+  body.innerHTML=_WIZ_LOADING_HTML;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+  try{
+    (_WIZ_RENDERERS[flow[idx]]||wizStepReview)(body,footer);
+  }catch(err){
+    // A throwing renderer must not strand the user on a spinner that never resolves.
+    if(typeof _logErr==='function')_logErr('wizRender:'+flow[idx],err);
+    body.innerHTML='<div style="padding:40px 20px;text-align:center;">'
+      +'<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:8px;">This step could not be drawn</div>'
+      +'<div style="font-size:12px;color:var(--muted2);line-height:1.55;margin-bottom:18px;">'+_esc(String((err&&err.message)||err))+'</div>'
+      +'<button class="btn btn-primary" onclick="wizRender()">Try again</button></div>';
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+  }
   body.scrollTop=0;
 }
+// Uses the app's existing spinner (css/main.css: .today-spinner/.today-spinner-dot),
+// so the wizard looks like the rest of the app while it waits.
+var _WIZ_LOADING_HTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>'
+  +'<div style="text-align:center;font-size:12.5px;color:var(--muted2);margin-top:-24px">Loading…</div>';
 // ── Updated save to include cycle_length ────────────────────────────────────
 async function wizSave(){
   var btn=document.querySelector('.wiz-footer .btn.btn-primary');
@@ -106,10 +148,27 @@ async function wizSave(){
     if(_userStacks.length===1){_activeStackIndices=[0];if(typeof _ensureCycleStart==='function')_ensureCycleStart(0);}
   }
   _userStacks=_userStacks.slice(0,4);
-  // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
-  // is assigned to it, warn and let the user keep one source (may clear proto.trt).
-  // Fast-path: only engage when this stack is the current T-Calc target.
-  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&proto&&_tcp.targetStackId===proto.id)await _reconcileStackTestoSource(proto);
+  // ── THE WIZARD'S TESTOSTERONE STEP WRITES INTO THE PROTOCOL ───────────────
+  // It used to write into T-Calc's simple planner and then hand the user over to
+  // that tab. Phase 6 deleted the planner, and this hand-off was left behind: the
+  // dose and cadence went into `_tcp.simplePlan`, a field the profile now keeps
+  // only so old saves are not rewritten and which NOTHING reads. So a user who
+  // filled in all four fields — compound, dose, cadence, first injection — got
+  // their schedule silently discarded and was dropped on a tab with no planner on
+  // it. Nothing was scheduled, and nothing said so.
+  //
+  // The protocol is the only scheduler now, so the plan folds into the protocol's
+  // own TRT compound before the save, where generateAndPushInjections() below can
+  // see it. Same shape the classic multi-compound step produces, so there is one
+  // representation of a scheduled compound and not two.
+  //
+  // Only when the classic step did NOT configure testosterone inline: that path
+  // already wrote real compounds, and overwriting them with a half-filled planner
+  // is what `_trtInline` has always guarded against.
+  _wizFoldTrtPlanIntoProto(proto);
+  // The single-source guard that stood here is gone with _reconcileStackTestoSource
+  // (Phase 8): a protocol can no longer hold testosterone from two sources, so there
+  // is nothing left to reconcile.
   var res=await saveStacksToBackend();
   updateWEEKLY();
   var _savedStack=_wiz.stackIndex>=0?_userStacks[_wiz.stackIndex]:null;
@@ -119,56 +178,18 @@ async function wizSave(){
   buildSchedule();
   buildStackStore();
   closeWizard();
-  // Hand off to T-Calc when this protocol involves testosterone: it is where the
-  // schedule is built, and the stack is assigned as the T-Calc target so the plan and
-  // the protocol stay linked.
+  // WHERE THE USER LANDS after building a protocol.
   //
-  // The handoff used to be skipped when the user had configured testosterone inline in
-  // the classic multi-compound step, because that config generated its own injections.
-  // It does not any more (rule 2026-08-14 — T-Calc is the only scheduler), so skipping
-  // it left the classic path a dead end: settings saved, nothing scheduled, and no
-  // route to the tab that would schedule it. The classic step still owns what the
-  // protocol RECORDS; T-Calc owns when it is injected, and the user lands there either
-  // way. `_trtInline` still guards the plan commit below, so a classic configuration
-  // is never silently overwritten by a half-filled planner.
+  // This used to hand off to T-Calc whenever the protocol carried testosterone,
+  // because T-Calc was where the schedule got built. It is not any more — Plan ▸
+  // Compounds is — and sending someone to a tab that can only draw a curve, right
+  // after they had just described a dose and a cadence, is what made the silent
+  // loss of that schedule invisible. They saw a testosterone tab open and assumed
+  // it had taken the plan.
   //
-  // The trigger is WHAT THE PROTOCOL CARRIES, not which goal chip was ticked. Gating
-  // on `goals.includes('trt')` missed the whole Enhanced path: an enhanced cycle picks
-  // its testosterone BASE in the wizard's own `base` step (every enhanced cycle runs on
-  // one), which lands in stack.enhanced.compounds with goals === ['enhanced']. That
-  // protocol now generates no testosterone — correct — and got no hand-off either, so
-  // the ester was configured and then simply never scheduled anywhere. Henrik asked for
-  // "TRT and Enhanced should use T-calc"; this is the Enhanced half.
-  var _testoIn = _stackTestoComp(_savedStack);
-  var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0 || !!_testoIn;
-  var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
-  // An Enhanced cycle has no _wiz.trtPlan to commit — its ester came from the `base`
-  // step. Carry that choice across so the planner opens on the right compound instead
-  // of blank; canonicalised, because the enhanced catalogue keys esters under its own
-  // ids (test_u → nebido). Only the ester, and only when the plan has none: the dose
-  // and cadence are the user's to set in T-Calc, and inventing them here would be
-  // inventing a schedule nobody asked for.
-  if(_testoIn && _testoIn.tier==='enhanced' && typeof _tcp!=='undefined' && _tcp){
-    var _baseId=(typeof _tcCanonCompId==='function')?_tcCanonCompId(_testoIn.c.id):_testoIn.c.id;
-    var _sp=_tcp.simplePlan||{};
-    if(_baseId && !_sp.compId){_sp.compId=_baseId;_tcp.simplePlan=_sp;}
-  }
-  // The wizard's TRT step edits the T-Calc simple plan. Commit it here, so the
-  // schedule the user just built is the one T-Calc draws.
-  if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
-     typeof _tcp!=='undefined' && _tcp){
-    var _wp=_wiz.trtPlan;
-    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceN:parseInt(_wp.cadenceN,10)||0,cadenceUnit:_wp.cadenceUnit||'week',cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
-    _tcp.plannerMode='simple';
-  }
-  if(_wantsTrt && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
-     typeof buildTCalc==='function' && document.getElementById('tab-btn-tcalc')){
-    _tcp.targetStackId=_savedStack.id;
-    if(typeof _tcSaveProfile==='function')_tcSaveProfile();
-    switchTab('tcalc',document.getElementById('tab-btn-tcalc'));
-  } else {
-    switchTab('stacks',document.getElementById('tab-btn-stacks'));
-  }
+  // Everyone now lands on the protocol they just built, where the compound they
+  // configured is visible and editable.
+  switchTab('stacks',document.getElementById('tab-btn-stacks'));
   if(res.synced===false){
     // Data saved locally; backend sync failed — show a brief banner
     var nb=document.createElement('div');
@@ -250,11 +271,127 @@ function editStack(idx){_editReadOnly=false;showStackEditor(idx);}
 // ── Inline Stack Editor ──────────────────────────────────────────────────────
 var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;var _trtLogCache={};
 function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// One spelling per molecule (Phase 1 chose the PK ids). Delegates rather than
+// duplicating: _tcCanonCompId and _isEnhTestosterone are what the PK model and the
+// curve already key on, and a second opinion about what counts as testosterone is
+// exactly how this app grew two of everything.
+function _canonCompoundId(id){
+  return (typeof _tcCanonCompId==='function')?_tcCanonCompId(id):id;
+}
+function _isTestoCompoundId(id){
+  if(typeof _isEnhTestosterone==='function'&&_isEnhTestosterone({id:id}))return true;
+  var cid=_canonCompoundId(id);
+  return (typeof TRT_CAT!=='undefined')&&TRT_CAT.some(function(c){return c.id===cid;});
+}
+
+// ONE TIER FOR TESTOSTERONE. Phase 4 of the unified Plan rewrite: TRT and Enhanced
+// merge into a single Compounds tier. A protocol written before the merge can hold the
+// same molecule in either block — Protocol 2 held `enhanced/test_u` while T-Calc wrote
+// `trt/nebido`, and that split is what let one protocol carry 26 rows of one stream
+// beside 6 of another for the same testosterone.
+//
+// Folding happens in the EDIT BUFFER, so nothing is rewritten until the user saves.
+// Ids are canonicalised to the PK spelling (Henrik's choice, 2026-08-19) so the
+// compound lands on the card the merged editor actually renders.
+function _editFoldTestosterone(buf){
+  if(!buf||!buf.enhanced||!Array.isArray(buf.enhanced.compounds))return 0;
+  var moved=0;
+  var keep=[];
+  buf.enhanced.compounds.forEach(function(c){
+    if(!_isTestoCompoundId(c.id)){keep.push(c);return;}
+    if(!buf.trt)buf.trt={};
+    if(!Array.isArray(buf.trt.compounds))buf.trt.compounds=[];
+    var cid=_canonCompoundId(c.id);
+    // Already configured on the TRT side: the TRT entry wins, because that is the one
+    // T-Calc has been scheduling from. Dropping the duplicate is the whole point.
+    var dup=buf.trt.compounds.some(function(t){return _canonCompoundId(t.id)===cid;});
+    if(!dup){
+      var moved_c=JSON.parse(JSON.stringify(c));
+      moved_c.id=cid;
+      // A RATE BECOMES AN AMOUNT ON THE WAY IN. The Enhanced block stores a rate
+      // ("350 mg/week"); this block stores what goes in the syringe. Carrying the rate
+      // across is what produced a dose the editor could not display (2026-08-19), so
+      // convert here, where the cadence that defines the conversion is still attached.
+      if(String(moved_c.unit||'').indexOf('/')>=0&&typeof _enhDosePerInjection==='function'){
+        var _pd=_enhDosePerInjection(moved_c);
+        moved_c.dose=_pd.dose; moved_c.unit=_pd.unit;
+      }
+      buf.trt.compounds.push(moved_c);
+    }
+    moved++;
+  });
+  if(moved){
+    buf.enhanced.compounds=keep;
+    buf.enhanced.enabled=keep.length>0;
+    if(buf.trt.compounds.length)buf.trt.enabled=true;
+  }
+  return moved;
+}
+
+// ── Migrating a stored protocol to the merged tier ───────────────────────────
+// Henrik, 2026-08-19: "any pre existing protocol needs to be merged into the new
+// format" and then "Ok just migrate" — i.e. do it to the stored protocols rather
+// than waiting for each one to be opened and saved.
+//
+// The same fold the editor applies, run over every protocol and written back. It
+// moves testosterone into the one tier under its canonical id; nothing else moves,
+// no protocol is merged into another, and no injection row is touched. The
+// generator still suppresses testosterone until Phase 5, so this changes what the
+// protocol SAYS, not what it schedules — which is what makes it safe to run first.
+// Takes the list it operates on, defaulting to the app's. A migration that can only
+// read a global cannot be exercised without mutating one.
+function _migrateProtocolsReport(stacks){
+  var moves=[];
+  (stacks||_userStacks||[]).forEach(function(st,i){
+    var copy=JSON.parse(JSON.stringify(st));
+    var before=((copy.enhanced&&copy.enhanced.compounds)||[]).filter(function(c){
+      return _isTestoCompoundId(c.id);
+    });
+    if(!before.length)return;
+    var hadTrt=(((copy.trt&&copy.trt.compounds)||[]).map(function(c){return _canonCompoundId(c.id);}));
+    _editFoldTestosterone(copy);
+    before.forEach(function(c){
+      var cid=_canonCompoundId(c.id);
+      moves.push({idx:i, stack:st.name||st.id||('#'+i), from:c.id, to:cid,
+                  dose:c.dose, unit:c.unit,
+                  dropped:hadTrt.indexOf(cid)>=0});
+    });
+  });
+  return moves;
+}
+
+async function migrateProtocolsToCompounds(stacks){
+  var list=stacks||_userStacks||[];
+  var moves=_migrateProtocolsReport(list);
+  if(!moves.length){
+    alert('Nothing to migrate — every protocol already keeps its testosterone in one tier.');
+    return;
+  }
+  var lines=moves.map(function(m){
+    return '· ' + m.stack + ': ' + m.from + ' → ' + m.to +
+           (m.dose ? ' (' + m.dose + (m.unit ? ' ' + m.unit : '') + ')' : '') +
+           (m.dropped ? ' — duplicate, the existing entry is kept' : '');
+  }).join('\n');
+  if(!confirm('Merge ' + moves.length + ' compound' + (moves.length===1?'':'s') +
+              ' into the Compounds tier?\n\n' + lines +
+              '\n\nProtocols stay separate and no injection is added, changed or ' +
+              'deleted. This rewrites the protocol config in the backend.')) return;
+  var n=0;
+  list.forEach(function(st){ n+=_editFoldTestosterone(st); });
+  try{
+    if(typeof saveStacksToBackend==='function')await saveStacksToBackend();
+  }catch(e){ _logErr('migrateProtocols', e); alert('Save failed — nothing was migrated.'); return; }
+  if(typeof buildStackStore==='function')buildStackStore();
+  if(typeof buildToday==='function')buildToday();
+  alert('Migrated ' + n + ' compound' + (n===1?'':'s') + ' into the Compounds tier.');
+}
+
 function showStackEditor(idx){
   if(idx<0||idx>=_userStacks.length)return;
   _editIdx=idx;_editBuf=JSON.parse(JSON.stringify(_userStacks[idx]));
   if(_editBuf.cycle_length==null)_editBuf.cycle_length=12;
   if(!_editBuf.peptides)_editBuf.peptides=[];
+  _editFoldTestosterone(_editBuf);
   _stackViewTab='peptides';_editInnerTab='peptides';
   renderStackEditor();
 }
@@ -312,10 +449,10 @@ function renderStackEditor(){
       html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">'+(_noEnd?'No end date':''+cycle+' wk cycle')+' · No start date</div>';
     }
     html+=_stackTabBar(_stackViewTab,'setStackViewTab');
-    if(_stackViewTab==='trt'){
+    if(_stackViewTab==='compounds'){
+      // Same composition as the editor, read-only: testosterone first, then by class.
       html+=_renderTRTViewTab(st);
-    }else if(_stackViewTab==='enhanced'){
-      html+=(_userTier||1)>=3?_renderEnhancedViewTab(st):_renderEnhancedUpgradeCTA();
+      html+=((_userTier||1)>=3?_renderEnhancedViewTab(st):_renderEnhancedUpgradeCTA());
     }else{
       html+='<div class="wiz-section">Peptides</div>';
       if(!st.peptides||!st.peptides.length){
@@ -347,14 +484,14 @@ function renderStackEditor(){
     }
     html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
     html+='<button onclick="buildStackStore()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
-    html+='<button onclick="_editReadOnly=false;_editInnerTab=_stackViewTab;renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
+    html+='<button onclick="_editReadOnly=false;_editInnerTab=_compTabId(_stackViewTab);renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
     html+='<button onclick="toggleStack('+_editIdx+');renderStackEditor()" style="flex:1;background:'+(isActive?'var(--surface2)':'var(--accent)')+';border:'+(isActive?'1px solid var(--border)':'none')+';color:'+(isActive?'var(--danger)':'#000')+';border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">'+(isActive?'Deactivate':'Activate')+'</button>';
     html+='</div>';
     html+='<div style="padding-bottom:20px;">';
     html+='<button onclick="deleteStack('+_editIdx+')" style="width:100%;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:0.7;">Delete Protocol</button>';
     html+='</div>';
     body.innerHTML=html;
-    if(_stackViewTab==='enhanced'&&(_userTier||1)>=3)_ensurePctPanel(st);
+    if(_stackViewTab==='compounds'&&(_userTier||1)>=3)_ensurePctPanel(st);
     return;
   }
 
@@ -376,10 +513,8 @@ function renderStackEditor(){
   CYCLE_WEEKS.forEach(function(w){var mo=w/4;html+='<option value="'+w+'"'+(cycle===w?' selected':'')+'>'+(mo===1?'1 month':mo+' months')+'</option>';});
   html+='</select>';
   html+=_stackTabBar(_editInnerTab,'setEditInnerTab');
-  if(_editInnerTab==='trt'){
-    html+=_renderEditTRT(st.trt);
-  }else if(_editInnerTab==='enhanced'){
-    html+=(_userTier||1)>=3?_renderEditEnhanced(_editBuf.enhanced||{enabled:false,compounds:[]}):_renderEnhancedUpgradeCTA();
+  if(_editInnerTab==='compounds'){
+    html+=_renderEditCompounds(st);
   }else{
     html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
     html+='<div class="wiz-section" style="margin:0;">Peptides</div>';
@@ -447,9 +582,138 @@ function editToggleDay(el,pi,di){
   else if(p.days.length>1){p.days.splice(i,1);el.classList.remove('sel');}
 }
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
-function editToggleTRT(){if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
-function editToggleTRTCompound(id){if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
-function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+// Same defence in depth as editToggleEnhancedCompound: the locked cards do not call
+// these, but rendering is presentation and these are what change the protocol. Turning
+// the tier ON is refused below tier 2; turning it OFF is not, so a protocol carrying
+// testosterone after a downgrade is not frozen that way.
+function editToggleTRT(){
+  if((_userTier||1)<2 && !(_editBuf.trt&&_editBuf.trt.enabled)){ showCompoundUpgrade('testosterone'); return; }
+  if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
+function editToggleTRTCompound(id){
+  var _has=((_editBuf.trt&&_editBuf.trt.compounds)||[]).some(function(c){return c&&c.id===id;});
+  if((_userTier||1)<2 && !_has){ showCompoundUpgrade(id); return; }
+  if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
+// A SELECT MUST NEVER DISPLAY A UNIT IT IS NOT HOLDING.
+// Reported 2026-08-19: "Choosing 100mg every 2 day generates a 28mg dose instead of the
+// planned 100mg." The entry stored unit "mg/week" — carried in from the Enhanced block
+// by the tier migration — but this dropdown offered only mg/ml/IU/%. A <select> whose
+// options do not contain its value renders the FIRST option, so the screen said "100 mg"
+// while storage said "100 mg/week", and the generator's rate conversion then divided it:
+// 100 / 7 * 2 = 28.6 mg. Every part of that chain was doing its job with a value the
+// user had never been shown.
+//
+// The list therefore covers the rate units too, and any unit actually stored is appended
+// if it is still not in the list. A wrong unit the user can SEE is a wrong unit the user
+// can fix; a wrong unit the UI hides is a dose error.
+var TRT_UNITS=['mg','ml','IU','%','mg/week','mg/day','mg/EOD'];
+function _trtUnitOptions(sel){
+  var cur=String(sel||'mg');
+  var list=TRT_UNITS.slice();
+  if(list.indexOf(cur)<0)list.push(cur);
+  return list.map(function(u){
+    return '<option'+(u===cur?' selected':'')+'>'+u+'</option>';
+  }).join('');
+}
+
+// ── Half-life on every compound card ─────────────────────────────────────────
+// Henrik, 2026-08-19: "For all compounds can we list half time? Instead of the
+// 'short ester' etc."
+//
+// "Short ester", "Long-acting depot" and the class label are ways of saying a number
+// without saying it. The number is what decides injection frequency, how fast a change
+// shows up, and how long a side effect persists after stopping — so it goes on the card,
+// where compounds are compared.
+//
+// The data is already in the catalogues, from the backend: peptides carry `halfLife`,
+// enhanced compounds carry `cadence.halfLife`, and the testosterone esters carry theirs
+// in TRT_GUIDE and (authoritatively) in the PK catalogue the curve keys on. Nothing is
+// invented here: a compound with no published half-life keeps whatever its card said
+// before rather than being given a number.
+// The vial spec ("Testosterone Undecanoate 1000mg/4ml") is concrete data, not a vague
+// descriptor, so it survives — behind the half-life rather than instead of it.
+function _metaWithHalfLife(entry,fallback){
+  var hl=_halfLifeLabel(entry);
+  if(!hl)return fallback||'';
+  return fallback?(hl+' · '+fallback):hl;
+}
+
+function _halfLifeOf(entry){
+  if(!entry)return '';
+  var id=entry.id;
+  // THE MERGED CATALOGUE FIRST. /compounds/catalog joins each compound to its PK entry,
+  // so `pk.halfLife` is the figure the plasma curve integrates — no client-side
+  // reconciliation, which is the whole point of having merged them in the backend.
+  if(entry.pk&&entry.pk.halfLife)return String(entry.pk.halfLife);
+  if(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length){
+    var m=_COMPOUND_CATALOG.find(function(e){return e.id===id||e.id===_canonCompoundId(id);});
+    if(m&&m.pk&&m.pk.halfLife)return String(m.pk.halfLife);
+    if(m&&m.cadence&&m.cadence.halfLife&&!entry.halfLife)return String(m.cadence.halfLife);
+  }
+  // Below: the pre-merge sources. They stay as the fallback for a backend that predates
+  // /compounds/catalog, and for the bundled offline constants. The two DO disagree about
+  // the same molecule — enanthate is "~7 days" in the enhanced list and "~4.5 days" in
+  // the PK list — so the PK figure still wins here, for the same reason.
+  if(typeof _tcExtraCatalog!=='undefined'&&_tcExtraCatalog){
+    var x=_tcExtraCatalog.find(function(e){return e.id===id||e.id===_canonCompoundId(id);});
+    if(x&&x.halfLife)return String(x.halfLife);
+  }
+  if(typeof TRT_GUIDE!=='undefined'&&TRT_GUIDE){
+    var g=TRT_GUIDE[id]||TRT_GUIDE[_canonCompoundId(id)];
+    if(g&&g.halfLife)return String(g.halfLife);
+  }
+  // Everything the PK model does not carry — nandrolone, orals, GH, peptides.
+  if(entry.halfLife)return String(entry.halfLife);
+  if(entry.cadence&&entry.cadence.halfLife)return String(entry.cadence.halfLife);
+  return '';
+}
+
+// The stored strings are written for a detail panel — "~56 days plateau-equivalent
+// (37-75 d individual range)" does not belong on a 44px-wide card. Keep the leading
+// figure, drop the qualification, and let the info sheet carry the rest.
+function _halfLifeLabel(entry){
+  var raw=_halfLifeOf(entry);
+  if(!raw)return '';
+  // Keep the first clause that actually states a duration. Splitting blindly on the
+  // first separator turned Sustanon's "blended esters (~1–15 days); effective ~4–5 days"
+  // into "t½ blended esters", which is the vague phrasing this change exists to remove.
+  // Not on '·': a blend states both components that way ('GHRH ~30 min · IPA ~2 h')
+  // and keeping only the first would hide half the answer.
+  var parts=String(raw).split(/[;]|\s—\s/);
+  var head='';
+  for(var i=0;i<parts.length;i++){
+    var t=parts[i].trim();
+    if(/\d/.test(t)){head=t;break;}
+  }
+  if(!head)head=parts[0].trim();
+  // Drop a parenthetical only when the figure survives without it.
+  var noParen=head.replace(/\s*\([^)]*\)\s*/g,' ').trim();
+  if(/\d/.test(noParen))head=noParen;
+  head=head.replace(/[,.]$/,'');
+  return head?('t½ '+head):'';
+}
+
+function _renderEditTRT(trt){if(!trt)trt={};
+  // ── TIER 1 SEES TESTOSTERONE TOO, LOCKED (2026-08-20) ─────────────────────
+  // Henrik: "Tier 1 & 2 should see everything but greyed out if not included in
+  // their tier." Tier 1 is the peptide tier and has no testosterone access, so this
+  // group renders in full and locked rather than being hidden — the same treatment
+  // the enhancement classes get one tier up. Whole catalogue at every tier; what the
+  // tier decides is what you can switch ON.
+  //
+  // Locked here rather than through _renderEditEnhanced because testosterone lives in
+  // the TRT block, keyed on TRT_CAT and the PK ids. Same lock, same overlay.
+  if((_userTier||1)<2){
+    var lockedHtml='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><span style="font-size:13px;color:var(--muted2)">🔒</span></div>';
+    (typeof TRT_CAT!=='undefined'?TRT_CAT:[]).forEach(function(c){
+      lockedHtml+='<div class="pep-card" onclick="showCompoundUpgrade(\''+_esc(String(c.id))+'\')" style="margin-bottom:6px;opacity:0.45;cursor:pointer">'
+        +'<div class="pep-dot-sm" style="background:'+c.dot+'"></div>'
+        +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div>'
+        +'<div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div>'
+        +'<div class="pep-chk" style="font-size:13px;color:var(--muted2)">🔒</div></div>';
+    });
+    return lockedHtml;
+  }
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -504,7 +768,6 @@ async function saveEditBuf(){
   // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
   // is assigned to it, warn and let the user keep one source (may clear _editBuf.trt).
   // Fast-path: only engage when this stack is the current T-Calc target.
-  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&_editBuf&&_tcp.targetStackId===_editBuf.id)await _reconcileStackTestoSource(_editBuf);
   updateWEEKLY();
   await saveStacksToBackend();
   if(_editBuf&&_editBuf.cycle_start){
@@ -513,7 +776,7 @@ async function saveEditBuf(){
     var _cycId=_stackCycleId(_editBuf);
     for(var _pi=0;_pi<_oldProtoCids.length;_pi++){
       if(!_newProtoCids.includes(_oldProtoCids[_pi])){
-        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cycId)+'&compound_id='+encodeURIComponent(_oldProtoCids[_pi])+'&from='+dateKey(_editToday0)+'&unlogged_only=true',{method:'DELETE',headers:authHeaders()});}catch(e){_logErr('delOrphanInj',e);}
+        await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
     _trtLogCache={};
@@ -874,13 +1137,24 @@ function _noteInjSuppressed(stack,cycleId,c,reason){
 }
 // The banner shown wherever testosterone is configured but not scheduled. Deep-links
 // to T-Calc, which is where the dose, cadence and dates actually live now.
-function _tcalcOwnsTestoNote(what){
-  return '<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin-bottom:10px">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
-      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Scheduled in T-Calc</div>'
-      +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open →</div>'
-    +'</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_esc(what||'Testosterone')+' is planned in T-Calc, which is the only place testosterone is scheduled — one stream, one plasma curve. The settings here are kept for reference and generate no injections. Tap to set the ester, dose and cadence.</div>'
+// The "Scheduled in T-Calc" note explained the 2026-08-14 suppression: a testosterone
+// that sat in a protocol and generated nothing. Phase 5 removed the suppression, so the
+// note would now be a lie — the compound schedules from right here.
+//
+// It is replaced, not simply deleted, because one case still needs explaining: a
+// protocol that has not been migrated yet holds its testosterone under the Enhanced
+// spelling, which still schedules but under a non-canonical id. That is worth a nudge,
+// and nothing else is.
+function _tcalcOwnsTestoNote(what){ return ''; }
+
+function _unmigratedTestoNote(c){
+  if(!c||!_isTestoCompoundId(c.id))return '';
+  if(_canonCompoundId(c.id)===c.id)return '';
+  return '<div style="background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin:8px 0;">'
+    +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc;margin-bottom:3px">Older format</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_esc((c&&(c.name||c.id))||'This compound')
+    +' is stored under its old id (<code>'+_esc(c.id)+'</code>). It schedules normally. '
+    +'Settings ▸ Data ▸ Merge tiers moves it to <code>'+_esc(_canonCompoundId(c.id))+'</code>.</div>'
   +'</div>';
 }
 // Renders the schedule control: mode chips, then either weekday chips or an interval
@@ -980,29 +1254,72 @@ function wizStepGoals(body,footer){
     html+='<div class="goal-chip '+sel+'" onclick="wizToggleGoal(\''+g.id+'\')">'+g.icon+' '+g.label+'</div>';
   });
   html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:8px;margin-bottom:16px;">Select all that apply — filters the peptide catalogue.</div>';
+  // ── ONE SECTION, ONE TOGGLE: COMPOUNDS ────────────────────────────────────
+  // Henrik, 2026-08-20: "Wizard still have the choice between TRT and Enhanced, this
+  // isn't true anymore" and then, after I merged only the headings: "Why you ignore
+  // this? TRT and Enhanced should never be separated."
+  //
+  // He is right, and the headings were the smaller half. Two toggles that grey each
+  // other out ARE the separation — they make the user pick which of two places their
+  // testosterone lives, which is exactly the question Phase 4 removed by merging the
+  // tiers. Plan ▸ Compounds holds testosterone beside the 19-nors, orals and GH; the
+  // wizard now asks the same single question.
+  //
+  // ONE toggle. On means "this protocol has compounds", and the steps that follow
+  // pick which. Testosterone is chosen in the 'trt' step for everyone; the rest of the
+  // catalogue follows in the 'enhanced' step, locked per tier by the same
+  // _compoundAllowedForTier the Compounds tab uses. Tier is what a compound costs, not
+  // a fork in the flow.
   if(_wizTier()>=2){
-    html+='<div class="wiz-section">TRT</div>';
-    if(enhOn){
-      html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Not available — Testosterone is already included in the Enhanced cycle.</div>';
-    }else{
-      html+='<div class="trt-toggle" onclick="wizToggleGoalTRT()"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw'+(trtOn?' on':'')+'"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'+(trtOn?'Compound, dose &amp; schedule configured in the next step.':'Add Testoviron, Nebido or another ester to your cycle.')+'</div>';
-    }
-  }
-  if(_wizTier()>=3){
-    html+='<div class="wiz-section">Enhanced Cycle</div>';
-    if(trtOn){
-      html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Not available — disable the TRT protocol above first.</div>';
-    }else{
-      html+='<div class="trt-toggle" onclick="wizToggleGoal(\'enhanced\')"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw'+(enhOn?' on':'')+'"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Select and configure enhancement compounds in the next wizard step.</div>';
-    }
+    var compOn = trtOn || enhOn;
+    html+='<div class="wiz-section">Compounds</div>';
+    html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:12px;">'
+       +  'TRT and other enhanced compounds. Testosterone, 19-nors, orals and GH all sit '
+       +  'together in Plan ▸ Compounds once the protocol is built.</div>';
+    html+='<div class="trt-toggle" onclick="wizToggleCompounds()"><div class="trt-toggle-label">⚡ Testosterone &amp; enhanced compounds</div><div class="toggle-sw'+(compOn?' on':'')+'"></div></div>';
+    html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'
+       +  (compOn
+            ? 'Pick the ester, dose and schedule next'+(_wizTier()>=3?', then anything else you are running.':'.')
+            : 'Add Testoviron, Nebido or another ester'+(_wizTier()>=3?', plus any other compound.':' to your protocol.'))
+       +  '</div>';
   }
   body.innerHTML=html;
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
+// ONE toggle for the whole Compounds section (2026-08-20). The old pair set 'trt' and
+// 'enhanced' as MUTUALLY EXCLUSIVE goals — each handler explicitly removed the other and
+// wiped its compounds. That mutual exclusion was the separation Henrik asked to end, so
+// this sets them TOGETHER instead.
+//
+// Both flags stay in the model rather than being replaced by one: they carry the tier
+// entitlement ('enhanced' only from tier 3) and they select the wizard steps, and every
+// downstream reader — _wizFlow, saveWizard, _stackTestoComp — already understands them.
+// A single new flag would have meant rewriting all of that in the same change.
+function wizToggleCompounds(){
+  if(_wizTier()<2)return;
+  var on = !!(_wiz.trt&&_wiz.trt.enabled) || _wiz.goals.indexOf('enhanced')>=0;
+  var eIdx=_wiz.goals.indexOf('enhanced');
+  var tIdx=_wiz.goals.indexOf('trt');
+  if(!_wiz.trt)_wiz.trt={};
+  if(on){
+    // OFF: clear both sides, including the enhanced prefill, so re-enabling starts clean.
+    _wiz.trt.enabled=false; _wiz.trt.compounds=[];
+    if(tIdx!==-1)_wiz.goals.splice(tIdx,1);
+    eIdx=_wiz.goals.indexOf('enhanced');
+    if(eIdx!==-1)_wiz.goals.splice(eIdx,1);
+    if(_wiz.enhanced){_wiz.enhanced.enabled=false;_wiz.enhanced.compounds=[];_wiz.enhanced._prefilled=false;}
+  }else{
+    _wiz.trt.enabled=true;
+    if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+    if(tIdx===-1)_wiz.goals.push('trt');
+    // The rest of the catalogue is a tier-3 step. A tier-2 user still gets the
+    // testosterone step, which is what their tier holds — the flow is the same shape,
+    // it just ends sooner.
+    if(_wizTier()>=3 && eIdx===-1)_wiz.goals.push('enhanced');
+  }
+  wizStepGoals(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+
 function wizToggleGoalTRT(){
   if(_wizTier()<2)return;
   _wiz.trt.enabled=!_wiz.trt.enabled;
@@ -1053,7 +1370,7 @@ function wizStepPeptides(body,footer){
     html+='<div class="wiz-section">'+grp+'</div>';
     groups[grp].forEach(function(p){
       var isSel=selIds.includes(p.id);
-      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizTogglePep(\''+p.id+'\')"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+p.desc+'</div></div><div style="display:flex;align-items:center;gap:10px"><button class="info-btn" onclick="event.stopPropagation();showPeptideCard(\''+p.id+'\')">ℹ</button><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
+      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizTogglePep(\''+p.id+'\')"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+(_halfLifeLabel(p)||p.desc)+'</div></div><div style="display:flex;align-items:center;gap:10px"><button class="info-btn" onclick="event.stopPropagation();showPeptideCard(\''+p.id+'\')">ℹ</button><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
     });
   });
   body.innerHTML=html;
@@ -1120,10 +1437,53 @@ function _renderSafetyNote(tier){
     '</div></div>';
 }
 function dismissSafety(tier,el){if(typeof _safetyDismissed!=='undefined')_safetyDismissed[tier]=1;var c=(el&&el.closest)?el.closest('[data-safety]'):null;if(c&&c.parentNode)c.parentNode.removeChild(c);}
-function _renderDoseGuide(pepId,currentDose){
+// ── IS THIS GUIDE SCALED PER DOSE, OR PER WEEK? ─────────────────────────────
+// Reported 2026-08-20: "Adding a second 3mg dose on Wednesday doesn't change the dose
+// info, it stuck on 2-4mg." Retatrutide 3 mg on two days is 6 mg/week, which is the
+// OPTIMAL band (4–8) — but the caller passed the PER-DOSE 3, so it matched Therapeutic
+// (2–4) and never moved however many days were added.
+//
+// DOSE_GUIDE's own header says "lo/hi = per-dose numeric bounds", and for 15 of the 22
+// compounds that is true. Three are not: retatrutide, tirzepatide and semaglutide state
+// their bands as a WEEKLY total ("2–4 mg/wk", bounds 2–4) because that is how GLP-1s
+// are prescribed. Comparing a per-injection amount against a weekly band is a category
+// error, and it silently under-reports the tier the user is actually in — the direction
+// that matters, since the tiers carry the risk notes.
+//
+// The distinction is in the tier's own label, so no data migration is needed:
+//   "2–4 mg/wk"        → a weekly TOTAL
+//   "1000 IU × 3/wk"   → a per-dose amount with a frequency, NOT a weekly total
+// The `×` is what separates them. tb500, motsc, nad and hcg all read the second way and
+// keep per-dose comparison, which is what their bounds already assume.
+function _doseGuideIsWeekly(tiers){
+  return (tiers||[]).some(function(t){
+    var d=String((t&&t.d)||'');
+    if(d.indexOf('×')>=0)return false;
+    return /[\d.]\s*(mg|µg|mcg|iu|ml)\s*\/\s*(wk|week)/i.test(d);
+  });
+}
+
+// What the protocol actually delivers in a week: every slot dosed, on every day chosen.
+// Slot doses are summed as written — a peptide mixing units across its own slots would
+// need converting, and none in the catalogue does.
+function _weeklyDoseTotal(p){
+  if(!p)return 0;
+  var days=(p.days&&p.days.length)?p.days.length:0;
+  if(!days)return 0;
+  var perDay=0;
+  (typeof TIME_SLOTS!=='undefined'?TIME_SLOTS:['AM','PM']).forEach(function(t){
+    if(!(p.times&&p.times.indexOf(t)>=0))return;
+    perDay+=parseDec(p['dose_'+_slotKey(t)])||0;
+  });
+  return perDay*days;
+}
+
+function _renderDoseGuide(pepId,currentDose,weeklyDose){
   var tiers=DOSE_GUIDE&&DOSE_GUIDE[pepId];
   if(!tiers||!tiers.length)return'';
-  var dose=typeof currentDose==='number'&&!isNaN(currentDose)?currentDose:0;
+  var _weekly=_doseGuideIsWeekly(tiers);
+  var _val=_weekly?weeklyDose:currentDose;
+  var dose=typeof _val==='number'&&!isNaN(_val)?_val:0;
   var activeTierIdx=-1;
   if(dose>0){
     for(var ti=0;ti<tiers.length;ti++){
@@ -1147,7 +1507,15 @@ function _renderDoseGuide(pepId,currentDose){
   var mods=_dosePersonalization(pepId,profile);
   var modHtml='';
   if(mods.length){var colorMap={adj:'#3b9eff',ok:'#3cffa0',warn:'#f59e0b',info:'#c084fc'};modHtml='<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">'+mods.map(function(m){var c=colorMap[m.type]||'#3b9eff';return'<div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:4px"><span style="color:'+c+';font-size:12px;line-height:1.4;margin-top:1px">●</span><span style="font-size:11px;color:var(--text);line-height:1.4">'+m.text+'</span></div>';}).join('')+'</div>';}else if(!hasProfile){modHtml='<div style="margin-top:6px;font-size:11px;color:var(--muted2);font-style:italic">Add age & weight in Body tab for personalized dosing</div>';}
-  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows.join('')+modHtml+'</div>'+_renderSafetyNote('peptide');
+  // Say WHICH number is being matched. A highlight that moves when you add a day is
+  // confusing unless the panel admits it is reading a weekly total.
+  var _hdr='Recommended Doses';
+  var _sub=_weekly
+    ? '<div style="font-size:10px;color:var(--muted2);text-transform:none;letter-spacing:0;font-weight:400;margin-bottom:6px">Matched against '+
+      (dose>0?('<b style="color:var(--accent)">'+(Math.round(dose*100)/100)+'</b>/week'):'your weekly total')+
+      ' — dose × days</div>'
+    : '';
+  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">'+_hdr+'</div>'+_sub+rows.join('')+modHtml+'</div>'+_renderSafetyNote('peptide');
 }
 function _renderRampSection(p,pi){
   var hasRamp=!!(p.dose_phases&&p.dose_phases.length);
@@ -1189,7 +1557,7 @@ function wizStepConfig(body,footer){
     html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
     DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
     html+='</div></div><div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
-    html+=_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0);
+    html+='<div id="pep-guide-'+pi+'">'+_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p))+'</div>';
     html+=_renderRampSection(p,pi);
     html+='</div>';
   });
@@ -1199,7 +1567,16 @@ function wizStepConfig(body,footer){
 
 function wizToggleTime(pi,t){var p=_wiz.peptides[pi];if(!p)return;if(!p.times)p.times=[];var i=p.times.indexOf(t);if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function wizToggleDay(pi,di){var p=_wiz.peptides[pi];if(!p)return;if(!p.days)p.days=[];var i=p.days.indexOf(di);if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['dose_'+_slotKey(slot)]=val;}
+// Refreshes the guide IN PLACE. A full wizStepConfig() re-render on every keystroke
+// would tear out the input being typed into and take the caret with it — which is why
+// this handler never re-rendered at all, and why the highlight used to sit still until
+// something else redrew the step.
+function wizSetDose(pi,slot,val){
+  var p=_wiz.peptides[pi];if(!p)return;
+  p['dose_'+_slotKey(slot)]=val;
+  var el=document.getElementById('pep-guide-'+pi);
+  if(el)el.innerHTML=_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p));
+}
 function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['unit_'+_slotKey(slot)]=val;}
 function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
 function wizToggleRamp(pi){
@@ -1251,7 +1628,12 @@ function _isTRTDoseId(id){return !!_trtCompoundFromDoseId(id);}
 // Inner tab switcher HTML for stack view / editor
 function _stackTabBar(activeTab,setter){
   var t3=(_userTier||1)>=3;
-  var tabs=[{k:'peptides',label:'Peptides'},{k:'trt',label:'TRT'},{k:'enhanced',label:'Enhanced',locked:!t3}];
+  // ONE COMPOUNDS TAB. Phase 4: "We will fold enhanced and TRT into one unified tab,
+  // all is part of a Protocol" (Henrik, 2026-08-16). The tier-3 gate did not disappear
+  // with the tab — it moved onto the groups inside it, so testosterone stays available
+  // to everyone exactly as the TRT tab was, and the rest stays gated exactly as
+  // Enhanced was.
+  var tabs=[{k:'peptides',label:'Peptides'},{k:'compounds',label:'Compounds'}];
   var html='<div style="display:flex;gap:0;border-radius:8px;background:var(--surface2);border:1px solid var(--border);margin-bottom:16px;overflow:hidden;">';
   tabs.forEach(function(t){
     var active=t.k===activeTab;
@@ -1298,9 +1680,19 @@ function _tcalcTrtSummary(){
 }
 // Info card for the TRT tab that mirrors the T-Calc-planned testosterone and
 // deep-links to the T-Calc tab. Returns '' when nothing is planned there.
+// Stored testosterone rows that no compound in this protocol accounts for.
+//
+// Before Phase 5 this card said "Planned in T-Calc … not configured as a TRT compound
+// here", which was true then and is a lie now: testosterone schedules from the protocol
+// like everything else. The card survives for the one case that still matters — rows
+// left behind by an older T-Calc plan with nothing in the protocol generating them.
+// That is exactly the stray-series shape that cost a day on 2026-08-16, so it is worth
+// surfacing; when the protocol does configure testosterone, the card says nothing.
 function _renderTcalcTrtCard(){
   var comps=(typeof _tcalcTrtSummary==='function')?_tcalcTrtSummary():null;
   if(!comps) return '';
+  var _buf=(typeof _editBuf!=='undefined'&&_editBuf)?_editBuf:null;
+  if(_buf&&typeof _stackTestoComp==='function'&&_stackTestoComp(_buf)) return '';
   var rows=comps.map(function(c){
     var nextTxt=c.next?('Next '+fmtDate(new Date(c.next.replace(/-/g,'/')))):'No upcoming doses';
     return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
@@ -1312,11 +1704,11 @@ function _renderTcalcTrtCard(){
   }).join('');
   return '<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:var(--surface2);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:10px;padding:12px 14px;margin-bottom:12px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Planned in T-Calc</div>'
+      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Doses with no compound</div>'
       +'<div style="font-size:11px;color:#6688cc">Open →</div>'
     +'</div>'
     +rows
-    +'<div style="font-size:10px;color:var(--muted2);margin-top:6px">Testosterone is scheduled from the T-Calc planner (not configured as a TRT compound here). Tap to view or adjust the dose.</div>'
+    +'<div style="font-size:10px;color:var(--muted2);margin-top:6px">These doses are stored against this protocol but no compound here generates them — they came from an older T-Calc plan. Add the compound in Compounds to take them over, or clear them in the admin Records tab.</div>'
   +'</div>';
 }
 // TRT tab content for stack view (read-only): compounds + injection log
@@ -1383,8 +1775,12 @@ async function _fetchTRTLog(st,cycleId){
   }catch(e){_logErr('fetchTRTLog',e);_trtLogCache[cycleId]=[];}
   renderStackEditor();
 }
-function setStackViewTab(t){_stackViewTab=t;renderStackEditor();}
-function setEditInnerTab(t){_collectEditInputs();_editInnerTab=t;renderStackEditor();}
+function setStackViewTab(t){_stackViewTab=_compTabId(t);renderStackEditor();}
+// The two tiers became one tab. Anything that still asks for 'trt' or 'enhanced' —
+// a deep link, a stored preference, a caller not yet updated — lands on Compounds
+// rather than on a tab that no longer exists, which would render an empty panel.
+function _compTabId(t){return (t==='trt'||t==='enhanced')?'compounds':t;}
+function setEditInnerTab(t){_collectEditInputs();_editInnerTab=_compTabId(t);renderStackEditor();}
 function _buildEnhancementCycleSection(){
   var c=_cycle;
   // #639: cycles are a TRT/Enhanced-tier feature. Hide for confirmed peptide-only
@@ -1672,19 +2068,77 @@ function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementBy
 var _wizTrtClassic = false;
 function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 
-// Wizard-local copy of the plan. Seeded from the live T-Calc plan so re-opening the
-// wizard shows what is actually scheduled, then from a classic TRT compound if one
-// was configured that way, so neither is silently ignored.
+// Wizard-local copy of the testosterone config. It used to seed from T-Calc's simple
+// plan first, because that was where a schedule lived; Phase 6 removed that planner, so
+// the protocol's own compound is now the only thing to seed from — which is also the
+// thing the wizard is editing.
+// ── THE WIZARD'S TESTOSTERONE STEP BECOMES A REAL SCHEDULED COMPOUND ────────
+// _wiz.trtPlan is {compId, doseMg, cadenceN, cadenceUnit, cadenceDays, startDate}
+// — the four things the step asks for. Until Phase 6 it was committed to T-Calc's
+// simple planner; that planner is gone, so it folds into the protocol's own TRT
+// compound instead, in exactly the shape the classic multi-compound step writes.
+// One representation of a scheduled compound, which is the whole point of the
+// rewrite.
+//
+// Called BEFORE saveStacksToBackend() and generateAndPushInjections(), because the
+// generator reads the protocol — fold it afterwards and the first schedule would
+// not appear until the next save.
+//
+// Deliberately does nothing when:
+//   • the plan is incomplete — a half-filled step is not a schedule, and inventing
+//     the missing half would be inventing doses nobody asked for;
+//   • the classic step already configured testosterone inline (`trt.compounds`
+//     non-empty) — those are real compounds the user set up by hand, and a planner
+//     must never overwrite them. This is the `_trtInline` guard that has always
+//     protected that path;
+//   • the protocol already carries this molecule anywhere — an Enhanced cycle picks
+//     its testosterone base in the wizard's own `base` step, and adding it again
+//     here would schedule the same ester twice, the exact doubling this rewrite
+//     exists to end.
+function _wizFoldTrtPlanIntoProto(proto){
+  if(!proto) return false;
+  if(typeof _wizTrtPlanComplete!=='function' || !_wizTrtPlanComplete()) return false;
+  var p=(typeof _wiz!=='undefined'&&_wiz)?_wiz.trtPlan:null;
+  if(!p) return false;
+
+  proto.trt=proto.trt||{};
+  var existing=proto.trt.compounds||[];
+  if(existing.length) return false;                      // classic config wins
+
+  var id=(typeof _canonCompoundId==='function')?_canonCompoundId(p.compId):p.compId;
+  if(!id) return false;
+  // Already present in EITHER block, under either spelling.
+  var dup=(typeof _stackTestoComp==='function')?_stackTestoComp(proto):null;
+  if(dup) return false;
+
+  var days=parseDec(p.cadenceDays);
+  if(!(days>0)) return false;
+  // Name and dot from the catalogue the rest of the TRT block uses, falling back to
+  // the merged catalogue for an ester TRT_CAT does not list.
+  var meta=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+    ? TRT_CAT.find(function(t){return t.id===id;}) : null;
+  if(!meta && typeof _COMPOUND_CATALOG!=='undefined' && _COMPOUND_CATALOG)
+    meta=_COMPOUND_CATALOG.find(function(e){return e.id===id;});
+  proto.trt.enabled=true;
+  proto.trt.compounds=[{
+    id:id,
+    name:(meta&&meta.name)||id,
+    // A per-injection amount, never a rate: the step asks "dose" alongside a
+    // separate cadence, so the two are already separated and must stay that way.
+    dose:String(p.doseMg),
+    unit:'mg',
+    dot:(meta&&meta.dot)||'#b84a4a',
+    cadence:'interval',
+    freqVal:days,
+    freqUnit:'days',
+    start_date:p.startDate||''
+  }];
+  return true;
+}
+
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
   var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
-  if(typeof _tcSimplePlan==='function'){
-    var sp=_tcSimplePlan();
-    if(sp.compId)      seed.compId=sp.compId;
-    if(sp.doseMg)      seed.doseMg=sp.doseMg;
-    if(sp.cadenceDays){seed.cadenceDays=sp.cadenceDays;seed.cadenceN=sp.cadenceN;seed.cadenceUnit=sp.cadenceUnit;}
-    if(sp.startDate)   seed.startDate=sp.startDate;
-  }
   var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
   if(c){
     if(!seed.compId) seed.compId=c.id||'';
@@ -1792,9 +2246,9 @@ function _wizRenderTrtPlanner(body){
     var wk=parseDec(p.doseMg)*7/parseDec(p.cadenceDays);
     html+='<div style="margin-top:14px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:11px 13px">'
       +'<div style="font-size:12.5px;color:#5ad1b0;font-weight:600">'+(Math.round(wk*10)/10)+' mg/week</div>'
-      +'<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Saved to T-Calc when you finish this protocol — the curve opens there.</div></div>';
+      +'<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Scheduled on this protocol when you finish — you can edit it under Compounds.</div></div>';
   }else{
-    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">Fill in all four to schedule testosterone. You can also leave this empty and add it in T-Calc later.</div>';
+    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">Fill in all four to schedule testosterone. You can also leave this empty and add it under Compounds later.</div>';
   }
 
   html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
@@ -1823,7 +2277,7 @@ function wizStepTRT(body,footer){
     var isSel=selIds.includes(c.id);
     var disabled=!isSel&&maxReached;
     var selData=isSel?sel.find(function(s){return s.id===c.id;}):null;
-    html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('wizToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
+    html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('wizToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
     if(isSel&&selData){
       var doseNum=parseDec(selData.dose)||0;
       var isNebido=c.id==='nebido';
@@ -1831,7 +2285,7 @@ function wizStepTRT(body,footer){
       if(!isNebido&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}
       else{var freqDays=(selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1);weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}
       html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-      html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+      html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';
       if(!isNebido){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}
       else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
@@ -1844,7 +2298,7 @@ function wizStepTRT(body,footer){
     html+='<div class="wiz-section" style="margin-top:16px">TRT Support</div>';
     trtSupportCat.forEach(function(p){
       var isSel=pepSelIds.includes(p.id);
-      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizTogglePep(\''+p.id+'\');wizStepTRT(document.getElementById(\'wiz-body\'),document.getElementById(\'wiz-footer\'));"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+p.desc+'</div></div><div style="display:flex;align-items:center;gap:10px"><button class="info-btn" onclick="event.stopPropagation();showPeptideCard(\''+p.id+'\')">ℹ</button><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
+      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizTogglePep(\''+p.id+'\');wizStepTRT(document.getElementById(\'wiz-body\'),document.getElementById(\'wiz-footer\'));"><div class="pep-dot-sm" style="background:'+p.dot+'"></div><div class="pep-info"><div class="pep-name">'+p.name+'</div><div class="pep-meta">'+(_halfLifeLabel(p)||p.desc)+'</div></div><div style="display:flex;align-items:center;gap:10px"><button class="info-btn" onclick="event.stopPropagation();showPeptideCard(\''+p.id+'\')">ℹ</button><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div></div>';
     });
   }
   body.innerHTML=html;
@@ -1865,6 +2319,19 @@ function wizSetTRTFreqUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c)
 function wizSetTRTDays(id,di){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function editSetTRTDays(id,di){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});_collectEditInputs();renderStackEditor();}
 function editToggleEnhancedCompound(id){
+  // The gate is enforced HERE as well as in the rendering, because the rendering is a
+  // presentation and this is the thing that changes the protocol. The locked cards do
+  // not call this — but an inline onclick is one devtools console away, and the tier
+  // boundary is an entitlement, not a styling choice. Adding is refused; REMOVING is
+  // not, so a compound already on a protocol can still be taken off after a downgrade
+  // rather than being stuck there.
+  var _already=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[])
+                 .some(function(c){return c&&c.id===id;});
+  if(!_already){
+    var _cat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)
+      ? ENHANCEMENT_COMPOUNDS.find(function(c){return c&&c.id===id;}) : null;
+    if(!_compoundAllowedForTier(_cat)){ showCompoundUpgrade(id); return; }
+  }
   if(!_editBuf.enhanced)_editBuf.enhanced={enabled:false,compounds:[]};
   if(!_editBuf.enhanced.compounds)_editBuf.enhanced.compounds=[];
   var idx=_editBuf.enhanced.compounds.findIndex(function(c){return c.id===id;});
@@ -1939,22 +2406,114 @@ function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.comp
 // no longer depends on what the TRT tier holds. The parameter stays so the three call
 // sites (editor, wizard, view) keep their shape.
 function _enhDormantNoteHtml(c,stackLike){
-  if(!_isTestosteroneComp('enhanced',c))return '';
-  return _tcalcOwnsTestoNote(c&&(c.name||c.id));
+  // Nothing is dormant any more — Phase 5 gave every compound back its own schedule.
+  // The only thing left worth saying is that an unmigrated id is an old spelling.
+  return _unmigratedTestoNote(c);
 }
-function _renderEditEnhanced(enh){
+// ── WHAT A TIER-2 USER MAY ACTUALLY ADD ─────────────────────────────────────
+// Henrik, 2026-08-20: "I want a tier2 user to still see the full catalog, but
+// anything else than testosterone, PCT and HCT compounds should be greyed out.
+// Clicking a Enhanced compound will trigger an overlay with an (for now dummy)
+// message about requiring an app upgrade."
+//
+// Tier 2 is the testosterone tier: TRT plus the things that go with running it —
+// hCG on cycle, and the PCT compounds that come after. Everything else is tier 3.
+//
+// Testosterone is recognised by the CATALOGUE FLAG, not by name. The backend's
+// merged catalogue carries isTestosterone, and a name check is what let
+// "Testoviron Depot" slip past a testosterone filter once already. ENHANCEMENT_COMPOUNDS
+// is itself already filtered to non-testosterone, so in practice everything it holds is
+// locked at tier 2 today — the allowance is written out in full anyway, because the
+// PCT and hCG entries are expected in this catalogue and must not arrive locked.
+var _TIER2_EXTRA_IDS = ['hcg','hmg','clomid','clomiphene','enclomiphene','nolvadex',
+                        'tamoxifen','raloxifene','toremifene'];
+var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG'];
+
+function _compoundAllowedForTier(c, tier){
+  var t = tier || _userTier || 1;
+  if (t >= 3) return true;
+  if (t < 2) return false;
+  if (!c) return false;
+  if (c.isTestosterone === true) return true;
+  if (String(c.group||'') === 'Base') return true;
+  if (_TIER2_EXTRA_IDS.indexOf(String(c.id||'')) >= 0) return true;
+  if (_TIER2_EXTRA_GROUPS.indexOf(String(c.group||'')) >= 0) return true;
+  return false;
+}
+
+// Dummy for now, by request — the copy and the upgrade route are not decided yet.
+// Deliberately NOT a confirm()/alert(): those block the page and read as an error.
+function showCompoundUpgrade(compId){
+  // Takes an ID and resolves the name here. Interpolating a display name straight into
+  // an inline onclick breaks the moment one contains an apostrophe.
+  var c = null;
+  if (typeof ENHANCEMENT_COMPOUNDS !== 'undefined' && ENHANCEMENT_COMPOUNDS)
+    c = ENHANCEMENT_COMPOUNDS.find(function(x){ return x && x.id === compId; });
+  if (!c && typeof _COMPOUND_CATALOG !== 'undefined' && _COMPOUND_CATALOG)
+    c = _COMPOUND_CATALOG.find(function(x){ return x && x.id === compId; });
+  // TRT_CAT too: at tier 1 the locked cards are the testosterone esters, and they are
+  // not in ENHANCEMENT_COMPOUNDS at all.
+  if (!c && typeof TRT_CAT !== 'undefined' && TRT_CAT)
+    c = TRT_CAT.find(function(x){ return x && x.id === compId; });
+  var name = (c && c.name) || (compId === 'testosterone' ? 'Testosterone' : compId);
+  var ex = document.getElementById('upg-overlay'); if (ex && ex.remove) ex.remove();
+  // Built as markup and appended, the same way every other sheet in this app is. The
+  // onclick belongs in the string rather than on the element: it keeps the close
+  // behaviour with the markup it closes, and setAttribute is not something to assume.
+  var html =
+    '<div id="upg-overlay" onclick="if(event.target===this)_closeCompoundUpgrade()" ' +
+      'style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px">' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:340px;width:100%;text-align:center">' +
+        '<div style="font-size:26px;margin-bottom:10px">🔒</div>' +
+        '<div style="font-size:11px;color:var(--muted);letter-spacing:1.5px;font-weight:700;margin-bottom:6px">ENHANCED TIER</div>' +
+        '<div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:10px">' + _esc(name) + '</div>' +
+        '<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px">' +
+          'Your plan covers testosterone, hCG and PCT. Adding this compound needs an app upgrade.' +
+        '</div>' +
+        '<button onclick="_closeCompoundUpgrade()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit">Got it</button>' +
+      '</div>' +
+    '</div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  if (wrap.firstChild && document.body && document.body.appendChild)
+    document.body.appendChild(wrap.firstChild);
+}
+function _closeCompoundUpgrade(){
+  var el = document.getElementById('upg-overlay'); if (el && el.remove) el.remove();
+}
+
+function _renderEditEnhanced(enh,opts){
   if(!enh)enh={enabled:false,compounds:[]};
+  var o=opts||{};
   var sel=enh.compounds||[];
   var selIds=sel.map(function(c){return c.id;});
   var groups={};
   ENHANCEMENT_COMPOUNDS.forEach(function(c){if(!groups[c.group])groups[c.group]=[];groups[c.group].push(c);});
-  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">Select enhancement compounds and configure dose and frequency.</div>';
-  Object.keys(groups).forEach(function(grp){
+  // Called with no opts from the wizard and the read-only view: same behaviour as before.
+  var skip=o.skipGroups||[];
+  var order=(o.order||[]).filter(function(g){return groups[g];});
+  var rest=Object.keys(groups).filter(function(g){return order.indexOf(g)<0;});
+  var seq=order.concat(rest).filter(function(g){return skip.indexOf(g)<0;});
+  var html=o.skipGroups?'':'<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">Select enhancement compounds and configure dose and frequency.</div>';
+  seq.forEach(function(grp){
     html+='<div class="wiz-section" style="margin-bottom:8px;">'+_esc(grp)+'</div>';
     groups[grp].forEach(function(c){
       var isSel=selIds.includes(c.id);
       var selData=isSel?sel.find(function(s){return s.id===c.id;}):null;
-      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="editToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(c.group)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
+      // LOCKED, NOT HIDDEN. The card renders in full — name, class, half-life — so the
+      // catalogue reads as complete and a tier-2 user can see what the tier holds.
+      // Tapping explains rather than doing nothing, which is the difference between a
+      // locked door and a broken one.
+      var locked=!_compoundAllowedForTier(c);
+      if(locked){
+        html+='<div class="pep-card" onclick="showCompoundUpgrade(\''+_esc(String(c.id))+'\')" style="margin-bottom:8px;opacity:0.45;cursor:pointer">'
+          +'<div class="pep-dot-sm" style="background:'+c.dot+'"></div>'
+          +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div>'
+          +'<div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div>'
+          +'<div class="pep-chk" style="font-size:13px;color:var(--muted2)">🔒</div></div>';
+        return;   // no config panel, and no way to select it
+      }
+      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="editToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         // #637: AM/PM split is user-toggleable on any enhanced compound (defaults to
         // the catalogue amPm flag). The injection builder already honours selData.amPm.
@@ -1986,6 +2545,38 @@ function _renderEditEnhanced(enh){
   });
   return html;
 }
+// The merged Compounds tier. Henrik, 2026-08-19: "Group by class testosterone on top".
+//
+// This COMPOSES the two editors rather than replacing them: the testosterone group is
+// the TRT editor's machinery (it keys on the PK catalogue, which is now the canonical
+// id space), and the remaining classes are the Enhanced editor's, minus its own
+// testosterone group so a molecule cannot appear twice under two spellings.
+//
+// Every existing handler — editToggleTRTCompound, editSetEnhDose, the cadence editors —
+// keeps working untouched. A rewrite of both editors in the same change as the merge
+// would have made any regression impossible to attribute.
+var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis'];
+
+function _renderEditCompounds(st){
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
+  html+=_renderEditTRT(st.trt);
+  // TIER 2 SEES THE WHOLE CATALOGUE (2026-08-20). It used to get an upgrade card in
+  // place of the list, so there was no way to find out what the tier above actually
+  // holds — the pitch without the product. Now the same list renders, with everything
+  // outside testosterone/hCG/PCT greyed and tapping through to the upgrade message.
+  // _renderEditEnhanced locks per compound, so this is ONE call for both tiers and the
+  // two cannot drift apart.
+  //
+  // EVERY tier gets the list, corrected 2026-08-20 — "Tier 1 & 2 should see everything
+  // but greyed out if not included in their tier." One call, one catalogue; the lock is
+  // per compound inside the renderer, so no tier can quietly end up with a different
+  // list from another.
+  html+=_renderEditEnhanced(_editBuf.enhanced||{enabled:false,compounds:[]},
+                            {skipGroups:['Base'],order:COMPOUND_GROUP_ORDER});
+  if((_userTier||1)<3) html+=_renderEnhancedUpgradeCTA();
+  return html;
+}
+
 function _renderEnhancedViewTab(st){
   var enh=st.enhanced||{};
   var compounds=enh.compounds||[];
@@ -2108,8 +2699,7 @@ function wizSetBaseEster(id){
   _wiz.enhanced.compounds=_wiz.enhanced.compounds.filter(function(c){return baseIds.indexOf(c.id)<0;});
   _wizAdviseAdd(id);
   _wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
-  var st=_wizAdviseState();
-  if(st){st.result=null;st.fetched=false;st._seeded=false;st._autoSel=false;}
+  _wizAdviseInvalidate(_wizAdviseState());
   wizStepBase(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizStepBase(body,footer){
@@ -2122,10 +2712,28 @@ function wizStepBase(body,footer){
     +'Every enhanced cycle runs on a testosterone base. The ester sets how often you inject '
     +'and how fast a dose change shows up — pick the one that fits how you want to run the cycle.</div>';
   if(!list.length){
-    html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'
-      +'Compound catalogue not loaded yet — reopen this step in a moment.</div>';
-    body.innerHTML=html;
-    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+    // WAIT FOR IT, rather than telling the user to come back. This said "Compound
+    // catalogue not loaded yet — reopen this step in a moment" and left Next enabled,
+    // so on a slow connection the step was a dead end that also let you walk past it
+    // without a base. It now shows the spinner and fetches, the same way
+    // wizStepEnhanced does, and redraws itself when the catalogue lands.
+    body.innerHTML=_WIZ_LOADING_HTML;
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+    if(typeof syncEnhancedCompoundsFromAgent==='function'){
+      syncEnhancedCompoundsFromAgent().then(function(result){
+        // Only redraw if the user is still on this step — they may have gone back.
+        if(_wizFlow()[_wiz.step]!=='base')return;
+        var b=document.getElementById('wiz-body'),f=document.getElementById('wiz-footer');
+        if(!b||!f)return;
+        if(_wizBaseList().length){wizStepBase(b,f);return;}
+        var _d=(result&&result.status)?(' (HTTP '+result.status+')'):(result&&result.msg?(' ('+result.msg+')'):'');
+        b.innerHTML='<div style="padding:32px 0;text-align:center;">'
+          +'<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:8px;">Catalogue unavailable</div>'
+          +'<div style="font-size:13px;color:var(--muted2);margin-bottom:20px;">Check your connection and try again.'+_esc(_d)+'</div>'
+          +'<button class="btn btn-primary" onclick="wizStepBase(document.getElementById(\'wiz-body\'),document.getElementById(\'wiz-footer\'))">Try again</button></div>';
+        f.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+      });
+    }
     return;
   }
   list.forEach(function(c){
@@ -2138,7 +2746,7 @@ function wizStepBase(body,footer){
       +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)
       +(c.id===recId?'<span style="font-size:9px;font-weight:700;letter-spacing:1px;color:#0a0a0a;background:var(--accent);border-radius:8px;padding:2px 6px;margin-left:6px;vertical-align:middle;">RECOMMENDED</span>':'')
       +'</div>'
-      +'<div class="pep-meta">'+_esc(cad.rec||'')+(cad.halfLife?' · '+_esc(cad.halfLife):'')+'</div></div>'
+      +'<div class="pep-meta">'+_esc(_halfLifeLabel(c)||cad.halfLife||'')+(cad.rec?' · '+_esc(cad.rec):'')+'</div></div>'
       +'<div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div>'
       +'</div>';
     if(isSel&&cad.note){
@@ -2161,7 +2769,7 @@ function _wizAdviseInputs(){
   return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId()};
 }
 function wizAdviseSetExperience(v){
-  var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
+  var st=_wizAdviseState();st.experience=v;_wizAdviseInvalidate(st);
   // Persist the correction so it isn't stale here or elsewhere in the app.
   try{var p=(typeof getData==='function'&&getData('pep-profile',null))||{};p.experience=v;if(typeof setData==='function')setData('pep-profile',p);
       if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v,'pep-profile':p});}catch(e){}
@@ -2176,9 +2784,25 @@ async function enhancedAdvisorFromAgent(inp){
     var d=await r.json();return{ok:true,advice:(d&&d.advice)||null};
   }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('advisor',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
+// ── ONE PLACE THAT INVALIDATES A RECOMMENDATION ─────────────────────────────
+// Three flags travel together and were being reset in five places, inconsistently:
+//   _seeded  — wizApplyAdviseRecommendations has already run for this recommendation
+//   _autoSel — the render has already pre-ticked for it
+//   _touched — the user has answered this step (added, or removed, or removed the last)
+// Two sites cleared _seeded but not _autoSel, so a new recommendation could arrive and
+// never pre-tick. Adding _touched on 2026-08-20 would have made that worse — a fourth
+// thing to remember at five call sites. One function instead.
+//
+// A NEW recommendation is a new question: everything clears, and it may pre-tick again.
+function _wizAdviseInvalidate(st){
+  if(!st)return;
+  st.result=null; st.fetched=false;
+  st._seeded=false; st._autoSel=false; st._touched=false;
+}
+
 async function wizAdviseFetch(){
   var st=_wizAdviseState();
-  st.loading=true;st.error='';st._seeded=false;
+  st.loading=true;st.error='';st._seeded=false;st._touched=false;
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
   var res=await enhancedAdvisorFromAgent(_wizAdviseInputs());
   st.loading=false;st.fetched=true;st._autoSel=false;
@@ -2186,8 +2810,8 @@ async function wizAdviseFetch(){
   else{st.result=null;st.error='Could not load recommendations'+(res.status?(' (HTTP '+res.status+')'):'')+'.';}
   if(_wizFlow()[_wiz.step]==='advise')wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
-function wizAdviseSetObjective(v){var st=_wizAdviseState();st.objective=v;st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizAdviseToggleFlag(k){var st=_wizAdviseState();if(!st.flags)st.flags={};st.flags[k]=!st.flags[k];st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizAdviseSetObjective(v){var st=_wizAdviseState();st.objective=v;_wizAdviseInvalidate(st);wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizAdviseToggleFlag(k){var st=_wizAdviseState();if(!st.flags)st.flags={};st.flags[k]=!st.flags[k];_wizAdviseInvalidate(st);wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function _wizAdviseCompoundRow(item,kind,opts){
   opts=opts||{};
   var map={best:['var(--accent)','★'],primary:['var(--accent)','✓'],consider:['var(--muted2)','○'],later:['#7a8899','⏱'],avoid:['#f59e0b','✕'],oncycle:['var(--accent)','＋']};
@@ -2214,6 +2838,16 @@ function _wizAdviseSection(title,items,kind,selIds){
 // Tap a recommended compound to add/remove it from the protocol (same store the
 // Enhanced step uses) — so the guidance is directly actionable.
 function wizAdviseToggleCompound(id){
+  // THE USER HAS NOW CHOSEN. Reported 2026-08-20: "Even if I deselect Primo and click
+  // Next it is preselected again." wizApplyAdviseRecommendations re-seeds the
+  // recommendations when the enhanced list is EMPTY, on the reasoning that an empty
+  // list means the user never picked anything — but it cannot tell "never touched"
+  // from "deliberately cleared", and clearing the one pre-ticked compound produces
+  // exactly the empty list it treats as untouched. So it put Primobolan straight back.
+  //
+  // A flag on the step's own state settles it: the moment a row is tapped, this step
+  // has an answer, and an empty answer is still an answer.
+  var _ast=_wizAdviseState(); if(_ast)_ast._touched=true;
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
   if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
   var idx=_wiz.enhanced.compounds.findIndex(function(c){return c.id===id;});
@@ -2233,8 +2867,88 @@ function _wizAdviseAdd(id){
 }
 // Default selection when a fresh recommendation loads: keep the base, and pre-tick
 // the best addition only if the user hasn't already chosen a non-base compound.
+// ── WHERE THE TESTOSTERONE BASE COMES FROM NOW ──────────────────────────────
+// Since the single Compounds toggle (2026-08-20) the 'trt' step asks for the ester,
+// dose and cadence, and the enhanced half of the flow follows it. Three places still
+// assumed the base lived in _wiz.enhanced.compounds, which is where the wizard used to
+// put it, and they broke in two visible ways:
+//
+//   "Even though I added an T ester in TRT step, recommended enhanced compounds lists
+//    Test E on top, no testosterone esters should show up in this step."
+//   "Error that a test base is required for masteron even though one is already
+//    selected in TRT step"
+//
+// The second was a hard block: the Next button was disabled, so an enhanced cycle could
+// not be finished at all once testosterone moved.
+// ⚠️ THE WIZARD HOLDS THE CHOSEN ESTER IN **TWO** PLACES, AND THIS MUST SEE BOTH.
+// Reported 2026-08-20: "Wizard silently adds Test E by itself even though I choose
+// Nebido" — the Validate step listed Nebido AND Testosterone Enanthate under TRT.
+//
+//   _wiz.trtPlan.compId   ← the TRT step's own planner: ester + dose + cadence. This
+//                           is what a normal run through the wizard fills in.
+//   _wiz.trt.compounds[]  ← the classic multi-compound editor, one tap away.
+//
+// This guard only read the second. So after choosing Nebido in the planner it answered
+// "no testosterone yet", and the advise step seeded its recommended base — Test E —
+// as a second TRT compound. _wizTrtSummaryRows renders both lists, which is why both
+// esters showed up; nothing had gone wrong at save time yet, but the protocol was
+// already carrying a compound the user never picked.
+//
+// A protocol gets its testosterone from ONE place. Both representations count as that
+// place.
+function _wizTrtHasTesto(){
+  var w=(typeof _wiz!=='undefined')?_wiz:null;
+  if(!w)return false;
+  var p=w.trtPlan;
+  if(p&&p.compId)return true;
+  var cs=(w.trt&&w.trt.enabled)?(w.trt.compounds||[]):[];
+  return cs.length>0;
+}
+// Is this recommendation a testosterone ester? Checked by id against the catalogue
+// rather than by name — "Testoviron Depot" has slipped a name filter before.
+function _wizAdviseIsTesto(entry){
+  var id=entry&&entry.id;
+  if(!id)return false;
+  if(typeof _isTestoCompoundId==='function'&&_isTestoCompoundId(id))return true;
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG)
+    ? _COMPOUND_CATALOG.find(function(c){return c&&c.id===id;}) : null;
+  return !!(cat&&cat.isTestosterone);
+}
+
+// Put a recommended testosterone base where testosterone lives: _wiz.trt, in the shape
+// editToggleTRTCompound produces, so the 'trt' step and the generator both understand
+// it. Never overwrites an existing choice.
+function _wizSeedTrtBase(id){
+  if(!id)return false;
+  // Refuses whenever the protocol already has an ester from EITHER representation, not
+  // just from the list it is about to write into. Callers check too; this is the one
+  // that actually adds the row, so it is the one that must not be bypassable.
+  if(_wizTrtHasTesto())return false;
+  if(!_wiz.trt)_wiz.trt={enabled:false,compounds:[]};
+  if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+  if(_wiz.trt.compounds.length)return false;
+  var cid=(typeof _canonCompoundId==='function')?_canonCompoundId(id):id;
+  var cat=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+    ? TRT_CAT.find(function(c){return c&&(c.id===cid||c.id===id);}) : null;
+  if(!cat)return false;
+  _wiz.trt.enabled=true;
+  _wiz.trt.compounds.push({id:cat.id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',
+    freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',
+    days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});
+  return true;
+}
+
 function _wizAdviseDefaultSelect(res){
-  if(res.base)_wizAdviseAdd(res.base.id);
+  // Adding res.base here is what put "Test E" at the top of the Enhanced list. When the
+  // TRT step already holds the ester, adding it again would schedule the same molecule
+  // twice — the doubling the whole rewrite exists to end.
+  //
+  // And when it does NOT hold one, the base cannot go into the enhanced list either:
+  // ENHANCEMENT_COMPOUNDS is filtered to non-testosterone since the catalogue merge, so
+  // _wizAdviseAdd's `if(!cat)return;` has been silently swallowing every recommended
+  // base. Third symptom of the same fault, and the only invisible one. It goes where
+  // testosterone actually lives now — the TRT block.
+  if(res.base&&res.base.id&&!_wizTrtHasTesto())_wizSeedTrtBase(res.base.id);
   var hasNonBase=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).some(function(c){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===c.id;});return cat&&cat.cls!=='base';});
   if(!hasNonBase&&res.best_addition)_wizAdviseAdd(res.best_addition.id);
   if(_wiz.enhanced)_wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
@@ -2245,11 +2959,14 @@ function wizApplyAdviseRecommendations(){
   st._seeded=true;
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
   if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
-  // Only seed when the user hasn't already built a selection, so we never
-  // overwrite manual choices (respects "only fix what was asked").
+  // Only seed when the user has not answered this step. Two ways to have answered:
+  // a non-empty list, or having tapped anything at all — including tapping the last
+  // pick OFF, which leaves the list empty on purpose.
+  if(st._touched)return;
   if(_wiz.enhanced.compounds.length)return;
   var picks=[];
-  if(res.base&&res.base.id)picks.push(res.base.id);
+  // Not a `pick` — picks go into the enhanced list, which cannot hold testosterone.
+  if(res.base&&res.base.id&&!_wizTrtHasTesto())_wizSeedTrtBase(res.base.id);
   (res.primary||[]).forEach(function(p){if(p&&p.id)picks.push(p.id);});
   picks.forEach(function(id){
     if(_wiz.enhanced.compounds.some(function(c){return c.id===id;}))return;
@@ -2302,8 +3019,27 @@ function wizStepAdvise(body,footer){
     // Selection is live here — tap to add/remove.
     if((res.primary&&res.primary.length)||(res.consider&&res.consider.length)||res.best_addition){
       html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:10px;line-height:1.5;">Tap a compound to add or remove it — ✓ means it\'s in your protocol. Your picks carry to the next step.</div>';}
-    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    // NO TESTOSTERONE ESTERS IN THIS STEP once the TRT step has one. Henrik: "no
+    // testosterone esters should show up in this step." The base is already chosen and
+    // configured — restating it here reads as a second decision to make, and tapping it
+    // would add the molecule a second time. One line naming what the advice is built on
+    // replaces the selectable card.
+    var _trtBase=_wizTrtHasTesto();
+    if(res.base&&!_trtBase){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    else if(_trtBase){
+      var _bn=((_wiz.trt&&_wiz.trt.compounds)||[]).map(function(c){return c.name||c.id;}).join(', ');
+      html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Built on the testosterone you set earlier'+(_bn?' — <b style="color:var(--text)">'+_esc(_bn)+'</b>':'')+'. Everything below is what to add alongside it.</div>';
+    }
     // Best addition (the single top pick), then the rest of primary — all tappable.
+    // Testosterone is filtered out of every list, not just the base row: the backend can
+    // return an ester among the recommendations, and it is not an ADDITION.
+    if(_trtBase){
+      if(res.best_addition&&_wizAdviseIsTesto(res.best_addition))res=Object.assign({},res,{best_addition:null});
+      res=Object.assign({},res,{
+        primary:(res.primary||[]).filter(function(p){return !_wizAdviseIsTesto(p);}),
+        consider:(res.consider||[]).filter(function(p){return !_wizAdviseIsTesto(p);})
+      });
+    }
     var bestId=res.best_addition&&res.best_addition.id;
     var restPrimary=(res.primary||[]).filter(function(p){return p.id!==bestId;});
     if(res.best_addition){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Best addition</div>'+_wizAdviseCompoundRow(res.best_addition,'best',{selectable:true,selected:selIds.indexOf(bestId)>=0})+'</div>';}
@@ -2367,7 +3103,7 @@ function wizStepEnhanced(body,footer){
     groups[grp].forEach(function(c){
       var isSel=selIds.includes(c.id);
       var selData=isSel?sel.find(function(s){return s.id===c.id;}):null;
-      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(c.group)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
+      html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
         html+=_enhDormantNoteHtml(c,_wiz);
@@ -2393,7 +3129,10 @@ function wizStepEnhanced(body,footer){
       }
     });
   });
-  var hasTest=sel.some(function(c){
+  // A testosterone base is still required — and the TRT step is now where it comes
+  // from. Checking only _wiz.enhanced.compounds left Next DISABLED for anyone who had
+  // set their ester one step earlier, which is everyone since the toggles merged.
+  var hasTest=_wizTrtHasTesto()||sel.some(function(c){
     var cat=ENHANCEMENT_COMPOUNDS.find(function(ec){return ec.id===c.id;});
     return cat&&cat.cls==='base';
   });
@@ -2590,6 +3329,20 @@ function _effectiveDoseAt(p,cycleStart,targetDate){
   return cur?{dose:cur.d,unit:cur.u}:null;
 }
 
+// STEP IN CALENDAR DAYS, NEVER IN MILLISECONDS.
+// Adding 86400000 ms is 24 hours, and a DST day is 23 or 25. Crossing one, the loop
+// variable creeps to 23:00 the previous day and a date is emitted twice or skipped
+// entirely — a missing or duplicated injection, from a clock change.
+//
+// T-Calc's planner carried a guard against exactly this (2026-08-07); when Phase 6
+// deleted that planner, the guard would have gone with it while the hazard moved to
+// this generator, which is now the only thing expanding a schedule into dates.
+function _nextDay(d){
+  var n=new Date(d);
+  n.setDate(n.getDate()+1);
+  return n;
+}
+
 function _genInjBatches(stack,cycleId,fromDate){
   if(!stack||!stack.cycle_start)return[];
   var cycleStart=parseLocalDate(stack.cycle_start);
@@ -2608,7 +3361,7 @@ function _genInjBatches(stack,cycleId,fromDate){
     var pStart=p.start_date?parseLocalDate(p.start_date):cycleStart;
     var pEnd=p.end_date?parseLocalDate(p.end_date):null;
     var compEntries=[];
-    for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
+    for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
       if(!days.includes(d.getDay()))continue;
       if(d<pStart)continue;
       if(pEnd&&d>pEnd)continue;
@@ -2628,38 +3381,58 @@ function _genInjBatches(stack,cycleId,fromDate){
     if(compEntries.length)batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
   });
 
-  // ── Testosterone is scheduled by T-CALC and by nothing else ────────────────
-  // Henrik, 2026-08-14: "I want T-calc to own all testosterone injections […] The only
-  // way to schedule testo must be using t-calc."
+  // ── Testosterone generates here, like everything else (Phase 5) ────────────
+  // Henrik, 2026-08-16: "we are dropping the T-calc style scheduling and returning to
+  // the compound UI that is much easier to understand for a user."
   //
-  // Both tiers used to generate their own testosterone, which put two rows for the
-  // same molecule on the same day (reported 2026-08-07). The first fix made the TRT
-  // tier win over Enhanced — one stream, but still the wrong owner: T-Calc holds the
-  // PK model, the ester, the cadence and the curve, and it was scheduling a third
-  // stream of its own. So neither tier generates testosterone now.
+  // The 2026-08-14 rule made both tiers suppress testosterone so T-Calc could own it.
+  // That rule was right about the problem — two tiers each generating the same
+  // molecule put 27 enhanced/test_u rows beside 23 trt/nebido rows in one protocol —
+  // and wrong about the remedy: it moved ownership to a THIRD scheduler instead of
+  // removing the duplication.
   //
-  // Nothing is deleted or hidden. The compound stays in the stack, still renders in
-  // its tier's config with a note naming T-Calc as the scheduler, and every injection
-  // already stored stays exactly as it is — the injection log is the record of what
-  // was injected and this changes only what is generated from here on.
+  // Phase 4 merged the tiers, so there is no second generator left to contend with,
+  // and one-stream-per-molecule is now structural rather than enforced by suppression.
+  // T-Calc's write paths are disabled in the same change (_tcWritesDisabled) so it
+  // cannot open a second stream from the other side.
+  //
+  // _injSuppressed stays, emptied per rebuild: nothing suppresses testosterone any
+  // more, but a compound that stops generating for some OTHER reason still has to be
+  // able to say so. A row that vanishes with no explanation is the bug, not the fix.
   if(typeof _injSuppressed!=='undefined'&&_injSuppressed)_injSuppressed[stack.id||cycleId]=[];
+
+  // Which molecules the TRT block already scheduled, canonically. An unmigrated
+  // protocol can hold the same testosterone in both blocks under two spellings —
+  // Protocol 2 held enhanced/test_u beside trt/nebido — and generating both is exactly
+  // the doubling this rewrite exists to end. Migration fixes the data; this makes the
+  // generator safe whether or not the user has run it.
+  var _genDone={};
 
   // TRT compounds
   if(stack.trt&&stack.trt.enabled){
     (stack.trt.compounds||[]).forEach(function(c){
-      if(_isTestosteroneComp('trt',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
+      _genDone[_canonCompoundId(c.id)]=true;
       var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
       var dot=cat?cat.dot:'#e8a020';
+      // A RATE IS NOT THE AMOUNT IN THE SYRINGE — in this block too, as of Phase 4.
+      // TRT compounds were always configured as a plain per-injection mg, so this
+      // branch never had to convert. The merged tier changed that: a compound that
+      // arrives here from the Enhanced side carries its rate unit with it, and
+      // Henrik's migration moved exactly such a row ("350 mg/week", every 2 days).
+      // Written verbatim it would render "Nebido 350 mg/week" on every second day —
+      // the rendering the 2026-08-07 fix removed, at 3.5x the real dose. Same helper
+      // the Enhanced branch uses; a plain "100 mg" passes through untouched.
+      var _tpd=(typeof _enhDosePerInjection==='function')?_enhDosePerInjection(c):{dose:c.dose,unit:c.unit};
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
-      for(var d=new Date(cStart);d<=cEnd;d=new Date(d.getTime()+86400000)){
+      for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
         if(c.id!=='nebido'&&c.days&&c.days.length){hit=c.days.includes(d.getDay());}
         else{var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);hit=freqDays>0&&daysSince%freqDays===0;}
         if(!hit)continue;
-        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:c.dose||'',unit:c.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
+        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_tpd.dose||'',unit:_tpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       if(compEntries.length)batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
     });
@@ -2668,15 +3441,23 @@ function _genInjBatches(stack,cycleId,fromDate){
   // Enhanced compounds
   if(stack.enhanced&&stack.enhanced.enabled){
     (stack.enhanced.compounds||[]).forEach(function(c){
-      // Testosterone belongs to T-Calc — see the block above the TRT loop. Everything
-      // else in the Enhanced tier (nandrolone, GH, orals…) generates as before.
-      if(_isTestosteroneComp('enhanced',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
+      // A testosterone still configured here — an unmigrated protocol — generates too.
+      // The tiers are one tier now; what a row is filed under stops deciding whether it
+      // exists. Migrating it (Settings ▸ Data ▸ Merge tiers) moves it to the canonical
+      // id; until then it schedules under the id it has, and readers canonicalise.
+      //
+      // Unless the same molecule already generated from the other block, in which case
+      // this one is the duplicate and is recorded as suppressed — visibly, with a
+      // reason, because a row that stops generating without explanation is the bug.
+      var _cid=_canonCompoundId(c.id);
+      if(_genDone[_cid]){_noteInjSuppressed(stack,cycleId,c,'duplicate');return;}
+      _genDone[_cid]=true;
       var dot=c.dot||'#a855f7';
       var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;}):null;
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
       var baseUnit=c.unit?(c.unit.split('/')[0]):'';
       var compEntries=[];
-      for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
+      for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
         if(!_enhHitsDay(c,d,cycleStart))continue;
         var dk=dateKey(d);
         if(isAmPm){
@@ -2728,10 +3509,7 @@ async function generateAndPushInjections(stack,fromDate){
   var batches=_genInjBatches(stack,cycleId,fromDate);
   for(var i=0;i<batches.length;i++){
     var b=batches[i];
-    try{
-      var r=await fetch(AGENT_URL+'/injections/batch',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({cycle_id:cycleId,compound_id:b.compound_id,from_date:b.from_date,entries:b.entries})});
-      if(!r.ok)_logHttp('genInj',r.status,'/injections/batch');
-    }catch(e){_logErr('genInj',e);}
+    await injWriteBatch(cycleId,b.compound_id,b.from_date,b.entries,'genInj');
   }
 }
 
