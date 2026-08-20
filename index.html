@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.291</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -169,7 +169,9 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Dose logs — local</span><span style="font-size:13px;" id="s-local-doses">—</span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Dose logs — backend</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;" id="s-remote-doses">—</span><button id="s-migrate-btn" onclick="migrateLegacyData()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Fix old data</button></span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Body comp</span><span style="font-size:13px;" id="s-local-bc">—</span></div>
-      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Milestones</span><span style="font-size:13px;" id="s-milestones-count">—</span></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Milestones</span><span style="font-size:13px;" id="s-milestones-count">—</span></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Protocol format</span><button id="s-migrate-tier-btn" onclick="migrateProtocolsToCompounds()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Merge tiers</button></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Local dose logs → backend</span><button id="peptide-sync-btn" onclick="pushAllPeptideToBackend()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Sync</button></div>
       </div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
@@ -247,13 +249,25 @@ const WEEKLY_DEFAULT=[
   {id:'glow-1',name:'GLOW Stack',detail:'0.09 ml (9 IU) — TB-500 300µg / BPC-157 300µg / GHK-Cu 1.5mg',dow:[0,1,2,3,4,5,6],time:'AM',dot:'#3b9eff'},
 ];
 let WEEKLY=WEEKLY_DEFAULT.slice();
+// Concentrations per Henrik, 2026-08-20: "All testosteron esters are usually avail in
+// 250mg/ml some also in 100mg/ml and some mixes in 400mg/ml." First entry is the
+// default the shopping list assumes; the cart lets it be changed per compound, because
+// what you can buy depends on the source.
+//
+// Propionate leads with 100 mg/ml — it is dosed in 50 mg increments, where 250 mg/ml
+// would mean drawing 0.2 mL.
+//
+// Nebido and Testoviron Depot are deliberately left without a `conc` list. They are
+// branded products with one presentation each — 1000 mg/4 mL and 250 mg/mL ampoules —
+// so they report ampoules, which is what you actually order. The generics are the ones
+// sold at varying strengths.
 const TRT_CAT=[
   {id:'nebido',     name:'Nebido',                sub:'Testosterone Undecanoate 1000mg/4ml',dot:'#e05050',defaultDose:'1000',unit:'mg',freqVal:12,freqUnit:'weeks'},
   {id:'testoviron', name:'Testoviron Depot',       sub:'Testosterone Enanthate 250mg/ml',   dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks',defaultDays:[1]},
-  {id:'enanthate',  name:'Testosterone Enanthate', sub:'Generic / Jenapharm',               dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks',defaultDays:[1]},
-  {id:'cypionate',  name:'Testosterone Cypionate', sub:'Depo-Testosterone',                 dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks',defaultDays:[1]},
-  {id:'propionate', name:'Testosterone Propionate',sub:'Short-acting ester',                dot:'#e05050',defaultDose:'50',  unit:'mg',freqVal:2, freqUnit:'days', defaultDays:[1,3,5]},
-  {id:'sustanon',   name:'Sustanon 250',           sub:'Mixed ester blend',                 dot:'#e05050',defaultDose:'250', unit:'mg',freqVal:3, freqUnit:'weeks',defaultDays:[1]},
+  {id:'enanthate',  name:'Testosterone Enanthate', sub:'Generic / Jenapharm',               dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks',defaultDays:[1],conc:[250,100]},
+  {id:'cypionate',  name:'Testosterone Cypionate', sub:'Depo-Testosterone',                 dot:'#e05050',defaultDose:'125', unit:'mg',freqVal:1, freqUnit:'weeks',defaultDays:[1],conc:[250,100]},
+  {id:'propionate', name:'Testosterone Propionate',sub:'Short-acting ester',                dot:'#e05050',defaultDose:'50',  unit:'mg',freqVal:2, freqUnit:'days', defaultDays:[1,3,5],conc:[100,250]},
+  {id:'sustanon',   name:'Sustanon 250',           sub:'Mixed ester blend',                 dot:'#e05050',defaultDose:'250', unit:'mg',freqVal:3, freqUnit:'weeks',defaultDays:[1],conc:[250,400]},
 ];
 const TRT_GUIDE={
   'nebido':{halfLife:'~56 days (undecanoate ester) — 37-75 d individual range',cadence:{rec:'Every 10–12 weeks',note:'Long-acting depot — trough at week 10–14. First cycle often adds a loading injection at week 6 to reach steady state faster.'},tiers:[{l:'Clinical',d:'1000 mg',freq:'every 12 wks',n:'EMA/label standard dose',b:1,wkMin:60,wkMax:90},{l:'Optimised',d:'1000 mg',freq:'every 10 wks',n:'Higher trough — good for those who feel low at week 11+',wkMin:91,wkMax:115},{l:'Accelerated',d:'1000 mg',freq:'every 8 wks',n:'High trough — use if 10 wks still insufficient',r:'Supra-physiological peak in weeks 1–4 post-injection',wkMin:116,wkMax:165}]},
@@ -698,7 +712,7 @@ function renderPromoteStatus(data,el){if(!el)return;const COL={success:'#22c55e'
 function _fmtAgo(d){const s=Math.floor((Date.now()-d)/1000);if(s<60)return 'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
 function saveLastPush(data,prodVer,stagingVer){if(!data)return;try{const rec={ts:new Date().toISOString(),conclusion:data.conclusion,steps:data.steps,prUrl:data.pr_url||null,runUrl:data.run_url||null,stagingVer:stagingVer||null,prodVer:prodVer||null};localStorage.setItem('proto-last-push',JSON.stringify(rec));}catch{}buildLastPushDropdown();}
 function buildLastPushDropdown(){const el=document.getElementById('push-to-prod-last');if(!el)return;let rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch{}if(!rec){el.innerHTML='';return;}const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};const icoCol=rec.conclusion==='success'?'#22c55e':'#ef4444';const ico=rec.conclusion==='success'?'✓':'✗';const ago=_fmtAgo(new Date(rec.ts));const _verSummary=rec.stagingVer&&rec.prodVer?' · v'+rec.stagingVer+' → v'+rec.prodVer:rec.prodVer?' · v'+rec.prodVer+' on prod':rec.stagingVer?' · staged v'+rec.stagingVer:'';let det='<div style="display:flex;flex-direction:column;gap:3px;padding:6px 0">';(rec.steps||[]).forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(rec.stagingVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">→</span><span style="color:var(--muted2)">Staged: v${rec.stagingVer}</span></div>`;if(rec.prodVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${rec.prodVer}</span></div>`;if(rec.prUrl)det+=`<div style="margin-top:4px"><a href="${rec.prUrl}" target="_blank" style="color:var(--accent)">View PR →</a></div>`;else if(rec.runUrl&&rec.conclusion==='failure')det+=`<div style="margin-top:4px"><a href="${rec.runUrl}" target="_blank" style="color:#ef4444">View failure logs →</a></div>`;det+='</div>';el.innerHTML=`<details><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted2)"><span style="color:${icoCol};font-weight:700">${ico}</span><span>Last push: ${ago}${_verSummary}</span></summary>${det}</details>`;}
-function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done '+count+' synced';setTimeout(()=>{const b=btn.closest('.sync-bar');if(b)b.remove();},2000);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
+function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done — '+count+' synced';setTimeout(()=>{btn.textContent='Sync';btn.disabled=false;},2500);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
 async function pushMilestonesToBackend(){const colorMap=[['nebido','#c084fc'],['testoviron','#c084fc'],['trt','#c084fc'],['glow','#3b9eff'],['blood','#ff6b2b'],['panel','#ff6b2b'],['hgh','#3cffa0']];function _mc(name){const n=name.toLowerCase();for(const[kw,col]of colorMap)if(n.includes(kw))return col;return'#e8ff3c';}const milestones=MILESTONES.map(m=>{const d=m.date;const date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');return{date,label:m.name,color:_mc(m.name),desc:m.desc||''};});try{const r=await fetch(AGENT_URL+'/stack-milestones/custom',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({milestones})});if(!r.ok)throw new Error('HTTP '+r.status);}catch(e){_logErr('pushMilestones',e);}}
 async function migrateLegacyData(){const btn=document.getElementById('s-migrate-btn');if(btn){btn.textContent='Fixing…';btn.disabled=true;}try{const r=await fetch(AGENT_URL+'/auth/migrate',{method:'POST',headers:authHeaders()});if(!r.ok)throw new Error('HTTP '+r.status);const res=await r.json();if(btn){btn.textContent='Fixed ('+res.total+')';setTimeout(()=>{btn.textContent='Fix old data';btn.disabled=false;},3000);}await syncPeptideLogFromAgent();loadSettings();}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;}}}
 function dateKey(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
@@ -1457,24 +1471,21 @@ function _stackHasScheduledTrt(stackId, cache){
 function _stackHasConfigTrt(st){
   return !!(st&&st.trt&&st.trt.enabled&&st.trt.compounds&&st.trt.compounds.length);
 }
-// Single-source guard, stack-save side. A stack must get testosterone from ONE
-// source only. If the stack being saved has BOTH its own TRT config AND a T-Calc
-// plan assigned to it ('tcalc:<stackId>'), warn and let the user choose:
-//   • OK    → switch to the TRT config: unassign the T-Calc plan (back to global).
-//   • Cancel→ keep T-Calc: drop the just-added config testosterone from the stack.
-// No-op when there is no conflict. Mutates `stack.trt` in the Cancel branch.
-async function _reconcileStackTestoSource(stack){
-  if(!stack||!stack.id)return;
-  if(typeof _tcp==='undefined'||!_tcp||_tcp.targetStackId!==stack.id)return; // not the T-Calc target
-  if(!_stackHasConfigTrt(stack))return;                                      // no config testo → no conflict
-  var _switch=(typeof confirm!=='function')?true
-    :confirm('“'+(stack.name||'This protocol')+'” already gets testosterone from T-Calc. Replace it with this TRT config?');
-  if(_switch){
-    if(typeof _tcSetTargetStack==='function')await _tcSetTargetStack(''); // unassign T-Calc → config wins
-  }else{
-    stack.trt={}; // keep T-Calc → discard the config testosterone the user just added
-  }
-}
+// ── THE SINGLE-SOURCE GUARD IS GONE (Phase 8, 2026-08-20) ──────────────────
+// _reconcileStackTestoSource arbitrated a conflict that no longer exists: a stack
+// holding testosterone from BOTH its own TRT config AND an assigned T-Calc plan.
+// T-Calc stopped planning in Phase 6 and its last write paths went in Phase 8, so
+// nothing can assign a plan to a stack — _tcp.targetStackId can never be set, which
+// made both call sites unreachable and this function inert.
+//
+// It is removed rather than left standing because its one action was to call
+// _tcSetTargetStack(''), which is now deleted. A typeof guard would have hidden that:
+// the branch would silently do nothing where the user was promised "replace it with
+// this TRT config". A guard that cannot fire, whose body would not work if it did, is
+// worse than no guard.
+//
+// A protocol gets its testosterone from one place now — its own compounds — so there
+// is no second source to reconcile with.
 // Which tiers a stack represents, for the stack-card badges. The TRT badge is
 // carried ONLY by an ACTIVE stack that actually has testosterone planned —
 // a configured TRT compound OR testosterone scheduled for it (incl. T-Calc-assigned).
@@ -1644,6 +1655,96 @@ function _calcEnhancementCartItem(c,weeks){
   var packDesc=isTab?'('+pack.mg_per_tab+' mg/tab × '+pack.tabs_per_pack+' tabs/pack)':'('+pack.conc_mg_ml+' mg/mL × '+pack.vol_ml+' mL)';
   return{name:c.name,totalMg:Math.round(totalMg),totalUnit:'mg',units:units,unitLabel:isTab?(units===1?'pack':'packs'):(units===1?'vial':'vials'),packDesc:packDesc};
 }
+// ── TESTOSTERONE BELONGS IN THE SHOPPING LIST ───────────────────────────────
+// Reported 2026-08-20: "Test U missing in Shopping list for a new protocol."
+//
+// The cart was built from two sections, st.peptides and st.enhanced.compounds, and
+// never read st.trt.compounds at all. Testosterone was invisible to it. That went
+// unnoticed while enhanced cycles carried their base ester in the ENHANCED block —
+// it showed up there — but Phase 4 merged the tiers and testosterone now lives in
+// `trt` for every protocol, so a new protocol lists everything EXCEPT the compound
+// it is built on.
+//
+// TRT_CAT carries no sku and testosterone is not in PRICELIST, so this reports the
+// total and the ampoule count the way the Enhanced section does — "source
+// separately" — rather than inventing a price.
+//
+// The pack size is parsed from the catalogue's own `sub` string ("Testosterone
+// Undecanoate 1000mg/4ml", "Testosterone Enanthate 250mg/ml"), which is the only
+// place it is written down. When it cannot be parsed the item still lists its total
+// mg; a number with no pack count is more use than a missing row.
+function _cartTrtPack(cat){
+  var sub=String((cat&&cat.sub)||'');
+  var m=sub.match(/(\d+(?:\.\d+)?)\s*mg\s*\/\s*(\d+(?:\.\d+)?)?\s*ml/i);
+  if(!m)return null;
+  var mg=parseFloat(m[1]);
+  var ml=m[2]?parseFloat(m[2]):1;
+  if(!(mg>0)||!(ml>0))return null;
+  return {mgPerAmp:mg, ml:ml, conc:mg/ml};
+}
+
+// How many injections the cycle actually contains — the same two shapes the
+// generator understands: named weekdays, or an every-N-days interval.
+function _cartTrtInjections(c,weeks){
+  var days=weeks*7;
+  if(c.id!=='nebido'&&c.days&&c.days.length)return c.days.length*weeks;
+  var freqDays=(c.freqUnit==='weeks')?((c.freqVal||1)*7):(c.freqVal||1);
+  if(!(freqDays>0))return 0;
+  return Math.ceil(days/freqDays);
+}
+
+// The concentration this compound is being priced at. A catalogue `conc` list means
+// the ester is sold at more than one strength and the first is the default; the user
+// can switch it per compound, because what is on the shelf depends on the source.
+var _cartTrtConcSel={};
+function _cartTrtConcList(cat){
+  return (cat&&cat.conc&&cat.conc.length)?cat.conc:null;
+}
+function _cartTrtConcFor(cat){
+  var list=_cartTrtConcList(cat);
+  if(!list)return null;
+  var sel=_cartTrtConcSel[cat.id];
+  return (sel&&list.indexOf(sel)>=0)?sel:list[0];
+}
+function _cartSetTrtConc(id,v){
+  _cartTrtConcSel[id]=parseFloat(v)||null;
+  _renderCartModal();
+}
+
+function _calcTrtCartItem(c,weeks){
+  if(!c||!c.id)return null;
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
+  var name=c.name||(cat&&cat.name)||c.id;
+  // A RATE IS NOT THE AMOUNT IN THE SYRINGE. A compound folded in from the Enhanced
+  // side can carry "mg/week"; the same helper the generator uses converts it.
+  var pd=(typeof _enhDosePerInjection==='function')?_enhDosePerInjection(c):{dose:c.dose,unit:c.unit};
+  var perInj=parseDec(pd&&pd.dose)||0;
+  var unit=_canonUnit((pd&&pd.unit)||c.unit||'mg');
+  if(unit!=='mg')return {name:name,totalMg:0,totalUnit:unit,units:null,unitLabel:'',packDesc:'',noData:true};
+  var injections=_cartTrtInjections(c,weeks);
+  var totalMg=perInj*injections;
+  if(!(totalMg>0))return {name:name,totalMg:0,totalUnit:'mg',units:null,unitLabel:'',packDesc:'',noData:true};
+  // VOLUME, not container count, when all we know is a concentration. Henrik gave
+  // strengths — 250 mg/ml, sometimes 100, blends at 400 — not ampoule or vial sizes,
+  // and those differ by source (1 mL amps, 10 mL vials). Millilitres is the honest
+  // answer from a concentration alone, and it converts to whatever his supplier sells.
+  // Guessing a container size would put a wrong count on a shopping list.
+  var conc=_cartTrtConcFor(cat);
+  if(conc>0){
+    var ml=totalMg/conc;
+    return {name:name,totalMg:Math.round(totalMg),totalUnit:'mg',
+            units:null,unitLabel:'',packDesc:'',
+            ml:Math.round(ml*10)/10, conc:conc, concList:_cartTrtConcList(cat), id:c.id};
+  }
+  // A fixed product — Nebido is 1000 mg in one 4 mL ampoule, not a strength you pick.
+  var pack=_cartTrtPack(cat);
+  if(!pack)return {name:name,totalMg:Math.round(totalMg),totalUnit:'mg',units:null,unitLabel:'',packDesc:''};
+  var amps=Math.ceil(totalMg/pack.mgPerAmp);
+  return {name:name,totalMg:Math.round(totalMg),totalUnit:'mg',units:amps,
+          unitLabel:(amps===1?'ampoule':'ampoules'),
+          packDesc:'('+pack.mgPerAmp+' mg/'+(pack.ml===1?'mL':pack.ml+' mL')+')'};
+}
+
 function _renderCartModal(){
   var inner=document.getElementById('cart-modal-inner');if(!inner)return;
   var st=_userStacks[_cartStackIdx];
@@ -1684,6 +1785,33 @@ function _renderCartModal(){
       h+='<div style="font-size:12px;color:var(--muted2);padding:8px 0">No peptide data available</div>';
     }
   }
+  // Testosterone first, matching Plan ▸ Compounds, where it is the top group.
+  var trtCmpds=(st.trt&&st.trt.compounds)?st.trt.compounds.filter(function(c){return c&&c.active!==false&&c.id;}):[];
+  if(trtCmpds.length){
+    h+='<div style="font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:18px">Testosterone — source separately</div>';
+    trtCmpds.forEach(function(c){
+      var item=_calcTrtCartItem(c,weeks);if(!item)return;hasItems=true;
+      h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px">';
+      h+='<div style="font-size:13px;font-weight:600;color:var(--text)">'+_esc(item.name)+'</div>';
+      if(item.noData){
+        h+='<div style="font-size:11px;color:var(--muted2);margin-top:4px">Set a dose in Plan ▸ Compounds to calculate</div>';
+      }else{
+        h+='<div style="font-size:11px;color:var(--muted2);line-height:1.9;margin-top:4px">';
+        h+='Total: '+item.totalMg.toLocaleString()+' '+item.totalUnit;
+        if(item.units!=null)h+=' · <span style="font-weight:600;color:var(--text)">'+item.units+' '+item.unitLabel+'</span> '+_esc(item.packDesc);
+        if(item.ml!=null)h+=' · <span style="font-weight:600;color:var(--text)">'+item.ml+' mL</span> at '+item.conc+' mg/mL';
+        h+='</div>';
+        // Switchable only where the ester is actually sold at more than one strength.
+        if(item.concList&&item.concList.length>1){
+          h+='<div style="margin-top:6px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted2)">Strength:'
+            +'<select onchange="_cartSetTrtConc(\''+_esc(String(item.id))+'\',this.value)" style="'+ins+';font-size:12px;padding:4px 8px">'
+            +item.concList.map(function(q){return '<option value="'+q+'"'+(q===item.conc?' selected':'')+'>'+q+' mg/mL</option>';}).join('')
+            +'</select></div>';
+        }
+      }
+      h+='</div>';
+    });
+  }
   var enhanceCmpds=(st.enhanced&&st.enhanced.compounds)?st.enhanced.compounds.filter(function(c){return c.active!==false&&c.name;}):[];
   if(enhanceCmpds.length){
     h+='<div style="font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:18px">Enhancement Compounds — source separately</div>';
@@ -1698,7 +1826,7 @@ function _renderCartModal(){
       h+='</div>';
     });
   }
-  if(!hasItems&&!peptides.length&&!enhanceCmpds.length){
+  if(!hasItems&&!peptides.length&&!enhanceCmpds.length&&!trtCmpds.length){
     h+='<div style="text-align:center;padding:24px 0;color:var(--muted2);font-size:13px">Add peptides to this protocol to see your shopping list.</div>';
   }
   h+='</div>';
@@ -2036,7 +2164,7 @@ function buildAppearanceCard(){
 }
 function buildRefsCard(){var card=document.getElementById('s-refs-card');if(!card)return;var n=Object.keys(_CITATIONS||{}).length;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('refs','Research & References')+sSecBody('refs')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.55">Every dose tier in this app carries an evidence grade and the sources behind it. '+(n?(n+' references loaded.'):'References load with the compound catalogue.')+'</div>'+'<div style="display:flex;gap:8px;flex-wrap:wrap">'+'<button onclick="openAllReferences()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">All references</button>'+'<button onclick="openGradeLegend()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Evidence grades</button>'+'</div></div></div></div>';}
 function buildCacheCard(){var card=document.getElementById('s-cache-card');if(!card)return;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('cache','Local Cache')+sSecBody('cache')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">All data is stored on the server. Clear the local cache to force a full re-sync.</div><button onclick="wipeLocalCache()" style="background:var(--danger,#ff3c3c);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Wipe local cache</button></div></div></div>';}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncEnhancedCompoundsFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncEnhancedCompoundsFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
 function initTabVis(){const saved=getData('proto-tab-vis',{});_tabVis=Object.assign({},TAB_DEFAULTS,saved);applyTabVis();}
 async function pushPepSettingsToAgent(kv){try{const r=await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:kv})});if(!r.ok)_logHttp('pushPepSettings',r.status,'/user-settings');}catch(e){_logErr('pushPepSettings',e);}}
 // Seed the staging environment with a copy of this account's production data.
@@ -2284,19 +2412,20 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="tab-cycles.js?v=1.290"></script>
-<script src="tab-macros.js?v=1.290"></script>
-<script src="tab-stack.js?v=1.290"></script>
-<script src="tab-today.js?v=1.290"></script>
-<script src="tab-schedule.js?v=1.290"></script>
-<script src="tab-timeline.js?v=1.290"></script>
-<script src="tab-body.js?v=1.290"></script>
-<script src="tab-recon.js?v=1.290"></script>
-<script src="tab-blood.js?v=1.290"></script>
-<script src="tab-labs.js?v=1.290"></script>
-<script src="tab-tcalc.js?v=1.290"></script>
-<script src="tab-thist.js?v=1.290"></script>
-<script src="tab-supplements.js?v=1.290"></script>
+<script src="inj-writer.js?v=1.291"></script>
+<script src="tab-cycles.js?v=1.291"></script>
+<script src="tab-macros.js?v=1.291"></script>
+<script src="tab-stack.js?v=1.291"></script>
+<script src="tab-today.js?v=1.291"></script>
+<script src="tab-schedule.js?v=1.291"></script>
+<script src="tab-timeline.js?v=1.291"></script>
+<script src="tab-body.js?v=1.291"></script>
+<script src="tab-recon.js?v=1.291"></script>
+<script src="tab-blood.js?v=1.291"></script>
+<script src="tab-labs.js?v=1.291"></script>
+<script src="tab-tcalc.js?v=1.291"></script>
+<script src="tab-thist.js?v=1.291"></script>
+<script src="tab-supplements.js?v=1.291"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}

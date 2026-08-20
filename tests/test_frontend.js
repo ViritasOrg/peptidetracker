@@ -77,7 +77,7 @@ const sandbox = vm.createContext({
 });
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
-const tabFiles = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
+const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
                   'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
@@ -305,13 +305,15 @@ if(typeof G._tcalcTrtSummary==='function'){
   check('_tcalcTrtSummary: finds the tcalc testosterone compound', !!_ttSum && _ttSum.length===1 && _ttSum[0].name==='Testosterone Enanthate');
   check('_tcalcTrtSummary: counts only tcalc entries (ignores stack peptide)', _ttSum[0].count===2);
   var _ttCard=G._renderTcalcTrtCard();
-  check('_renderTcalcTrtCard: labels it Planned in T-Calc', /Planned in T-Calc/.test(_ttCard));
+  // Phase 5: the card no longer claims T-Calc schedules these. It now reports stored
+  // doses that NO compound in the protocol generates — the stray-series shape.
+  check('_renderTcalcTrtCard: labels it as doses with no compound', /Doses with no compound/.test(_ttCard));
   check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
   check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
   // _renderTRTViewTab shows the card and suppresses "No TRT configured"
   if(typeof G._renderTRTViewTab==='function'){
     var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
-    check('_renderTRTViewTab: shows T-Calc card when planned there', /Planned in T-Calc/.test(_ttView));
+    check('_renderTRTViewTab: shows the orphan-dose card', /Doses with no compound/.test(_ttView));
     check('_renderTRTViewTab: suppresses "No TRT configured" when T-Calc card shows', !/No TRT configured/.test(_ttView));
     // with no tcalc plan, the empty message returns
     G._injectionsCache={};
@@ -320,17 +322,21 @@ if(typeof G._tcalcTrtSummary==='function'){
   }
   // edit view (_renderEditTRT) shows the card above the compound list, regardless of toggle
   if(typeof G._renderEditTRT==='function'){
+    // Tier 2: below it the group renders locked (2026-08-20) and there is no orphan
+    // card, because there is no compound list to sit above.
+    var _prevTierOrphan=G._userTier; G._userTier=2;
     G._injectionsCache={
       '2026-07-10':[{cycle_id:'tcalc',tier:'trt',compound_id:'test-e',compound_name:'Testosterone Enanthate',dose:'50',unit:'mg',dot:'#e8a020',date:'2026-07-10',source:'tcalc'}]
     };
     var _ttEditOff=G._renderEditTRT({enabled:false,compounds:[]});
-    check('_renderEditTRT: shows T-Calc card when toggle OFF', /Planned in T-Calc/.test(_ttEditOff));
+    check('_renderEditTRT: shows the orphan-dose card when toggle OFF', /Doses with no compound/.test(_ttEditOff));
     var _ttEditOn=G._renderEditTRT({enabled:true,compounds:[]});
-    var _cardIdx=_ttEditOn.indexOf('Planned in T-Calc');
-    var _protoIdx=_ttEditOn.indexOf('TRT Protocol');
+    var _cardIdx=_ttEditOn.indexOf('Doses with no compound');
+    var _protoIdx=_ttEditOn.indexOf('Testosterone');
     check('_renderEditTRT: card sits above the compound list', _cardIdx>-1 && _cardIdx>_protoIdx);
+    G._userTier=_prevTierOrphan;
     G._injectionsCache={};
-    check('_renderEditTRT: no card when nothing planned', !/Planned in T-Calc/.test(G._renderEditTRT({enabled:true,compounds:[]})));
+    check('_renderEditTRT: no card when nothing planned', !/Doses with no compound/.test(G._renderEditTRT({enabled:true,compounds:[]})));
   }
   G._injectionsCache=_ttSaved;
 }
@@ -402,13 +408,18 @@ check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 var trtEnhFlow=G._wizFlow();
-check('_wizFlow: TRT+enhanced has 9 steps', trtEnhFlow.length===9, 'got '+trtEnhFlow.length);
-check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,base,advise,enhanced,validate,nutrition,review'));
+// 8, not 9, since 2026-08-20: the single Compounds toggle sets trt AND enhanced
+// together, and the 'trt' step already asks for the ester, dose and cadence — so
+// 'base', which asks an enhanced cycle for its testosterone, would ask twice.
+check('_wizFlow: TRT+enhanced has 8 steps', trtEnhFlow.length===8, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'));
+check('  …and testosterone is asked for exactly once',
+  trtEnhFlow.filter(function(x){return x==='trt'||x==='base';}).length===1);
 check('_wizFlow: advise precedes enhanced', trtEnhFlow.indexOf('advise')===trtEnhFlow.indexOf('enhanced')-1);
 // _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
 var allFlow=G._wizFlow();
-check('_wizFlow: peps+TRT+enhanced has 12 steps', allFlow.length===12, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has 11 steps', allFlow.length===11, 'got '+allFlow.length);
 check('_wizFlow: peps+TRT+enhanced has advise', allFlow.includes('advise'));
 check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
 check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
@@ -446,7 +457,14 @@ G._wiz.advise.result={headline:'h',base:{id:'test_e',name:'Testosterone Enanthat
 var _advB3={innerHTML:''},_advF3={innerHTML:''};
 G.wizStepAdvise(_advB3,_advF3); // triggers default-select
 var _ids=function(){return ((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).map(function(c){return c.id;});};
-check('advisor default-selects base + best addition', _ids().indexOf('test_e')>=0 && _ids().indexOf('primo')>=0);
+// The base no longer joins the ENHANCED list — that is the reported bug ("recommended
+// enhanced compounds lists Test E on top"). It goes to the TRT block, canonicalised,
+// and only the addition is pre-ticked here.
+var _trtIds=function(){return ((G._wiz.trt&&G._wiz.trt.compounds)||[]).map(function(c){return c.id;});};
+check('advisor default-selects the best addition', _ids().indexOf('primo')>=0, _ids().join(','));
+check('  …and puts the testosterone base in the TRT block, not the enhanced list',
+  _trtIds().indexOf('enanthate')>=0 && _ids().indexOf('test_e')<0,
+  'trt='+_trtIds().join(',')+' enh='+_ids().join(','));
 G.wizAdviseToggleCompound('deca'); check('tapping a different compound adds it', _ids().indexOf('deca')>=0);
 G.wizAdviseToggleCompound('primo'); check('tapping the best pick removes it', _ids().indexOf('primo')<0);
 check('after swapping, deca is still selected (choice sticks)', _ids().indexOf('deca')>=0);
@@ -466,17 +484,21 @@ G.wizNext();G.wizNext();G.wizNext();G.wizNext();
 check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
 G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
 G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
-// TRT+Enhanced (no peps): flow is cycle,goals,trt,base,advise,enhanced,validate,nutrition,review
+// TRT+Enhanced (no peps): cycle,goals,trt,advise,enhanced,validate,nutrition,review.
+// 'base' is gone from this path as of 2026-08-20 — the single Compounds toggle sets
+// both flags, so the 'trt' step already asked for the testosterone an enhanced cycle
+// runs on. One question, one answer.
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT+enhanced after 8 calls = step 8 (review)', G._wiz.step===8);
-G.wizNext();check('wizNext: TRT+enhanced does not exceed step 8', G._wiz.step===8);
-G.wizBack();check('wizBack: TRT+enhanced 8→7 (nutrition)', G._wiz.step===7);
-G.wizBack();check('wizBack: TRT+enhanced 7→6 (validate)', G._wiz.step===6);
-G.wizBack();check('wizBack: TRT+enhanced 6→5 (enhanced)', G._wiz.step===5);
-G.wizBack();check('wizBack: TRT+enhanced 5→4 (advise)', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT+enhanced 4→3 (base)', G._wiz.step===3);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT+enhanced after 7 calls = step 7 (review)', G._wiz.step===7);
+G.wizNext();check('wizNext: TRT+enhanced does not exceed step 7', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT+enhanced 7→6 (nutrition)', G._wiz.step===6);
+G.wizBack();check('wizBack: TRT+enhanced 6→5 (validate)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT+enhanced 5→4 (enhanced)', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT+enhanced 4→3 (advise)', G._wiz.step===3);
 G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
+check('  …and no step asks for the testosterone base a second time',
+  G._wizFlow().indexOf('base')===-1);
 // Peps+TRT: validate step appears
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
@@ -1194,8 +1216,8 @@ console.log('\n── Card header overflow regressions ────────�
   check('card-header wraps instead of overflowing', /\.card-header\{[^}]*flex-wrap:wrap/.test(css));
   check('card-title-wrap can shrink (min-width:0)', /\.card-title-wrap\{[^}]*min-width:0/.test(css));
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('injection schedule controls wrap', tc.includes('gap:6px;flex-wrap:wrap;justify-content:flex-end'));
-  check('date input constrained (iOS intrinsic width)', tc.includes('min-width:0;max-width:100%;-webkit-appearance:none'));
+  // The injection-schedule card's layout checks (wrapping controls, a constrained date
+  // input for iOS) went with the card itself in Phase 6.
 }
 
 console.log(`\n${'─'.repeat(59)}`);
@@ -1340,39 +1362,12 @@ console.log(`\n${'─'.repeat(59)}`);
 
   check('the sync writes nothing without a stack',
     /if\(!_cid\)return;/.test(tc));
-  check('pushing opens Save to protocol when no stack is chosen',
-    /if\(!_tcHasTargetStack\(\)\)\{_tcOpenSaveToStack\(\);return;\}/.test(tc));
-  check('the picker no longer offers "Unassigned"', !/>Unassigned</.test(tc));
-
-  check('Save to protocol lists existing protocols', /_tcSaveToExistingStack\(/.test(tc));
-  // SUPERSEDED 2026-08-14 by explicit request: "remove the create new protocol
-  // choices". The three checks here asserted that the sheet offered "New protocol →
-  // TRT / Enhanced" wired to _tcCreateStackForTesto. Those buttons created an EMPTY
-  // protocol and made it the only active one — one tap blanked Today and the bind
-  // that followed destroyed the account's forward schedule. Creating a protocol
-  // belongs in Plan, where it is built with its compounds. The creator function is
-  // deliberately left in the file; it is simply unreachable from this sheet.
-  check('the save sheet does NOT offer to create a protocol',
-    !/newBtn\('trt'/.test(tc) && !/newBtn\('enhanced'/.test(tc));
-  check('  …and never reaches the creator from the sheet',
-    tc.indexOf('_tcOpenSaveToStack') < 0 ||
-    tc.slice(tc.indexOf('function _tcOpenSaveToStack'),
-             tc.indexOf('async function _tcSaveToExistingStack')).indexOf('_tcCreateStackForTesto') < 0);
-
-  check('Enhanced is gated on tier 3', /_userTier>=3/.test(tc));
-  check('  …and refuses on the action, not just the button',
-    /if\(tier==='enhanced'&&!_tcEnhancedAllowed\(\)\)return;/.test(tc));
-  check('  …failing open while the tier is still loading',
-    /if\(typeof _featuresLoaded!=='undefined'&&!_featuresLoaded\)return true;/.test(tc));
-
-  check('a new protocol respects the 4-protocol cap', /if\(stacks\.length>=4\)return;/.test(tc));
-  check('a new protocol is activated and started',
-    /_activeStackIndices=\[idx\];[\s\S]{0,120}?_ensureCycleStart\(idx\)/.test(tc));
-  // Same trap as the stack wizard: _deriveStackCycleId includes cycle_start.
-  check('  …with its id frozen BEFORE the start date',
-    /_ensureStackId\(proto\);[\s\S]{0,200}?_ensureCycleStart\(idx\)/.test(tc));
-  check('an Enhanced protocol carries the enhanced flag',
-    /enhanced:\(tier==='enhanced'\)\?\{enabled:true,compounds:\[\]\}:\{\}/.test(tc));
+  // Phase 6: there is no Save-to-protocol sheet and T-Calc no longer creates a
+  // protocol. What these guarded — that nothing is scheduled outside a protocol, and
+  // that creating one is a deliberate act with a cap and a start date — now lives
+  // entirely in the Plan tabs, which is where protocols were always meant to be made.
+  check('T-Calc neither saves to nor creates a protocol',
+    !/function _tcOpenSaveToStack/.test(tc) && !/function _tcCreateStackForTesto/.test(tc));
 
   // Already-stored 'tcalc' entries must keep rendering — refusing to write a new one
   // must never make existing injections disappear.
@@ -1443,14 +1438,17 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and a unit with no period passes straight through',
     dpi({dose:'100',unit:'mg'}).dose === '100' && dpi({dose:'100',unit:'mg'}).unit === 'mg');
 
-  // ── B. T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ───────────────────────────
-  // Henrik: "I want T-calc to own all testosterone injections, in stack wizard TRT and
-  // Enhanced should use T-calc. The only way to schedule testo must be using t-calc."
+  // ── B. ONE SCHEDULER: THE PROTOCOL (Phase 5, 2026-08-19) ────────────────────
+  // Henrik: "we are dropping the T-calc style scheduling and returning to the compound
+  // UI that is much easier to understand for a user."
   //
-  // The predecessor of this block asserted that the TRT tier won over Enhanced. That
-  // gave ONE stream but the wrong owner — T-Calc was scheduling a third one of its
-  // own, which is how a protocol ended up with 27 `enhanced/test_u` rows alongside
-  // 23 `trt/nebido` rows for the same molecule. Neither tier generates it now.
+  // This block used to assert the opposite: that NEITHER tier generated testosterone,
+  // because T-Calc owned it (rule of 2026-08-14). That rule was right about the problem
+  // — two tiers each generating the same molecule put 27 enhanced/test_u rows beside 23
+  // trt/nebido rows in one protocol — and wrong about the remedy: it moved ownership to
+  // a third scheduler rather than removing the duplication. Phase 4 merged the tiers, so
+  // the requirement that survives is ONE STREAM PER MOLECULE, and that is what is
+  // asserted here now.
   const mkStack = (trtOn) => ({
     id:'s1', name:'Protocol 1', cycle_start:'2026-08-01', cycle_length:12,
     trt:{enabled:trtOn, compounds:trtOn?[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]:[]},
@@ -1461,30 +1459,38 @@ console.log(`\n${'─'.repeat(59)}`);
   });
   const idsOf = st => G._genInjBatches(st,'s1',null).map(b => b.compound_id);
 
-  check('the Enhanced tier never schedules testosterone',
-    idsOf(mkStack(true)).indexOf('test-u') === -1 &&
-    idsOf(mkStack(false)).indexOf('test-u') === -1);
-  check('  …and neither does the TRT tier — T-Calc owns it',
-    idsOf(mkStack(true)).indexOf('nebido') === -1);
-  check('  …while the rest of the Enhanced tier is untouched',
+  check('testosterone schedules from the protocol again',
+    idsOf(mkStack(true)).indexOf('nebido') !== -1);
+  check('  …including one still filed under the Enhanced spelling',
+    idsOf(mkStack(false)).indexOf('test-u') !== -1);
+  check('  …while the rest of the tier is untouched',
     idsOf(mkStack(true)).indexOf('hgh') !== -1 && idsOf(mkStack(false)).indexOf('hgh') !== -1);
 
   // Every TRT_CAT id is a testosterone ester, and the brand names do NOT all contain
-  // the word — so the tier, not the name, is what identifies them there.
+  // the word — so none of them may be skipped for want of matching on "testosterone".
   check('  …for EVERY ester in the TRT catalogue, brand-named or not',
     G.TRT_CAT.every(cat => idsOf({
       id:'s1', cycle_start:'2026-08-01', cycle_length:12,
       trt:{enabled:true, compounds:[{id:cat.id,name:cat.name,dose:'100',unit:'mg',freqVal:1,freqUnit:'weeks',days:[1]}]},
-    }).length === 0),
+    }).length === 1),
     G.TRT_CAT.map(c => c.id).join(','));
-  check('  …and the predicate says so directly',
-    G.TRT_CAT.every(c => G._isTestosteroneComp('trt', c) === true) &&
-    G._isTestosteroneComp('enhanced', {name:'Testosterone Undecanoate (Nebido)'}) === true &&
-    G._isTestosteroneComp('enhanced', {name:'HGH'}) === false &&
-    G._isTestosteroneComp('peptide',  {name:'Testosterone'}) === false);
 
-  // Peptides are a separate tier and must keep generating — the guard is scoped to
-  // testosterone, not "anything in a stack that also has TRT configured".
+  // ONE STREAM PER MOLECULE — the requirement the 2026-08-14 rule existed to protect,
+  // now structural: the merged tier means there is no second generator to contend with.
+  // A protocol that still holds the same molecule in both blocks (unmigrated) is the
+  // case that used to double it.
+  const bothBlocks = {
+    id:'s1', cycle_start:'2026-08-01', cycle_length:12,
+    trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]},
+    enhanced:{enabled:true, compounds:[{id:'test_u',name:'Testosterone Undecanoate (Nebido)',dose:'350',unit:'mg/week',cadence:'interval',freqVal:5,freqUnit:'days'}]},
+  };
+  const canon = id => (G._canonCompoundId ? G._canonCompoundId(id) : id);
+  const bothIds = idsOf(bothBlocks).map(canon);
+  check('an unmigrated protocol does not schedule the same molecule twice',
+    bothIds.filter(x => x === 'nebido').length === 1,
+    'ids: ' + idsOf(bothBlocks).join(','));
+
+  // Peptides are a separate tier and must keep generating.
   check('  …and peptides still generate alongside a testosterone protocol',
     idsOf({
       id:'s1', cycle_start:'2026-08-01', cycle_length:12,
@@ -1492,20 +1498,19 @@ console.log(`\n${'─'.repeat(59)}`);
       trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]},
     }).indexOf('reta') !== -1);
 
-  idsOf(mkStack(true));   // _injSuppressed reflects the LAST generation — regenerate
-  check('  …both suppressed entries are recorded, not silently dropped',
-    (G._injSuppressed['s1']||[]).some(x => x.id === 'test-u' && x.reason === 'tcalc') &&
-    (G._injSuppressed['s1']||[]).some(x => x.id === 'nebido' && x.reason === 'tcalc'));
-  check('  …and the config says so where the user configured it, naming T-Calc',
-    /function _tcalcOwnsTestoNote\(/.test(stackJs) &&
-    /Scheduled in T-Calc/.test(stackJs) &&
-    /_enhDormantNoteHtml\(c,_editBuf\)/.test(stackJs) &&
-    /_enhDormantNoteHtml\(c,_wiz\)/.test(stackJs));
-  check('  …in the TRT tier too — editor, wizard and read-only view',
-    (stackJs.match(/_tcalcOwnsTestoNote\('Testosterone'\)/g)||[]).length >= 3);
-  check('  …and the note is unconditional for a testosterone entry',
-    G._enhDormantNoteHtml({id:'test-u',name:'Testosterone Undecanoate (Nebido)'},{trt:{enabled:false,compounds:[]}}).indexOf('T-Calc') !== -1 &&
-    G._enhDormantNoteHtml({id:'hgh',name:'HGH'},{trt:{enabled:true,compounds:[{id:'nebido'}]}}) === '');
+  // Nothing is suppressed any more, so nothing may be RECORDED as suppressed — a note
+  // saying "scheduled elsewhere" beside a compound that schedules right here is worse
+  // than no note at all.
+  idsOf(mkStack(true));
+  check('nothing is recorded as suppressed for testosterone',
+    (G._injSuppressed['s1']||[]).length === 0,
+    JSON.stringify(G._injSuppressed['s1']||[]));
+  check('  …and no config screen still claims T-Calc schedules it',
+    G._tcalcOwnsTestoNote('Testosterone') === '');
+  check('  …replaced by one that only fires for an unmigrated id',
+    G._enhDormantNoteHtml({id:'test_u',name:'Testosterone Undecanoate (Nebido)'},{}).indexOf('Older format') !== -1 &&
+    G._enhDormantNoteHtml({id:'nebido',name:'Nebido'},{}) === '' &&
+    G._enhDormantNoteHtml({id:'hgh',name:'HGH'},{}) === '');
 
   // No generated injection may carry a rate unit — that is the "350 mg/week" row.
   const units = G._genInjBatches(mkStack(false),'s1',null)
@@ -1554,76 +1559,26 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and so is a compound with neither (TRT/peptide precedence)',
     JSON.stringify(G._pkInjectionDays({freqVal:2, freqUnit:'weeks'}, 42, 1)) === JSON.stringify([0,14,28]));
 
-  // ── C. the plan lives in the stack it is assigned to ────────────────────────
-  // T-Calc showed Testoviron Depot 75 mg E2D while the protocol held Nebido 100 mg,
-  // and _tcCurveLog's "the plan owns this day" rule suppressed the protocol's real
-  // injections in favour of that stale plan.
-  check('a plan assigned to a stack reads that stack', /function _tcSimplePlanStack\(\)/.test(tcJs));
-  check('  …one ester on one cadence, or it is not adopted', /comps\.length !== 1/.test(tcJs));
-  check('  …editing a field writes back to the stack', /_tcWritePlanToStack/.test(tcJs));
-  check('  …and regenerates that stack\'s injections',
-    /generateAndPushInjections\(st, now\)/.test(tcJs));
-  // Updated 2026-08-07: edits are a DRAFT until Save, so "bound" alone no longer
-  // decides these — "bound and clean" does. A dirty draft deliberately expands and
-  // owns its days, which is the curve preview the Save button commits.
-  check('  …a saved bound plan generates no second schedule of its own',
-    /if \(_tcSimplePlanStack\(\) && !_tcPlanDirty\(\)\) return \[\];/.test(tcJs));
-  check('  …and can no longer suppress the stack\'s stored injections',
-    /_tcPlannerMode\(\) === 'simple' && \(!_tcSimplePlanStack\(\) \|\| _tcPlanDirty\(\)\)/.test(tcJs));
+  // ── C. the plan lived in the stack it was assigned to ─────────────────────
+  // Phase 6 deleted the planner these guarded — _tcSimplePlanStack, the adoption rule,
+  // the write-back, and "the plan owns this day", which let a stale Testoviron plan
+  // suppress a protocol holding Nebido. With one scheduler there is no plan to adopt
+  // and no suppression to arbitrate; what survives is asserted where it now lives:
+  // the protocol generates, and _tcCurveLog reads stored rows only.
+  // Functions, not prose: the historical note above the deleted code names the old rule
+  // deliberately, so matching on its wording would fail for the wrong reason.
+  check('the plan-in-a-stack apparatus is gone',
+    !/function _tcSimplePlanStack\(/.test(tcJs) && !/function _tcWritePlanToStack\(/.test(tcJs) &&
+    !/function _tcSimplePlan\(/.test(tcJs) && !/_tcPlanDraft = Object\.assign/.test(tcJs));
 
-  G._userStacks = [{id:'s9', name:'P9', trt:{enabled:true, compounds:[
-    {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:5, freqUnit:'days', start_date:'2026-08-04'}]}}];
-  G._tcp = Object.assign({}, G._tcp, {targetStackId:'s9',
-    simplePlan:{compId:'testoviron', doseMg:'75', cadenceN:2, cadenceUnit:'day', cadenceDays:2, startDate:'2026-08-04'}});
-  const shown = G._tcSimplePlan();
-  check('the plan card shows the stack, not a stale profile plan',
-    shown.compId === 'nebido' && shown.doseMg === '100', JSON.stringify(shown));
-  check('  …including its cadence', shown.cadenceN === 5 && shown.cadenceUnit === 'day');
-  check('  …and its start date', shown.startDate === '2026-08-04');
-  check('  …and it expands to nothing, because the stack already stores it',
-    G._tcSimplePlanInjections().length === 0);
-  G._tcp.targetStackId = '';
-  check('  …an unassigned plan still comes from the profile',
-    G._tcSimplePlan().compId === 'testoviron');
-
-  // ── D. edits are a draft until Save ────────────────────────────────────────
-  // "t-calc would need a Save button, right now it redraws the graph but how do I
-  // know if this update actually rewrote the TRT schedule?" (Henrik 2026-08-07).
-  // Writing each keystroke into the protocol was correct but invisible, and a
-  // rewritten schedule is not something to infer from a chart moving.
-  G._tcp.targetStackId = 's9';
-  G._tcPlanDraft = null;
-  check('a bound plan starts clean', G._tcPlanDirty() === false);
-
-  G._tcSetSimplePlanField('doseMg', '250');
-  check('editing a field does NOT write to the protocol',
-    (G._userStacks[0].trt.compounds[0].dose) === '100');
-  check('  …it goes into a draft instead', G._tcPlanDirty() === true);
-  check('  …which the card reads', G._tcSimplePlan().doseMg === '250');
-  check('  …while the protocol still reports its own value',
-    G._tcStoredPlan().doseMg === '100');
-  check('  …and only the edited field counts as changed',
-    JSON.stringify(G._tcPlanChanges()) === JSON.stringify(['doseMg']));
-  check('  …with a plain-language summary of what Save would do',
-    G._tcPlanChangeSummary().some(function(s){ return /100 → 250/.test(s); }),
-    JSON.stringify(G._tcPlanChangeSummary()));
-  check('  …and the draft expands so the curve can preview it',
-    G._tcSimplePlanInjections().length > 0);
-
-  G._tcDiscardPlanDraft();
-  check('Discard drops the draft', G._tcPlanDirty() === false);
-  check('  …leaving the protocol untouched', G._tcSimplePlan().doseMg === '100');
-  check('  …and the preview stops expanding', G._tcSimplePlanInjections().length === 0);
-
-  // The draft is in-memory only. Persisting it would be a second store that can
-  // disagree with the protocol — the exact class of bug this tab keeps hitting.
-  check('the draft is never written to the profile', !/simplePlan.*_tcPlanDraft/.test(tcJs));
-  check('  …and Save is the only path from a draft to the protocol',
-    (tcJs.match(/_tcWritePlanToStack\(/g) || []).length === 2);   // definition + the Save call
-  check('Save clears the draft once written', /_tcPlanDraft = null;\s*\n\s*_tcPlanSavedAt/.test(tcJs));
-  check('  …and confirms it on the card afterwards', /function _tcJustSaved\(\)/.test(tcJs));
-  check('  …and reports a failure instead of pretending it saved',
-    /Save failed — try again/.test(tcJs));
+  // The plan card, the draft, the change summary and the write-back all belonged to the
+  // simple planner. Phase 6 removed it: the protocol IS the plan, the Compounds tab is
+  // where it is edited, and there is no second copy to keep in step or to summarise.
+  // The surviving requirement — an edit reaches the record and the curve — is asserted
+  // against the protocol editor and _genInjBatches.
+  check('the simple planner and its draft machinery are gone',
+    typeof G._tcSimplePlan !== 'function' && typeof G._tcPlanDirty !== 'function' &&
+    typeof G._tcSetSimplePlanField !== 'function' && typeof G._tcPlanChanges !== 'function');
 }
 
 // ── A CHECKED INJECTION IS THE PAST (2026-08-07) ─────────────────────────────
@@ -1638,6 +1593,7 @@ console.log(`\n${'─'.repeat(59)}`);
 // Nebido's 56-day half-life essentially nothing from June had cleared.
 {
   const tcJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  const injJs = require('fs').readFileSync(require('path').join(__dirname,'../inj-writer.js'),'utf8');
   const _svH = G._tcHistory, _svHS = G._tcHistoryState, _svC = G._injectionsCache, _svP = G._tcp;
 
   check('T-Calc fetches its own history, not the 14-day shared cache',
@@ -1729,69 +1685,88 @@ console.log(`\n${'─'.repeat(59)}`);
   // reachable by any path.
   check('a stored history row carries its injection id, or it cannot be deleted',
     /injId: e\.id \|\| undefined/.test(tcJs));
+  // The request moved into inj-writer.js as injDeleteOne (2026-08-20) — it was the
+  // last injection DELETE issued outside that module. Assert the behaviour where it
+  // now lives, and that T-Calc still routes to it rather than re-opening its own.
   check('deleting a stored row calls DELETE on the record',
-    /AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(tcJs) &&
-    /method: 'DELETE'/.test(tcJs));
+    /injDeleteOne\(injId, 'tcDelInj'\)/.test(tcJs) &&
+    !/AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(tcJs));
+  {
+    const _iw = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+    check('  …through inj-writer, which addresses the row by id',
+      /AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(_iw) &&
+      /method:'DELETE'/.test(_iw));
+    check('  …and refuses an empty id rather than issuing a bare DELETE',
+      /if\(!injId\)/.test(_iw));
+  }
   check('  …re-reads the history rather than guessing what is left',
     /await _tcFetchHistory\(true\);/.test(tcJs));
   check('  …and says the delete is global first',
     /confirmGlobalDelete\('this ' \+/.test(tcJs));
-  check('  …with the series delete doing the same for every stored row',
-    /for \(var i = 0; i < stored\.length; i\+\+\) await _tcDeleteStoredInjection/.test(tcJs));
+  // Deleting a whole SERIES was a planner action and went with it; deleting a single
+  // stored dose is record maintenance and is what the checks above cover.
+  check('  …while the series delete is gone with the planner',
+    !/function _tcRemoveSeries/.test(tcJs));
   check('a profile-only row still deletes locally',
     /_tcp\.manualLog\.splice\(idx, 1\);/.test(tcJs));
   // 404 is success: the record is gone, which is what was asked for.
+  // 404 handling moved with the request into inj-writer.js; assert it there.
+  const _iwSrc = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
   check('  …and an already-deleted record is not reported as a failure',
-    /if \(!r\.ok && r\.status !== 404\)/.test(tcJs));
+    /if\(!r\.ok && r\.status !== 404\)/.test(_iwSrc));
 
   // ── Adding a PAST injection must create a real record ──────────────────────
   // Reported 2026-08-07, straight after the delete fix: "I cant now add the old
   // injections back?" The mirror of the same cause — manualLog is a cache, so a
   // past-dated push was rebuilt away by the next render, and _tcSyncLogToBackend
   // only writes from TODAY forward so nothing persisted it either.
+  // The POST moved into inj-writer.js in Phase 3 (one module owns every write).
+  // Same requirement, followed to where it now lives: the add path must reach a
+  // real POST /injections, not just mutate manualLog.
+  // MOVED 2026-08-20 (Henrik: "Move Add away from T-calc"). Every requirement below
+  // was written against T-Calc's Add sheet; that sheet is gone and record entry lives
+  // in Today's "+ Log a past injection" (savePastInjection in tab-thist.js), which now
+  // also enters a run and can mark it already taken. The REQUIREMENTS did not move —
+  // only the code they apply to — so they are re-pointed rather than deleted.
+  const thJs = fs.readFileSync(path.join(__dirname, '../tab-thist.js'), 'utf8');
   check('a past-dated add POSTs a real injection record',
-    /async function _tcCreateLoggedInjections\(/.test(tcJs) &&
-    /AGENT_URL \+ '\/injections',\s*\n\s*\{method:'POST'/.test(tcJs));
-  check('  …marked logged, which is what makes it the past',
-    /active: true, logged: true, source: 'manual'/.test(tcJs));
+    /await injWriteOne\(body, 'pastInjection'\)/.test(thJs) &&
+    /fetch\(AGENT_URL \+ '\/injections', \{\s*\n\s*method:'POST'/.test(injJs));
   check('  …carrying the PK snapshot, like the T-History back-fill does',
-    /_injPkMeta\('trt', compId\)/.test(tcJs));
-  check('  …under the bound stack, or manual when there is none',
-    /_tcTargetCycleId\(\) \|\| 'manual'/.test(tcJs));
-  check('a series straddling today splits into records and plan',
-    /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
-    /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
-  check('  …with only the future half going through the plan sync',
-    /if\(future\.length\)\{[\s\S]{0,1200}?await _tcSyncLogToBackend\(\);/.test(tcJs));
+    /_injPkMeta\(d\.tier, d\.compId\)/.test(thJs));
+  check('  …under cycle_id manual, which is where hand-entered doses live',
+    /cycle_id: 'manual'/.test(thJs));
+  check('  …and the T-Calc sheet it replaced is gone, not merely unlinked',
+    !/function _tcShowAddSheet/.test(tcJs) && !/function _tcCreateLoggedInjections/.test(tcJs) &&
+    !/_tcOpenLogPastDose\(\)/.test(tcJs));
 
-  // ── The plan must be PERSISTED before anything re-reads the record ─────────
-  // Reported 2026-08-08: "If I edit a series it won't save the update. If I add a
-  // new series of 10 injections starting at today's date, only a single injection
-  // is saved." One cause behind both. _tcLoadLogFromStack() assigns _tcp.manualLog
-  // outright from the record, so running it BEFORE the sync erased every dose that
-  // was still only in the profile — and the sync then wrote that erased state back.
-  // The add only hits it when the series straddles today, i.e. when it starts today.
-  var _tcAddFn  = tcJs.slice(tcJs.indexOf('async function _tcConfirmAddSheet()'),
-                             tcJs.indexOf('function _tcConfirmRemove('));
-  var _tcEditFn = tcJs.slice(tcJs.indexOf('async function _tcSaveEditSeries()'),
-                             tcJs.indexOf('function _tcConfirmRemoveSeries('));
-  check('adding a series persists the plan before the record is re-read',
-    _tcAddFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
-    _tcAddFn.indexOf('await _tcSyncLogToBackend();') < _tcAddFn.indexOf('_tcLoadLogFromStack();'));
-  check('  …and never syncs after the rebuild, which wrote the erased state back',
-    !/if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
-  check('editing a series persists before buildTCalc rebuilds manualLog',
-    _tcEditFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
-    _tcEditFn.indexOf('await _tcSyncLogToBackend();') < _tcEditFn.indexOf('buildTCalc();'));
-  check('  …and is async, so the sync is actually awaited',
-    /async function _tcSaveEditSeries\(\)/.test(tcJs));
-  check('  …then re-reads the history rather than trusting the local edit',
-    /await _tcSyncLogToBackend\(\);\n  await _tcFetchHistory\(true\);/.test(tcJs));
+  // A run straddling today: the past half is the record, the future half is not this
+  // sheet's business. Planning is Plan ▸ Compounds.
+  check('a series straddling today writes only the past half',
+    /_piDates\(d\)\.filter\(function\(x\)\{ return x <= today; \}\)/.test(thJs));
+  check('  …and says how many were dropped rather than dropping them quietly',
+    /fall after today and will not be written/.test(thJs));
+
+  // The write must land before anything re-reads the record.
+  const _saveFn = thJs.slice(thJs.indexOf('async function savePastInjection()'),
+                             thJs.indexOf('async function savePastInjection()') + 6000);
+  check('a logged dose is written before the record is re-read',
+    _saveFn.indexOf('await _tcFetchHistory(true)') > -1 &&
+    _saveFn.indexOf("injWriteOne(body, 'pastInjection')") < _saveFn.indexOf('await _tcFetchHistory(true)'));
+
+  check('  …and the series editor that shared the hazard is gone',
+    !/function _tcSaveEditSeries/.test(tcJs));
+
   // The plan sync clears before it re-posts. That delete had no logged filter, so it
   // removed logged records dated today or later and the re-post recreated them as
   // unlogged plans — a record silently downgraded to a schedule.
+  // Stronger than it was: this used to pass if the string appeared anywhere in
+  // tab-tcalc.js. Every clear now goes through one function, and that function
+  // defaults to unlogged_only — a caller cannot forget it any more, it has to
+  // pass unloggedOnly:false on purpose.
   check('the plan sync clears only the plan, never a logged record',
-    /'&unlogged_only=true'/.test(tcJs));
+    /injClearFuture/.test(tcJs) &&
+    /var unloggedOnly = \(o\.unloggedOnly === false\) \? false : true;/.test(injJs));
 
   // ── A planned dose is a DRAFT until Save to protocol ───────────────────────
   // Henrik, 2026-08-08: "the user flow would always be add injections and when happy
@@ -1802,10 +1777,11 @@ console.log(`\n${'─'.repeat(59)}`);
   // the draft was erased on the very next render and never survived to be saved —
   // which is why a 10-dose series starting today kept only the one logged dose for
   // today (a record) and lost the nine future ones (a draft).
-  check('a locally planned dose is marked as an unsaved draft',
-    /seriesId:runId,draft:true/.test(tcJs) && /seriesId:sid,draft:true/.test(tcJs));
-  check('  …and the planner is NOT gated on having a protocol first',
-    !/Pick a protocol first/.test(tcJs));
+  // Phase 6: nothing stages a draft, because nothing plans here. The failure this
+  // guarded — a nine-dose future series silently erased on the next render — cannot
+  // occur when the future half is refused rather than staged.
+  check('no dose is staged as an unsaved draft any more',
+    !/draft:true/.test(tcJs));
 
   hist([]);
   G._injectionsCache = {};
@@ -1840,9 +1816,11 @@ console.log(`\n${'─'.repeat(59)}`);
   hist([]);
   G._injectionsCache = {};
   check('  …and the history re-read after writing, not assumed',
-    /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
+    /await _tcFetchHistory\(true\)/.test(thJs) &&
+    thJs.indexOf("injWriteOne(body, 'pastInjection')") < thJs.indexOf('await _tcFetchHistory(true)'));
   check('a partial write is reported rather than swallowed',
-    /Saved '\+wrote\+' of '\+past\.length/.test(tcJs) && /id="tc-as-err"/.test(tcJs));
+    /'Saved ' \+ written\.length \+ ' of ' \+ dates\.length/.test(thJs) &&
+    /id="pi-err"/.test(thJs));
 
   // ── A series is part of the RECORD, not of the profile cache ───────────────
   // Henrik, 2026-08-07: "Make injections.json keep track of injections that are part
@@ -1850,19 +1828,24 @@ console.log(`\n${'─'.repeat(59)}`);
   // to live only in _tcp.manualLog, so nineteen doses read back out of the record
   // came back as nineteen identical rows and a restore could not rebuild the card.
   check('a created past injection carries its series id to the record',
-    /series_id: seriesId \|\| null/.test(tcJs));
-  check('  …and the plan sync writes it too, not just the local grouping',
-    /series_id:e\.seriesId\|\|null/.test(tcJs));
+    /series_id: seriesId/.test(thJs));
+  check('  …one id spanning the whole run, so a restore rebuilds one card',
+    /var seriesId = \(dates\.length > 1\)/.test(thJs));
+  // The plan sync that also stamped series_id (_tcSyncLogToBackend) is deleted
+  // (Phase 8). Record entry is the only path left that writes one, and the check
+  // above covers it. Assert the sync is gone rather than that it stamps.
+  check('  …and the deleted plan sync no longer writes a competing one',
+    !/series_id:e\.seriesId\|\|null/.test(tcJs) && !/function _tcSyncLogToBackend/.test(tcJs));
   check('a stored history row reads its series id back',
     /seriesId: e\.series_id \|\| undefined/.test(tcJs));
   check('  …as does a planned row rebuilt from the stack',
     /seriesId:e\.series_id\|\|undefined/.test(tcJs));
-  check('one id spans the whole run, so a straddling series is still one card',
-    /var runId=dates\.length>1\?Date\.now\(\)\.toString\(36\):undefined;/.test(tcJs) &&
-    /_tcCreateLoggedInjections\(compId,doseMg,past,runId\)/.test(tcJs) &&
-    /seriesId:runId/.test(tcJs));
+  // Moved to Today 2026-08-20; same rule, same reason.
+  check('one id spans the whole run, so a logged run is still one card',
+    /var seriesId = \(dates\.length > 1\)/.test(thJs) && /series_id: seriesId/.test(thJs));
   check('  …and a single dose gets no series id at all',
-    !/var runId=dates\.length>0/.test(tcJs));
+    /: null;/.test(thJs.slice(thJs.indexOf('var seriesId = (dates.length > 1)'),
+                              thJs.indexOf('var seriesId = (dates.length > 1)') + 260)));
 
   // End to end: the grouping survives a round trip through the record. The card is
   // rendered inline in buildTCalc (which needs a DOM), so this asserts the input that
@@ -2265,8 +2248,11 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   check('the card never INFERS missed doses from the cadence',
     !/ missed<\/span>/.test(_skSrc) && !/\.missing\s*=/.test(_skSrc),
     'the span-vs-cadence guess is back');
-  check('  …only stored doses that were genuinely not ticked are reported',
-    / not ticked<\/span>/.test(_skSrc) && /_seriesMeta\[sid\]\.unticked/.test(_skSrc));
+  // The series card carried that count and went with the schedule card (Phase 6). The
+  // rule it enforced — never INFER a missed dose from a cadence gap, only report a
+  // stored dose that was genuinely not ticked — is kept above, against the source.
+  check('  …and the series card that carried the count is gone',
+    !/_seriesMeta\[sid\]\.unticked/.test(_skSrc));
 }
 
 
@@ -2281,38 +2267,30 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
 // records. Two unticked doses (10 + 12 Aug) vanished on every save, and because the
 // editor also derived its cadence from entries[1]-entries[0] the surviving 8 Aug -> 14
 // Aug gap re-labelled an EOD run "every 6 days" — which the next save then applied.
-console.log('\n── T-calc: an edited series keeps its past ────────────────');
+console.log('\n── The series editor is gone; its rules moved ─────────────');
 {
   const _esSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  const _esFn = _esSrc.slice(_esSrc.indexOf('async function _tcSaveEditSeries'),
-                             _esSrc.indexOf('function _tcConfirmRemoveSeries'));
-  check('the past half of an edited series is not pushed as a draft',
-    /if\(ds < _editTodayK\) return;/.test(_esFn),
-    'every dose is still drafted, so the past half is dropped again');
-  check('  …it is written as a PLAN row instead',
-    /_tcCreatePlannedInjections\(compId,doseMg,_toCreate,sid\)/.test(_esFn));
-  check('  …never as a record — re-typing a cadence is not a claim you injected',
-    /logged: false/.test(_esSrc) && !/_tcCreateLoggedInjections/.test(_esFn));
-  check('  …and doses already ticked are left alone',
-    /_loggedOn\[compId\+'\|'\+d\]/.test(_esFn));
-  check('  …while doses the edit removed are retired from the record',
-    /_tcDeleteStoredInjection\(_stale\[_si\]\.injId\)/.test(_esFn));
-
-  // The editor and the card must agree on cadence, or opening the sheet and pressing
-  // SAVE silently rewrites the schedule to the wrong interval.
-  const _esOpen = _esSrc.slice(_esSrc.indexOf('function _tcOpenEditSeriesSheet'),
-                               _esSrc.indexOf('function _tcCloseEditSeriesSheet'));
-  check('the edit sheet pre-fills the MODAL gap, not the first gap',
-    !/interval = Math\.max\(1, Math\.round\(\(d1-d0\)\/86400000\)\)/.test(_esOpen) &&
-    /_eBest/.test(_esOpen));
-
-  // The curve rule is untouched: a past dose that was never ticked is still excluded.
-  check('unticked past doses are carried in the PLAN',
-    /rows\.push\(Object\.assign\(\{\},e,\{unticked:true\}\)\)/.test(_esSrc));
-  check('  …and still excluded from the CURVE',
-    /if \(e\.unticked\) return;/.test(_esSrc));
-  check('  …with the card saying how many are not ticked',
-    / not ticked<\/span>/.test(_esSrc));
+  // What this block guarded: an edited series dropping its past-dated doses (a vial two
+  // doses short), re-typing a cadence being written as a RECORD rather than a plan,
+  // ticked doses being overwritten, and removed doses being left behind in the record.
+  // The editor is gone, so the first three cannot happen; the fourth — never claiming a
+  // dose was injected unless the user says so — is asserted where record entry lives.
+  check('the series editor is gone', !/function _tcSaveEditSeries/.test(_esSrc));
+  check('  …and nothing writes a plan row behind the user',
+    !/function _tcCreatePlannedInjections/.test(_esSrc));
+  // Record entry still exists and still means what it says: logged:true, only for dates
+  // the user picked, never inferred.
+  // Moved to Today 2026-08-20. Still explicit, and now explicitly OPTIONAL: the
+  // "Already taken" checkbox decides, defaulting to true because a mid-cycle user is
+  // entering doses they had. Never inferred from the date.
+  {
+    const _thE = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    check('logging a dose you took is still explicit',
+      /logged: logged,/.test(_thE) && /var logged = !!d\.logged;/.test(_thE));
+    check('  …and defaults to taken, the mid-cycle case', /logged: true \}/.test(_thE));
+    check('  …with an untaken past dose kept out of the curve, as designed',
+      /Past-dated doses that are never ticked stay OUT of the free-T curve/.test(_thE));
+  }
 }
 
 // The exclusion is behavioural, not just textual: an unticked row in the plan must not
@@ -2399,20 +2377,29 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       r === expect.records && b === expect.future && p === 0,
       'records=' + r + ' (want ' + expect.records + '), future=' + b + ' (want ' + expect.future + '), plans=' + p);
   };
-  // A dose already taken is a RECORD; a dose ahead is a PLAN. A series spanning
-  // today splits, and nothing is lost at the seam.
+  // A dose already taken is a RECORD; a dose ahead is a PLAN.
+  //
+  // Phase 5 (2026-08-19) removed T-Calc's planning and kept its record entry: the
+  // protocol is the only thing that writes a schedule now, and there is no other way
+  // to log a dose you already took. So the past half of this matrix still asserts the
+  // exact dose counts — that is the vial arithmetic, and a series that comes back two
+  // doses short is a vial that no longer adds up — while the future half must write
+  // NOTHING and say where planning went.
   await _add('single dose in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-5)}, false,
              {records:1, future:0});
-  await _add('single dose in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
-             {records:0, future:1});
+  await _add('single dose in the future — refused, not planned',
+             {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
+             {records:0, future:0});
   await _add('series entirely in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-20),
              'tc-as-count':'5','tc-as-interval':'2'}, true, {records:5, future:0});
-  await _add('series entirely in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
-             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:5});
-  await _add('series straddling today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
-             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:2});
+  await _add('series entirely in the future — refused', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:0});
+  // The seam is where doses used to go missing: the past half must still land in full.
+  await _add('series straddling today — the past half is still recorded in full',
+             {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:0});
   await _add('series starting exactly today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(0),
-             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:9});
+             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:0});
 
   // ── SERIES EDITOR ────────────────────────────────────────────────────────
   // The reported bug: a straddling edit dropped its past-dated doses on every save.
@@ -2430,20 +2417,22 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       '), records=' + r + ' (want ' + expect.records + ')');
   };
   const _ex = [_d(-4), _d(-2), _d(0), _d(2)];
-  // Re-typing a cadence never asserts a dose was injected: the past half is written
-  // as PLAN rows, never records.
-  await _edit('grown, straddling today', _ex,
+  // Editing a series is planning, and planning left T-Calc in Phase 5. Every one of
+  // these permutations must now write NOTHING — a second writer beside the protocol
+  // generator is the duplication this rewrite exists to end. The dose-count arithmetic
+  // these guarded is asserted against _genInjBatches in the "one scheduler" block.
+  await _edit('grown, straddling today — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'10','tc-es-interval':'2'},
-    {plans:2, future:8, records:0});
-  await _edit('entirely in the future', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('entirely in the future — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(4),'tc-es-count':'6','tc-es-interval':'2'},
-    {plans:0, future:6, records:0});
-  await _edit('entirely in the past', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('entirely in the past — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-20),'tc-es-count':'4','tc-es-interval':'2'},
-    {plans:4, future:0, records:0});
-  await _edit('shrunk, straddling today', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('shrunk, straddling today — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'3','tc-es-interval':'2'},
-    {plans:2, future:1, records:0});
+    {plans:0, future:0, records:0});
 
 
   // ── REMOVAL — the inverse, and historically the most fragile ──────────────
@@ -2467,9 +2456,13 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
   await _del('a stored row deletes the record, not just the cache',
     [_stored(_d(-6),1), _stored(_d(-4),2)],
     () => G._tcRemoveManualEntry(0), 1);
-  await _del('a whole stored series deletes every record in it',
+  // Phase 5: removing a SERIES is a planning action and is refused — the protocol owns
+  // the schedule now, so deleting a run happens by editing the compound in
+  // Plan ▸ Compounds. Deleting a single stored dose is record maintenance and still
+  // works (the cases below), because that is the user correcting their own record.
+  await _del('removing a whole series is refused, not silently partial',
     [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA'), _stored(_d(-2),3,'sA')],
-    () => G._tcRemoveSeries('sA'), 3);
+    () => G._tcRemoveSeries('sA'), 0);
   await _del('a profile-only row (no injId) reaches no endpoint',
     [{compId:'nebido', doseMg:'100', date:_d(4), draft:true}],
     () => G._tcRemoveManualEntry(0), 0);
@@ -2509,27 +2502,43 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       made.indexOf(_d(-6)) < 0 && made.indexOf(_d(-4)) < 0,
       'POSTed ' + JSON.stringify(made) + ' — ' + _d(-6) + '/' + _d(-4) + ' already exist');
   }
-  check('edit · …while the genuinely new date is still created',
-    (await _dupCase('sOld')).indexOf(_d(-2)) >= 0);
+  check('edit · a refused edit creates nothing at all',
+    (await _dupCase('sOld')).length === 0);
 
-  // THE REGRESSION, stated as the invariant it broke: an edit writes as many doses as
-  // it was asked for. The old code wrote only the future half, so "10 every 2 days"
-  // starting four days ago persisted 8 — and each further save shed two more.
-  const _acct = async (count, startOff) => {
-    _reset();
-    G._tcp.manualLog = _ex.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
-    G._tcEditSeriesId = 'sX';
-    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(startOff),
-                        'tc-es-count':String(count),'tc-es-interval':'2'});
-    await G._tcSaveEditSeries();
-    return _plans(calls).length + _recs(calls).length + _batch(calls);
+  // THE REGRESSION these guarded: a schedule must write as many doses as it was asked
+  // for. T-Calc's editor wrote only the future half, so "10 every 2 days" starting four
+  // days ago persisted 8, and each further save shed two more — a vial that no longer
+  // adds up (CLAUDE.md: a series usually maps to a VIAL).
+  //
+  // The editor is refused now, so the invariant moves to the thing that does the
+  // scheduling: _genInjBatches over a protocol whose cycle started before today.
+  const _genCount = (startOff, intervalDays) => {
+    const st = {id:'acct', cycle_start:_d(startOff), cycle_length:8,
+                trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100',
+                     unit:'mg', freqVal:intervalDays, freqUnit:'days'}]}};
+    return G._genInjBatches(st, 'acct', null)
+            .reduce((n, b) => n + (b.entries||[]).length, 0);
   };
-  check('edit · every dose asked for is accounted for (10 from −4d)',
-    (await _acct(10, -4)) === 10, 'wrote ' + (await _acct(10, -4)) + ' of 10');
-  check('edit · …and re-saving the same run does not shed doses',
-    (await _acct(10, -4)) === (await _acct(10, -4)));
-  check('edit · a 20-dose run from 10 days ago is written in full',
-    (await _acct(20, -10)) === 20, 'wrote ' + (await _acct(20, -10)) + ' of 20');
+  const _genDates = (startOff, intervalDays) => {
+    const st = {id:'acct', cycle_start:_d(startOff), cycle_length:8,
+                trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100',
+                     unit:'mg', freqVal:intervalDays, freqUnit:'days'}]}};
+    return G._genInjBatches(st, 'acct', null)
+            .reduce((a, b) => a.concat((b.entries||[]).map(e => e.date)), []);
+  };
+  const _d10 = _genDates(-10, 2), _d4 = _genDates(-4, 2);
+  check('gen · a protocol that began 10 days ago keeps its past-dated doses',
+    _d10.filter(x => x < _d(0)).length >= 4, 'past doses: ' + _d10.filter(x => x < _d(0)).length);
+  check('gen · …every one of them, none shed at the seam',
+    _d10.filter(x => x < _d(0)).length > _d4.filter(x => x < _d(0)).length,
+    _d10.filter(x => x < _d(0)).length + ' vs ' + _d4.filter(x => x < _d(0)).length);
+  check('gen · …and regenerating writes exactly the same run',
+    JSON.stringify(_genDates(-10, 2)) === JSON.stringify(_d10));
+  check('gen · …on the cadence asked for, with no gaps',
+    (() => {
+      const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
+      return _d10.length > 2 && gap(_d10[0], _d10[1]) === 2 && gap(_d10[1], _d10[2]) === 2;
+    })(), JSON.stringify(_d10.slice(0,3)));
 
   G._tcp = _pmSave.tp; G._userStacks = _pmSave.us; G._tcHistory = _pmSave.h;
   G._tcHistoryState = _pmSave.hs; G._injectionsCache = _pmSave.c;
@@ -2793,37 +2802,41 @@ if (typeof G._genInjBatches === 'function') {
   check('  …carrying the compound id unchanged', _e.every(x => x.compound_id === 'reta'));
   check('  …and a PK snapshot field for the history to read', _e.every(x => 'half_life_days' in x));
 
-  // ── T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ────────────────────────────
-  // These three checks previously asserted the opposite: that the TRT tier generated
-  // `tier:'trt'`, that the Enhanced tier generated `tier:'enhanced'`, and that when
-  // both held testosterone the TRT tier won. That was ONE stream but the wrong owner
-  // — T-Calc was scheduling a third of its own, and a real protocol ended up with 27
-  // `enhanced/test_u` rows beside 23 `trt/nebido` rows for the same molecule.
-  // Henrik: "The only way to schedule testo must be using t-calc."
+  // ── ONE SCHEDULER: THE PROTOCOL (Phase 5, 2026-08-19) ──────────────────────
+  // These checks asserted the 2026-08-14 rule: that neither tier generated
+  // testosterone, because T-Calc owned it. Phase 4 merged the tiers and Phase 5 gave
+  // the generator testosterone back, so what they assert now is the requirement that
+  // actually survives — ONE stream per molecule, generated here.
   _b = G._genInjBatches({id:'s2', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
       freqVal:2, freqUnit:'days'}]}}, 'cyc2', null);
-  check('the TRT tier generates NO injections — T-Calc schedules testosterone',
-    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
+  _e = _flat(_b);
+  check('the protocol generates its testosterone', _e.length > 0);
+  check('  …tagged trt, so the free-T model still finds it',
+    _e.every(x => x.tier === 'trt' && x.compound_id === 'nebido'));
 
   _b = G._genInjBatches({id:'s3', cycle_start:_d(-10), cycle_length:4,
     enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
       dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3', null);
-  check('  …and neither does Enhanced-tier testosterone',
-    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
+  check('  …and so does one still filed under the Enhanced spelling',
+    _flat(_b).length > 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
 
+  // The case that used to double: an unmigrated protocol holding the same molecule in
+  // both blocks. 27 enhanced/test_u rows beside 23 trt/nebido rows is what that cost.
   _b = G._genInjBatches({id:'s3b', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
       freqVal:2, freqUnit:'days'}]},
     enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
       dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3b', null);
   _e = _flat(_b);
-  check('  …so testosterone in BOTH tiers schedules ZERO times here, not once',
-    _e.length === 0,
+  const _canonIds = [...new Set(_e.map(x => G._canonCompoundId(x.compound_id)))];
+  check('  …and the same molecule in both blocks still schedules ONCE',
+    _canonIds.length === 1 && _canonIds[0] === 'nebido',
     'ids generated: ' + [...new Set(_e.map(x => x.compound_id))].join(','));
-  check('  …and both are recorded as suppressed, naming T-Calc',
-    (G._injSuppressed['s3b']||[]).length === 2 &&
-    (G._injSuppressed['s3b']||[]).every(x => x.reason === 'tcalc'));
+  check('  …with the duplicate recorded, not silently dropped',
+    (G._injSuppressed['s3b']||[]).length === 1 &&
+    (G._injSuppressed['s3b']||[]).every(x => x.reason === 'duplicate'),
+    JSON.stringify(G._injSuppressed['s3b']||[]));
 
   // A non-testosterone Enhanced compound is never suppressed by that rule.
   _b = G._genInjBatches({id:'s4', cycle_start:_d(-10), cycle_length:4,
@@ -2901,11 +2914,12 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
   // fixture — so after the flush there is legitimately no row 0 to read.
   check('editing a dose updates the entry', G._tcp.manualLog[0].doseMg === '125');
   await _flush();
-  check('  …and reaches the backend, not just the local object',
-    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'),
+  // Phase 5: T-Calc no longer writes. The edit stays local to the planner view until
+  // the planner itself is removed in Phase 6 — the protocol is what schedules now, so
+  // a write from here would open the second stream this rewrite exists to close.
+  check('  …and no longer reaches the backend — T-Calc does not schedule',
+    !_calls.some(c => /\/injections/.test(c.url) && c.method === 'POST'),
     'calls: ' + _calls.map(c => c.method + ' ' + c.url.split('/').pop()).join(', '));
-  check('  …writing the edited dose, not the old one',
-    _calls.some(c => (c.body && c.body.entries || []).some(e => String(e.dose) === '125')));
   // An out-of-range index must be a no-op, not a crash.
   let _threw = false;
   try { G._tcSetManualField(99, 'doseMg', '1'); } catch (e) { _threw = true; }
@@ -2929,19 +2943,12 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
     {compId:'nebido', doseMg:'100', date:_d(2)},
     {compId:'nebido', doseMg:'100', date:_d(4)}]};
   _calls = _arm();
-  await G._tcPushLogToSchedule();
-  check('  …and with one bound it syncs the plan',
-    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'));
-  check('  …reporting the FUTURE count, not the whole log',
-    _alerts.some(m => /Pushed 2 future injections/.test(m)), 'alerts: ' + JSON.stringify(_alerts));
-  // An empty log says so rather than posting nothing silently.
   _alerts.length = 0;
-  G._tcp = {targetStackId:'sP', plannerMode:'advanced', manualLog:[]};
-  _calls = _arm();
   await G._tcPushLogToSchedule();
-  check('  …and an empty log is reported, not silently ignored',
-    _alerts.some(m => /No injections logged/i.test(m)) &&
-    !_calls.some(c => c.method === 'POST'));
+  check('  …and with one bound it still writes nothing',
+    !_calls.some(c => /\/injections/.test(c.url) && c.method === 'POST'));
+  check('  …saying where scheduling lives instead',
+    _alerts.some(m => /Plan ▸ Compounds/.test(m)), 'alerts: ' + JSON.stringify(_alerts));
 
   G._tcp = _pfSave.tp; G._userStacks = _pfSave.us; G.fetch = _pfSave.f; G.alert = _pfSave.a;
   G._tcHistory = _pfSave.h; G._tcHistoryState = _pfSave.hs; G._injectionsCache = _pfSave.c;
@@ -3147,10 +3154,11 @@ console.log('\n── Today: testosterone configured but not scheduled ───
 
   _alert = ''; G.buildToday();
   check('Today says testosterone is not scheduled', /Testosterone not scheduled/.test(_alert));
-  check('  …naming the compound and the tier it sits in',
-    /Nebido/.test(_alert) && /Enhanced tier/.test(_alert), _alert.slice(0,120));
-  check('  …and pointing at T-Calc, which is the only thing that schedules it',
-    /T-Calc/.test(_alert) && /tab-btn-tcalc/.test(_alert));
+  check('  …naming the compound', /Nebido/.test(_alert), _alert.slice(0,120));
+  // Phase 5: the cause changed. It no longer means "T-Calc owns this" — the protocol
+  // schedules testosterone now, so an empty calendar means it has not generated yet.
+  check('  …and pointing at Plan, which is what schedules it now',
+    /Plan ▸ Compounds/.test(_alert) && /tab-btn-stack/.test(_alert) && !/T-Calc/.test(_alert));
 
   // Bound plan → scheduled → the note must go away.
   G._injectionsCache[TODAY].push({id:'c', compound_id:'test_u', tier:'trt', cycle_id:'tcalc:P2',
@@ -3261,10 +3269,11 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
   G._userStacks = [st]; G._activeStackIndices = [0]; G._stacksLoaded = true;
   G.saveStacksToBackend = async () => {};
 
-  // The gap this closes, as data: the generator produces no testosterone for this stack.
+  // Phase 5 inverted this: the generator is what produces testosterone now, which is
+  // why T-Calc's own write path is disabled below rather than duplicating it.
   const _gen = G._genInjBatches(st, 'P2', new Date(_n.getFullYear(), _n.getMonth(), _n.getDate(), 12,0,0,0));
-  check('the stack generator produces no testosterone rows',
-    !_gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
+  check('the stack generator produces the testosterone rows',
+    _gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
 
   const POSTED = [], DELETED = [];
   G.fetch = async (url, opt) => {
@@ -3275,28 +3284,32 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
     }
     return {ok:true, status:200, json:async()=>[]};
   };
-  await G._tcWritePlanToStack(st, {compId:'nebido', doseMg:'250', cadenceN:2, cadenceUnit:'day',
-                                   cadenceDays:2, startDate:_bk(50)});
-  const testo = POSTED.filter(p => p.compound_id === 'nebido');
-  const rows  = testo.reduce((a,p) => a + (p.entries||[]).length, 0);
-  check('saving a plan writes the ester\'s injections', rows > 0, `${rows} rows`);
-  check('  …clearing the old ones first, so the save is not additive', DELETED.length > 0);
-  check('  …writing only from today onward, never over the record',
-    testo.every(p => (p.entries||[]).every(e => e.date >= TODAY)));
-  check('  …as PLANNED rows, not as administered ones',
-    testo.every(p => (p.entries||[]).every(e => e.logged === false && e.tier === 'trt')));
-  check('  …on the plan\'s own cadence', (() => {
-    if (!testo.length || !(testo[0].entries||[]).length) return false;   // fail, don't throw
-    const ds = testo[0].entries.map(e => e.date).slice(0,3);
-    if (ds.length < 3) return false;
-    const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
-    return gap(ds[0],ds[1]) === 2 && gap(ds[1],ds[2]) === 2;
-  })(), JSON.stringify((testo[0]&&testo[0].entries||[]).slice(0,3).map(e=>e.date)));
-  // A protocol that ends must not be scheduled past its end.
+  // Phase 5: _tcWritePlanToStack no longer writes. What used to be asserted here — that
+  // saving a T-Calc plan produced the ester's injections on its own cadence, from today
+  // forward, as planned rows, never past the cycle end — is now the PROTOCOL
+  // generator's job, and is asserted against _genInjBatches above and in the
+  // "one scheduler" block. What matters here is that the old path stays silent, so the
+  // two cannot both write.
+  // Phase 6 deleted _tcWritePlanToStack outright. Phase 5 had only disabled it, and the
+  // check here was that it wrote nothing; the stronger statement is that there is no
+  // such function to call.
+  check('T-Calc\'s plan write is gone, not merely disabled',
+    typeof G._tcWritePlanToStack !== 'function' && typeof G._tcPostPlanInjections !== 'function');
+  check('  …and nothing in T-Calc wrote an injection getting here',
+    POSTED.length === 0 && DELETED.length === 0,
+    `posted ${POSTED.length}, deleted ${DELETED.length}`);
+
+  // …and the doses it used to write are exactly what the generator now produces, on
+  // the protocol's own cadence, never past its cycle end.
+  const _genRows = _gen.filter(b => ['nebido','test_u'].includes(b.compound_id))
+                       .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('  …with the generator writing them instead', _genRows.length > 0);
+  check('  …as planned rows, not administered ones',
+    _genRows.every(e => e.logged === false));
   check('  …and never past the protocol\'s own cycle end', (() => {
     const cs = new Date(_bk(50)+'T12:00:00');
     const ce = new Date(cs.getTime() + 44*7*86400000);
-    return testo.every(p => (p.entries||[]).every(e => new Date(e.date+'T12:00:00') <= ce));
+    return _genRows.every(e => new Date(e.date+'T12:00:00') <= ce);
   })());
 
   G.fetch = _spSave.f; G._userStacks = _spSave.us; G._activeStackIndices = _spSave.ai;
@@ -3380,20 +3393,781 @@ console.log('\n── Cycle header + enhanced testosterone identity ────
 // like the edit had been ignored. _tcConfirmAddSheet had always done this; the edit path
 // never did. Order matters — the cache must be refreshed BEFORE _tcLoadLogFromStack,
 // which reads it to rebuild manualLog.
-console.log('\n── T-Calc: an edit re-reads the cache ─────────────────────');
+console.log('\n── An edit re-reads the cache: the protocol path now ─────');
 {
+  // 2026-08-16: _tcSaveEditSeries synced the record and refetched the history but never
+  // refreshed _injectionsCache, which the curve also draws on — so a Nebido run cut to
+  // 16 Aug still ran to October, looking like the edit had been ignored.
+  //
+  // That editor is gone. The same hazard now belongs to the protocol path: whatever
+  // writes injections must refresh the cache before anything reads it back.
   const _esSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  const _i = _esSrc.indexOf('async function _tcSaveEditSeries()');
-  const _body = _esSrc.slice(_i, _i + 6000);
-  check('the edit path exists', _i > 0);
-  check('editing a series refreshes the injection cache, not just the history',
-    /refreshInjectionsCache/.test(_body));
-  check('  …in the order sync → history → cache → rebuild',
-    /_tcSyncLogToBackend\(\)[\s\S]*?_tcFetchHistory\(true\)[\s\S]*?refreshInjectionsCache[\s\S]*?_tcLoadLogFromStack\(\)/.test(_body));
-  // The delete path shares the hazard and already got this right — keep it that way.
-  const _d = _esSrc.indexOf('async function _tcRemoveSeries(');
-  check('  …and deleting a series does the same', /refreshInjectionsCache/.test(_esSrc.slice(_d, _d + 3000)));
+  const _stSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+  check('the series editor that skipped the refresh is gone',
+    !/function _tcSaveEditSeries/.test(_esSrc));
+  check('saving a protocol refreshes the injection cache after writing',
+    /await generateAndPushInjections\(/.test(_stSrc) &&
+    /refreshInjectionsCache\(\)/.test(_stSrc));
+  check('  …and record entry still re-reads both the history and the cache',
+    /await _tcFetchHistory\(true\);[\s\S]{0,200}refreshInjectionsCache\(\)/.test(_esSrc));
 }
+
+  // ── Tier 2 sees the whole catalogue, locked ────────────────────────────────
+  // Henrik, 2026-08-20: "I want a tier2 user to still see the full catalog, but
+  // anything else than testosterone, PCT and HCT compounds should be greyed out.
+  // Clicking a Enhanced compound will trigger an overlay with an (for now dummy)
+  // message about requiring an app upgrade."
+  console.log('\n── Tier 2: full catalogue, locked ─────────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svTier = G._userTier, _svBuf = G._editBuf;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'deca',  name:'Deca',        group:'19-Nor',      dot:'#888', isTestosterone:false},
+      {id:'tren_e',name:'Tren E',      group:'19-Nor',      dot:'#888', isTestosterone:false},
+      {id:'primo', name:'Primobolan',  group:'DHT-Derived', dot:'#3cf', isTestosterone:false},
+      {id:'hgh',   name:'HGH',         group:'GH Axis',     dot:'#e8a', isTestosterone:false},
+      {id:'hcg',   name:'HCG',         group:'Recovery',    dot:'#4c8', isTestosterone:false},
+      {id:'nolvadex', name:'Nolvadex', group:'PCT',         dot:'#4c8', isTestosterone:false},
+    ];
+
+    // ── the rule itself ──
+    G._userTier = 2;
+    const allowed = id => G._compoundAllowedForTier(
+      G.ENHANCEMENT_COMPOUNDS.find(c => c.id === id));
+    check('tier 2: hCG is allowed',      allowed('hcg') === true);
+    check('tier 2: PCT is allowed',      allowed('nolvadex') === true);
+    check('tier 2: a 19-nor is locked',  allowed('deca') === false);
+    check('tier 2: tren is locked',      allowed('tren_e') === false);
+    check('tier 2: a DHT is locked',     allowed('primo') === false);
+    check('tier 2: GH is locked',        allowed('hgh') === false);
+    check('tier 2: testosterone is allowed by the catalogue FLAG, not its name',
+      G._compoundAllowedForTier({id:'testoviron', name:'Testoviron Depot', isTestosterone:true}) === true &&
+      G._compoundAllowedForTier({id:'mystery', name:'No testosterone in this name', isTestosterone:true}) === true);
+    G._userTier = 3;
+    check('tier 3: everything is allowed',
+      ['deca','tren_e','primo','hgh','hcg','nolvadex'].every(allowed));
+
+    // ── what tier 2 actually sees ──
+    G._userTier = 2;
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    const t2 = G._renderEditCompounds({trt:{}, enhanced:{}});
+    check('tier 2 sees the whole catalogue, not an upgrade card in its place',
+      t2.includes('Deca') && t2.includes('Primobolan') && t2.includes('HGH'));
+    check('  …with the classes named, so the tier reads as complete',
+      t2.includes('19-Nor') && t2.includes('DHT-Derived') && t2.includes('GH Axis'));
+    check('  …the locked ones greyed', (t2.match(/opacity:0\.45/g) || []).length >= 4);
+    check('  …and tapping one opens the upgrade overlay',
+      t2.includes("showCompoundUpgrade('deca')"));
+    check('  …never the selection toggle', !t2.includes("editToggleEnhancedCompound('deca')"));
+    check('  …while hCG and PCT stay selectable, because tier 2 may have them',
+      t2.includes("editToggleEnhancedCompound('hcg')") &&
+      t2.includes("editToggleEnhancedCompound('nolvadex')"));
+
+    // ── and the gate holds where it counts: the protocol ──
+    // The overlay's own DOM is not under test here; the harness element stub has no
+    // remove(). Hand these lookups back null and let the guards do their job.
+    const _svGetEl2 = G.document.getElementById;
+    G.document.getElementById = function(id){
+      if (id === 'upg-overlay') return null;
+      return _svGetEl2.call(G.document, id);
+    };
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    G.editToggleEnhancedCompound('deca');
+    check('a locked compound cannot be added even by calling the toggle directly',
+      (G._editBuf.enhanced.compounds || []).length === 0);
+    G.editToggleEnhancedCompound('hcg');
+    check('  …while an allowed one still adds normally',
+      (G._editBuf.enhanced.compounds || []).some(c => c.id === 'hcg'));
+    // A downgrade must not strand a compound on the protocol.
+    G._editBuf.enhanced.compounds.push({id:'deca', name:'Deca'});
+    G.editToggleEnhancedCompound('deca');
+    check('  …and a locked compound already on the protocol can still be REMOVED',
+      !(G._editBuf.enhanced.compounds || []).some(c => c.id === 'deca'));
+
+    // ── tier 1: the same catalogue, all of it locked ──
+    // Corrected 2026-08-20: "Tier 1 & 2 should see everything but greyed out if not
+    // included in their tier." Tier 1 has no testosterone either, so that group locks
+    // too — which is the part tier 2 does NOT do.
+    G._userTier = 1;
+    check('tier 1: nothing in the enhancement catalogue is allowed',
+      ['deca','tren_e','primo','hgh','hcg','nolvadex'].every(id => allowed(id) === false));
+    check('tier 1: testosterone is locked too, unlike tier 2',
+      G._compoundAllowedForTier({id:'nebido', name:'Nebido', isTestosterone:true}) === false);
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    const t1 = G._renderEditCompounds({trt:{}, enhanced:{}});
+    check('tier 1 sees the whole catalogue, same as everyone',
+      t1.includes('Deca') && t1.includes('Primobolan') && t1.includes('HGH') &&
+      t1.includes('19-Nor') && t1.includes('GH Axis'));
+    check('  …including the testosterone group, rendered and locked',
+      t1.includes('Testosterone') && t1.includes('showCompoundUpgrade('));
+    check('  …with nothing selectable at all',
+      !t1.includes("editToggleEnhancedCompound('deca')") &&
+      !t1.includes("editToggleTRTCompound('"));
+    // The toggles refuse too — rendering is presentation, these change the protocol.
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    G.editToggleTRT();
+    check('tier 1: the testosterone tier cannot be switched on',
+      !G._editBuf.trt.enabled);
+    G.editToggleTRTCompound('nebido');
+    check('  …nor a testosterone ester added',
+      (G._editBuf.trt.compounds || []).length === 0);
+    // …but a downgrade must not strand what is already there.
+    G._editBuf.trt = {enabled:true, compounds:[{id:'nebido', name:'Nebido'}]};
+    G.editToggleTRTCompound('nebido');
+    check('  …while one already on the protocol can still be removed',
+      (G._editBuf.trt.compounds || []).length === 0);
+
+    // ── tier 3 is untouched ──
+    G._userTier = 3;
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    const t3 = G._renderEditCompounds({trt:{}, enhanced:{}});
+    check('tier 3 still gets a fully selectable catalogue',
+      t3.includes("editToggleEnhancedCompound('deca')") && !t3.includes('opacity:0.45'));
+
+    G.document.getElementById = _svGetEl2;
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._userTier = _svTier; G._editBuf = _svBuf;
+  }
+
+  // ── Log a past injection: a run, and whether it was taken ───────────────────
+  // Henrik, 2026-08-20: "The Add past injections, should instead be able to add a
+  // series of injections as well as have a checkbox if these old injections should
+  // already be checked (most common use case for a mid cycle user)."
+  console.log('\n── Past injection: series + already-taken ─────────────────');
+  {
+    const _svFetch = G.fetch, _svAuth = G.authHeaders, _svDraft = G._piDraft;
+    // The sheet's own DOM is not under test here — the record it produces is. The
+    // harness's element stub has no remove(), so hand these lookups back null and let
+    // the guards in the sheet do their job.
+    const _svGetEl = G.document.getElementById;
+    G.document.getElementById = function(id){
+      if (id === 'pi-overlay' || id === 'pi-err' || id === 'pi-save' || id === 'pi-preview') return null;
+      return _svGetEl.call(G.document, id);
+    };
+    let posted = [];
+    G.authHeaders = function(){ return {}; };
+    G.fetch = function(u, o){
+      const body = o && o.body ? JSON.parse(o.body) : null;
+      if (String(u).indexOf('/injections') > -1 && o && o.method === 'POST') posted.push(body);
+      return Promise.resolve({ok:true, status:200,
+        json:()=>Promise.resolve({entry: Object.assign({id:'x'+posted.length}, body)})});
+    };
+
+    const today = G._thTodayStr();
+    const daysAgo = n => { const p = today.split('-'); const d = new Date(+p[0], +p[1]-1, +p[2] - n);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+
+    // ── the date maths, before anything is written ──
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(10),
+                  time:'', isSeries:true, count:5, intervalDays:2, logged:true};
+    const dates = G._piDates(G._piDraft);
+    check('a series expands to one date per injection', dates.length === 5, dates.join(','));
+    check('  …stepping by the interval, in calendar days',
+      dates[0] === daysAgo(10) && dates[1] === daysAgo(8) && dates[4] === daysAgo(2), dates.join(','));
+    check('a single dose is just its own date',
+      G._piDates({date: daysAgo(3), isSeries:false}).join(',') === daysAgo(3));
+
+    // ── the whole run reaches the record ──
+    posted = [];
+    await G.savePastInjection();
+    check('every dose in the run is written', posted.length === 5, 'posted ' + posted.length);
+    check('  …each marked as taken, because the box was ticked',
+      posted.every(p => p.logged === true));
+    check('  …sharing one series id, so a restore rebuilds one card',
+      posted.every(p => p.series_id && p.series_id === posted[0].series_id));
+    check('  …under cycle_id manual', posted.every(p => p.cycle_id === 'manual'));
+    check('  …carrying the dose and compound asked for',
+      posted.every(p => p.dose === '100' && p.compound_id === 'nebido' && p.unit === 'mg'));
+
+    // ── the checkbox is honoured ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(6),
+                  time:'', isSeries:true, count:3, intervalDays:2, logged:false};
+    await G.savePastInjection();
+    check('unticking "already taken" writes them as NOT taken',
+      posted.length === 3 && posted.every(p => p.logged === false));
+
+    // ── this sheet records the past; it does not plan ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(2),
+                  time:'', isSeries:true, count:6, intervalDays:2, logged:true};
+    await G.savePastInjection();
+    check('a run straddling today writes only the dates that have happened',
+      posted.length === 2, 'posted ' + posted.length + ': ' + posted.map(p=>p.date).join(','));
+    check('  …and never a date in the future',
+      posted.every(p => p.date <= today), posted.map(p=>p.date).join(','));
+
+    // ── a single dose still works, unchanged ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'250', unit:'mg', date: daysAgo(4),
+                  time:'', isSeries:false, count:5, intervalDays:2, logged:true};
+    await G.savePastInjection();
+    check('one dose still writes exactly one row', posted.length === 1);
+    check('  …with no series id, because there is no series',
+      posted[0] && (posted[0].series_id === null || posted[0].series_id === undefined));
+
+    // ── refusals ──
+    for (const [label, draft] of [
+      ['a run with no count',    {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:0,intervalDays:2,logged:true}],
+      ['a run with no interval', {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:3,intervalDays:0,logged:true}],
+      ['a dose of zero',         {tier:'trt',compId:'nebido',dose:'0',date:daysAgo(5),isSeries:false,logged:true}],
+      ['a date in the future',   {tier:'trt',compId:'nebido',dose:'100',date:'2099-01-01',isSeries:false,logged:true}],
+      ['an absurd run length',   {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(400),isSeries:true,count:999,intervalDays:1,logged:true}],
+    ]) {
+      posted = [];
+      G._piDraft = draft;
+      await G.savePastInjection();
+      check('refused: ' + label, posted.length === 0, 'wrote ' + posted.length);
+    }
+
+    G.fetch = _svFetch; G.authHeaders = _svAuth; G._piDraft = _svDraft;
+    G.document.getElementById = _svGetEl;
+  }
+
+  // ── One Compounds toggle, never a TRT/Enhanced fork ────────────────────────
+  // Henrik, 2026-08-20: "Why you ignore this? TRT and Enhanced should never be
+  // separated." The two toggles set 'trt' and 'enhanced' as mutually exclusive goals,
+  // each handler wiping the other — so the wizard made the user choose which of two
+  // places their testosterone lived, the exact question the tier merge removed.
+  console.log('\n── Goals: one Compounds toggle ────────────────────────────');
+  {
+    const _svTierC = G._userTier;
+
+    // ── tier 3: one switch turns both on ──
+    G._userTier = 3; G.initWizard();
+    check('starts off', !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced'));
+    G.wizToggleCompounds();
+    check('one toggle turns testosterone AND the enhanced catalogue on together',
+      G._wiz.trt.enabled === true && G._wiz.goals.includes('enhanced'));
+    check('  …never one at the cost of the other',
+      G._wiz.goals.includes('trt') && G._wiz.goals.includes('enhanced'));
+    check('  …and the flow asks for testosterone exactly once',
+      G._wizFlow().filter(x => x === 'trt' || x === 'base').length === 1,
+      G._wizFlow().join(','));
+    G.wizToggleCompounds();
+    check('toggling off clears both sides',
+      !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced') &&
+      !G._wiz.goals.includes('trt') && (G._wiz.trt.compounds||[]).length === 0);
+
+    // ── tier 2: same switch, flow just ends sooner ──
+    G._userTier = 2; G.initWizard();
+    G.wizToggleCompounds();
+    check('tier 2: the same toggle turns testosterone on', G._wiz.trt.enabled === true);
+    check('  …without granting the tier-3 catalogue', !G._wiz.goals.includes('enhanced'));
+    check('  …and its flow still includes the testosterone step',
+      G._wizFlow().indexOf('trt') > -1);
+
+    // ── tier 1: no compounds at all ──
+    G._userTier = 1; G.initWizard();
+    G.wizToggleCompounds();
+    check('tier 1: the toggle does nothing, because the tier has no compounds',
+      !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced'));
+
+    // ── the screen itself ──
+    G._userTier = 3; G.initWizard();
+    const gb = {innerHTML:''}, gf = {innerHTML:''};
+    G.wizStepGoals(gb, gf);
+    check('the Goals screen has ONE compounds toggle',
+      (gb.innerHTML.match(/class="toggle-sw/g) || []).length === 1, gb.innerHTML);
+    check('  …under a single Compounds heading',
+      gb.innerHTML.includes('>Compounds</div>') &&
+      !gb.innerHTML.includes('>TRT</div>') &&
+      !gb.innerHTML.includes('>Enhanced Cycle</div>'));
+    check('  …naming TRT and the other enhanced compounds',
+      /TRT and other enhanced compounds/.test(gb.innerHTML));
+    check('  …and greying nothing, since there is no either/or left',
+      !gb.innerHTML.includes('pointer-events:none'));
+
+    G._userTier = _svTierC;
+  }
+
+  // ── The testosterone base comes from the TRT step ──────────────────────────
+  // Henrik, 2026-08-20, both from the same cause — the enhanced half of the flow still
+  // looked for the base in _wiz.enhanced.compounds after the single Compounds toggle
+  // moved it to the 'trt' step:
+  //   "Even though I added an T ester in TRT step, recommended enhanced compounds lists
+  //    Test E on top, no testosterone esters should show up in this step."
+  //   "Error that a test base is required for masteron even though one is already
+  //    selected in TRT step"
+  console.log('\n── Enhanced flow reads the TRT step ───────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svWiz = G._wiz, _svTier = G._userTier;
+    G._userTier = 3;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'mast_e', name:'Masteron Enanthate', group:'DHT-Derived', cls:'dht', dot:'#3cf', unit:'mg/week', defaultDose:300},
+      {id:'primo',  name:'Primobolan',         group:'DHT-Derived', cls:'dht', dot:'#3cf', unit:'mg/week', defaultDose:400},
+    ];
+
+    // ── the hard block ──
+    G.initWizard();
+    G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate', dose:'250', unit:'mg'}]};
+    G._wiz.enhanced = {enabled:true, _prefilled:true, compounds:[{id:'mast_e', name:'Masteron Enanthate', dose:'300', unit:'mg/week'}]};
+    check('a testosterone set in the TRT step counts as the base', G._wizTrtHasTesto() === true);
+    const eb = {innerHTML:''}, ef = {innerHTML:''};
+    G.wizStepEnhanced(eb, ef);
+    check('THE BUG: no "testosterone base is required" warning when TRT has one',
+      !eb.innerHTML.includes('testosterone base is required'));
+    check('  …and Next is NOT disabled, so the cycle can actually be finished',
+      !ef.innerHTML.includes('disabled'), ef.innerHTML);
+
+    // …while a genuinely baseless enhanced cycle is still stopped.
+    G._wiz.trt = {enabled:false, compounds:[]};
+    const eb2 = {innerHTML:''}, ef2 = {innerHTML:''};
+    G.wizStepEnhanced(eb2, ef2);
+    check('an enhanced cycle with no testosterone anywhere is still blocked',
+      eb2.innerHTML.includes('testosterone base is required') && ef2.innerHTML.includes('disabled'));
+
+    // ── no testosterone esters in the guidance step ──
+    G.initWizard();
+    G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate', dose:'250', unit:'mg'}]};
+    G._wiz.enhanced = {enabled:false, compounds:[]};
+    const res = {
+      headline: 'Add ONE compound to your testosterone base',
+      base: {id:'enanthate', name:'Testosterone Enanthate', note:'Twice-weekly smooths the swing.'},
+      best_addition: {id:'primo', name:'Primobolan', reason:'Mild, non-aromatizing.'},
+      primary: [{id:'enanthate', name:'Testosterone Enanthate', reason:'base'},
+                {id:'mast_e', name:'Masteron Enanthate', reason:'hardening'}],
+      consider: [{id:'cypionate', name:'Testosterone Cypionate', reason:'alt base'}],
+    };
+    check('a testosterone recommendation is recognised by id',
+      G._wizAdviseIsTesto({id:'enanthate'}) === true &&
+      G._wizAdviseIsTesto({id:'cypionate'}) === true);
+    check('  …and a non-testosterone one is not',
+      G._wizAdviseIsTesto({id:'mast_e'}) === false &&
+      G._wizAdviseIsTesto({id:'primo'}) === false);
+
+    // The auto-select must not put the ester into the enhanced list.
+    G._wizAdviseDefaultSelect(res);
+    const picked = (G._wiz.enhanced.compounds || []).map(c => c.id);
+    check('THE BUG: the base is not added to the enhanced list when TRT has it',
+      picked.indexOf('enanthate') === -1, picked.join(','));
+    check('  …while the best addition still is', picked.indexOf('primo') >= 0, picked.join(','));
+
+    // …and with no TRT base, the old behaviour stands.
+    G.initWizard();
+    G._wiz.trt = {enabled:false, compounds:[]};
+    G._wiz.enhanced = {enabled:false, compounds:[]};
+    G._wizAdviseDefaultSelect(res);
+    // Third symptom, and the invisible one: _wizAdviseAdd looks the id up in
+    // ENHANCEMENT_COMPOUNDS, which excludes testosterone since the catalogue merge, so
+    // `if(!cat)return;` had been swallowing every recommended base. It now seeds the
+    // TRT block, where testosterone actually lives.
+    check('with no TRT base, the recommended base seeds the TRT block',
+      ((G._wiz.trt && G._wiz.trt.compounds) || []).some(c => c.id === 'enanthate'),
+      JSON.stringify((G._wiz.trt||{}).compounds || []));
+    check('  …and never lands in the enhanced list, which cannot hold testosterone',
+      !(G._wiz.enhanced.compounds || []).some(c => c.id === 'enanthate'));
+    check('  …with the tier switched on so it generates',
+      !!(G._wiz.trt && G._wiz.trt.enabled));
+
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G._userTier = _svTier;
+  }
+
+  // ── The dose guide follows the protocol, not one injection ─────────────────
+  // Henrik, 2026-08-20, on Retatrutide 3 mg with W and S selected: "Adding a second
+  // 3mg dose on Wednesday doesn't change the dose info, it stuck on 2-4mg." 3 mg twice
+  // a week is 6 mg/week, which is OPTIMAL (4–8) — but the guide was comparing the
+  // per-injection 3 against bands written in mg/wk.
+  console.log('\n── Dose guide: weekly vs per-dose ─────────────────────────');
+  {
+    const label = html => (html.match(/<span style="[^"]*color:var\(--accent\)[^"]*text-transform:uppercase[^"]*">([^<]+)<\/span>/g) || [])
+      .map(m => (m.match(/>([^<]+)<\/span>/) || [])[1] || '').map(x => x.trim());
+
+    // ── which guides are weekly ──
+    const G_ = id => (G.DOSE_GUIDE || {})[id];
+    check('retatrutide is a weekly guide', G._doseGuideIsWeekly(G_('retatrutide')) === true);
+    check('  …as are the other GLP-1s',
+      G._doseGuideIsWeekly(G_('tirzepatide')) === true &&
+      G._doseGuideIsWeekly(G_('semaglutide')) === true);
+    check('a "× 3/wk" frequency is NOT a weekly total',
+      G._doseGuideIsWeekly(G_('motsc')) === false &&
+      G._doseGuideIsWeekly(G_('nad')) === false &&
+      G._doseGuideIsWeekly(G_('tb500')) === false);
+    check('  …nor is a plain per-dose guide',
+      G._doseGuideIsWeekly(G_('bpc157')) === false &&
+      G._doseGuideIsWeekly(G_('hgh')) === false);
+
+    // ── the weekly total itself ──
+    const reta = d => ({id:'retatrutide', times:['AM'], dose_am:'3', unit_am:'mg', days:d});
+    check('one day of 3 mg is 3/week', G._weeklyDoseTotal(reta([3])) === 3);
+    check('the reported case: 3 mg on two days is 6/week', G._weeklyDoseTotal(reta([3,0])) === 6);
+    check('no days selected is nothing per week', G._weeklyDoseTotal(reta([])) === 0);
+    check('both slots count toward the day',
+      G._weeklyDoseTotal({id:'retatrutide', times:['AM','PM'], dose_am:'2', dose_pm:'1', days:[1,2]}) === 6);
+
+    // ── and the highlight actually moves ──
+    const one = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3])));
+    check('3 mg once a week sits in Therapeutic',
+      label(one).some(l => l.indexOf('Therapeutic') === 0), label(one).join('|'));
+    const two = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3,0])));
+    check('THE BUG: adding the second day moves it to Optimal',
+      label(two).some(l => l.indexOf('Optimal') === 0), label(two).join('|'));
+    check('  …and it no longer says Therapeutic',
+      !label(two).some(l => l.indexOf('Therapeutic') === 0), label(two).join('|'));
+    const three = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3,0,5])));
+    check('  …a third day reaches Max', label(three).some(l => l.indexOf('Max') === 0), label(three).join('|'));
+    check('the panel says it is reading a weekly total', /dose × days/.test(two));
+
+    // ── a per-dose guide is untouched by day count ──
+    const bpcA = G._renderDoseGuide('bpc157', 500, 500 * 1);
+    const bpcB = G._renderDoseGuide('bpc157', 500, 500 * 7);
+    check('a per-dose guide ignores how many days are selected',
+      label(bpcA).join('|') === label(bpcB).join('|'), label(bpcA).join('|') + ' vs ' + label(bpcB).join('|'));
+  }
+
+  // ── Deselecting a recommendation sticks ────────────────────────────────────
+  // Henrik, 2026-08-20: "Even if I deselect Primo and click Next it is preselected
+  // again." wizApplyAdviseRecommendations re-seeds when the enhanced list is EMPTY,
+  // reasoning that empty means the user never chose — but clearing the one pre-ticked
+  // compound produces exactly that empty list, so Primobolan came straight back.
+  console.log('\n── Advise: a deselect is an answer ────────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svWiz = G._wiz, _svDoc = G.document.getElementById;
+    // The toggle re-renders the step through wiz-body/wiz-footer, so those two have to
+    // be writable objects; everything else can be null. The selection is what is under
+    // test, not the markup.
+    G.document.getElementById = id =>
+      (id === 'wiz-body' || id === 'wiz-footer') ? {innerHTML:''} : null;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'primo', name:'Primobolan', group:'DHT-Derived', cls:'dht',   defaultDose:400, unit:'mg/week', defaultDays:[1,4], dot:'#3cf'},
+      {id:'npp',   name:'NPP',        group:'19-Nor',      cls:'19nor', defaultDose:300, unit:'mg/week', defaultDays:[1,4], dot:'#888'},
+    ];
+    const advice = {best_addition:{id:'primo', name:'Primobolan'},
+                    primary:[{id:'primo', name:'Primobolan'}, {id:'npp', name:'NPP'}],
+                    consider:[]};
+    const fresh = () => {
+      G.initWizard();
+      G._userTier = 3;
+      G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate'}]};
+      G._wiz.goals = ['trt','enhanced'];
+      G._wiz.enhanced = {enabled:false, compounds:[]};
+      G._wiz.advise = {objective:'lean_mass', experience:'first', flags:{}, result:advice,
+                       loading:false, error:'', fetched:true, _seeded:false, _autoSel:false};
+      return G._wizAdviseState();
+    };
+    const ids = () => ((G._wiz.enhanced||{}).compounds||[]).map(c => c.id);
+
+    // Render pre-ticks the best addition, as before.
+    let st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    check('the best pick is pre-ticked on a fresh recommendation', ids().indexOf('primo') >= 0, ids().join(','));
+
+    // THE BUG: untick it, press Next.
+    G.wizAdviseToggleCompound('primo');
+    check('unticking it removes it', ids().indexOf('primo') === -1, ids().join(','));
+    G.wizApplyAdviseRecommendations();
+    check('THE BUG: pressing Next does not put it back', ids().indexOf('primo') === -1, ids().join(','));
+    check('  …and nothing else is seeded in its place', ids().length === 0, ids().join(','));
+
+    // A user who picks something else keeps exactly that.
+    st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    G.wizAdviseToggleCompound('primo');   // off
+    G.wizAdviseToggleCompound('npp');     // on
+    G.wizApplyAdviseRecommendations();
+    check('a deliberate swap survives Next', ids().join(',') === 'npp', ids().join(','));
+
+    // Untouched: seeding still works, which is what it was for.
+    st = fresh();
+    G.wizApplyAdviseRecommendations();
+    check('an untouched step is still seeded from the recommendation',
+      ids().indexOf('primo') >= 0, ids().join(','));
+
+    // A NEW recommendation is a new question — pre-ticking is allowed again.
+    st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    G.wizAdviseToggleCompound('primo');
+    check('touched is recorded', G._wizAdviseState()._touched === true);
+    G._wizAdviseInvalidate(G._wizAdviseState());
+    check('a new recommendation clears every seed flag',
+      G._wizAdviseState()._touched === false && G._wizAdviseState()._seeded === false &&
+      G._wizAdviseState()._autoSel === false && G._wizAdviseState().result === null);
+
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G.document.getElementById = _svDoc;
+  }
+
+  // ── The wizard never adds a second testosterone ester ──────────────────────
+  // Henrik, 2026-08-20: "Wizard silently adds Test E by itself even though I choose
+  // Nebido." The wizard holds the chosen ester in TWO places — _wiz.trtPlan.compId
+  // (the TRT step's planner, which a normal run fills in) and _wiz.trt.compounds
+  // (the classic editor). _wizTrtHasTesto only read the second, so after picking
+  // Nebido it answered "no testosterone yet" and the advise step seeded its
+  // recommended base as a second TRT compound. Validate renders both lists, so both
+  // esters appeared.
+  console.log('\n── Wizard: one ester, from either place ───────────────────');
+  {
+    const _svWiz2 = G._wiz, _svTier2 = G._userTier;
+    G.initWizard(); G._userTier = 3;
+
+    // ── the guard sees both representations ──
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:false, compounds:[]};
+    check('no ester anywhere reads as none', G._wizTrtHasTesto() === false);
+
+    G._wiz.trtPlan = {compId:'nebido', doseMg:'1000', cadenceDays:70, startDate:'2026-08-01'};
+    check('THE BUG: an ester chosen in the TRT planner counts', G._wizTrtHasTesto() === true);
+
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Test E'}]};
+    check('  …and so does one from the classic editor', G._wizTrtHasTesto() === true);
+
+    // ── the seeder refuses once either holds one ──
+    G._wiz.trtPlan = {compId:'nebido', doseMg:'1000', cadenceDays:70, startDate:'2026-08-01'};
+    G._wiz.trt = {enabled:false, compounds:[]};
+    const seeded = G._wizSeedTrtBase('enanthate');
+    check('the advise base is NOT seeded on top of the planner choice', seeded === false);
+    check('  …so the protocol still carries exactly one ester',
+      (G._wiz.trt.compounds || []).length === 0, JSON.stringify(G._wiz.trt.compounds));
+
+    // ── and Validate lists one, not two ──
+    if (typeof G._wizTrtSummaryRows === 'function') {
+      const rows = G._wizTrtSummaryRows();
+      check('Validate shows one testosterone row, the one chosen',
+        rows.length === 1 && rows[0].id === 'nebido',
+        rows.map(r => r.id).join(','));
+    }
+
+    // ── with nothing chosen, seeding still works, which is what it is for ──
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:false, compounds:[]};
+    check('an empty protocol still accepts the recommended base',
+      G._wizSeedTrtBase('enanthate') === true &&
+      (G._wiz.trt.compounds || []).some(c => c.id === 'enanthate'));
+
+    G._wiz = _svWiz2; G._userTier = _svTier2;
+  }
+
+  // ── Every tab a button navigates to actually exists ────────────────────────
+  // Henrik, 2026-08-20: "Open plan Compounds doesn't do anything if clicked? Do you
+  // have tests for all features/buttons?" — no, and this class had NO coverage.
+  //
+  // The button read getElementById('tab-btn-stack'). The real id is 'tab-btn-stacks',
+  // plural. Wrapped in `if(b)b.click();` the miss was silent: no error, no navigation,
+  // nothing in the console. Two buttons were dead this way, both written by me.
+  //
+  // Same shape as dmWhere and the deleted _tcSetChartZoom: a name that resolves to
+  // nothing, guarded so it cannot complain. Source greps cannot catch it — the string
+  // is present and spelled plausibly. Compare it against the ids the page DEFINES.
+  console.log('\n── Buttons navigate somewhere real ────────────────────────');
+  {
+    const base = path.dirname(path.resolve(htmlPath));
+    const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+    const modules = [...html.matchAll(/src="([a-z-]+\.js)/g)].map(m => m[1]);
+    let all = html;
+    for (const f of modules) {
+      const fp = path.join(base, f);
+      if (fs.existsSync(fp)) all += '\n' + fs.readFileSync(fp, 'utf8');
+    }
+
+    // The nav ids the page actually defines.
+    const defined = new Set([...html.matchAll(/id="(tab-btn-[a-z]+)"/g)].map(m => m[1]));
+    check('the page defines its tab buttons', defined.size >= 10, [...defined].join(','));
+
+    // Every tab-btn-* id referenced anywhere, however it is quoted or escaped.
+    const referenced = new Set([...all.matchAll(/tab-btn-[a-z]+/g)].map(m => m[0]));
+    const dangling = [...referenced].filter(id => !defined.has(id)).sort();
+    check('every tab-btn-* id a handler asks for exists',
+      dangling.length === 0,
+      dangling.length ? 'dangling: ' + dangling.join(', ') : 'checked ' + referenced.size);
+
+    // switchTab's first argument must be a tab the app knows.
+    const tabNames = new Set([...defined].map(id => id.replace('tab-btn-', '')));
+    const switched = new Set([...all.matchAll(/switchTab\(\\?'([a-z]+)\\?'/g)].map(m => m[1]));
+    const unknownTabs = [...switched].filter(t => !tabNames.has(t)).sort();
+    check('every switchTab target is a real tab',
+      unknownTabs.length === 0,
+      unknownTabs.length ? 'unknown: ' + unknownTabs.join(', ') : 'checked ' + switched.size);
+
+    // The two buttons that were dead, named so a regression is obvious.
+    const tcSrc = fs.readFileSync(path.join(base, 'tab-tcalc.js'), 'utf8');
+    const tdSrc = fs.readFileSync(path.join(base, 'tab-today.js'), 'utf8');
+    check("T-Calc's \"Open Plan ▸ Compounds\" points at a real button",
+      /tab-btn-stacks/.test(tcSrc) && !/tab-btn-stack['\\]/.test(tcSrc));
+    check("  …as does Today's \"testosterone not scheduled\" alert",
+      /tab-btn-stacks/.test(tdSrc) && !/tab-btn-stack['\\]/.test(tdSrc));
+  }
+
+  // ── The wizard says it is loading, instead of showing nothing ──────────────
+  // Henrik, 2026-08-20: "The wizard needs a loading spinner between screens, I am
+  // having slow internet and you are sometimes presented with an empty screen for a
+  // while." wizRender handed `body` to the renderer without clearing it, so a step
+  // waiting on the backend left the previous screen — or nothing — on display.
+  console.log('\n── Wizard: loading state between steps ────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svRend = G._WIZ_RENDERERS, _svDoc = G.document.getElementById;
+    const els = {};
+    const el = id => (els[id] = els[id] || {innerHTML:'', textContent:'', scrollTop:0});
+    G.document.getElementById = id => el(id);
+
+    G.initWizard(); G._userTier = 3;
+
+    // A renderer that returns without writing — the slow-step case.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {goals: function(){ /* writes nothing */ }});
+    G._wiz.step = 1;
+    G.wizRender();
+    check('a step that has not drawn yet shows the spinner',
+      /today-spinner-dot/.test(el('wiz-body').innerHTML), el('wiz-body').innerHTML.slice(0,80));
+    check('  …and says so in words, not just an animation',
+      /Loading/.test(el('wiz-body').innerHTML));
+    check('  …with Next disabled, so a half-loaded step cannot be walked past',
+      /disabled/.test(el('wiz-footer').innerHTML), el('wiz-footer').innerHTML.slice(0,120));
+
+    // A renderer that writes replaces the spinner in the same tick — no flash.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {
+      goals: function(b,f){ b.innerHTML = '<div>real content</div>'; f.innerHTML = '<button>Next</button>'; }});
+    G.wizRender();
+    check('a ready step replaces the spinner outright',
+      el('wiz-body').innerHTML === '<div>real content</div>');
+    check('  …and re-enables its own footer',
+      !/disabled/.test(el('wiz-footer').innerHTML));
+
+    // A throwing renderer must not strand the user on a spinner forever.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {
+      goals: function(){ throw new Error('boom'); }});
+    G.wizRender();
+    check('a step that throws shows an error, not an endless spinner',
+      /could not be drawn/.test(el('wiz-body').innerHTML) && !/today-spinner-dot/.test(el('wiz-body').innerHTML));
+    check('  …naming the failure', /boom/.test(el('wiz-body').innerHTML));
+    check('  …and offering a way out', /Try again/.test(el('wiz-body').innerHTML));
+
+    G._WIZ_RENDERERS = _svRend;
+    G.ENHANCEMENT_COMPOUNDS = _svCat;
+    G.document.getElementById = _svDoc;
+  }
+
+  // ── The shopping list includes what the protocol is built on ───────────────
+  // Henrik, 2026-08-20: "Test U missing in Shopping list for a new protocol."
+  // The cart read st.peptides and st.enhanced.compounds and never st.trt.compounds,
+  // so testosterone was invisible to it. Hidden while enhanced cycles carried their
+  // base in the ENHANCED block; exposed the moment Phase 4 merged the tiers and
+  // testosterone moved to `trt` for every protocol.
+  console.log('\n── Shopping list: testosterone ────────────────────────────');
+  {
+    const wk = 12;
+    // Nebido: 1000 mg every 12 weeks, ampoule is 1000mg/4ml.
+    const neb = G._calcTrtCartItem({id:'nebido', name:'Nebido', dose:'1000', unit:'mg',
+                                    freqVal:12, freqUnit:'weeks'}, wk);
+    check('Nebido appears at all', !!neb && !neb.noData, JSON.stringify(neb));
+    check('  …one injection in a 12-week cycle, so 1000 mg',
+      neb.totalMg === 1000, JSON.stringify(neb));
+    check('  …which is one ampoule', neb.units === 1 && /ampoule/.test(neb.unitLabel));
+    check('  …with the pack size read from the catalogue',
+      /1000 mg\/4 mL/.test(neb.packDesc), neb.packDesc);
+
+    // Testoviron 125 mg weekly, ampoule is 250mg/ml → 1500 mg → 6 ampoules.
+    const tv = G._calcTrtCartItem({id:'testoviron', name:'Testoviron Depot',
+                                   dose:'125', unit:'mg', freqVal:1, freqUnit:'weeks',
+                                   days:[1]}, wk);
+    check('a weekly ester totals dose × weeks', tv.totalMg === 125 * wk, JSON.stringify(tv));
+    check('  …and rounds ampoules up, never down', tv.units === Math.ceil(1500 / 250), JSON.stringify(tv));
+
+    // GAP CLOSED 2026-08-20. Henrik: "All testosteron esters are usually avail in
+    // 250mg/ml some also in 100mg/ml and some mixes in 400mg/ml." The generics now
+    // carry a concentration list and report VOLUME — a strength alone gives millilitres,
+    // not a container count, and ampoule vs vial sizes differ by source.
+    const ena = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                    dose:'125', unit:'mg', freqVal:1, freqUnit:'weeks',
+                                    days:[1]}, wk);
+    check('a generic ester reports millilitres at its default strength',
+      ena.totalMg === 125 * wk && ena.ml === 6 && ena.conc === 250, JSON.stringify(ena));
+    check('  …and offers the strengths it is actually sold at',
+      Array.isArray(ena.concList) && ena.concList.indexOf(100) >= 0, JSON.stringify(ena.concList));
+    check('  …with no invented container count',
+      ena.units === null, JSON.stringify(ena));
+
+    // Propionate leads with 100 mg/mL: 50 mg at 250 would be 0.2 mL.
+    const prop = G._calcTrtCartItem({id:'propionate', name:'Testosterone Propionate',
+                                     dose:'50', unit:'mg', days:[1,3,5]}, wk);
+    check('propionate is priced at 100 mg/mL by default', prop.conc === 100, JSON.stringify(prop));
+
+    // A blend is available at 400.
+    check('a mixed ester offers 400 mg/mL',
+      (G._calcTrtCartItem({id:'sustanon', name:'Sustanon 250', dose:'250', unit:'mg',
+                           freqVal:3, freqUnit:'weeks', days:[1]}, wk).concList || []).indexOf(400) >= 0);
+
+    // Switching strength changes the volume, not the milligrams.
+    G._cartSetTrtConc = G._cartSetTrtConc; // present
+    G._cartTrtConcSel['enanthate'] = 100;
+    const ena100 = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                       dose:'125', unit:'mg', days:[1]}, wk);
+    check('choosing 100 mg/mL doubles the volume and leaves the dose alone',
+      ena100.ml === 15 && ena100.totalMg === 1500, JSON.stringify(ena100));
+    G._cartTrtConcSel['enanthate'] = undefined;
+
+    // Twice weekly is twice the total.
+    const twice = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                      dose:'125', unit:'mg', days:[1,4]}, wk);
+    check('two injection days a week doubles the total', twice.totalMg === 125 * 2 * wk, JSON.stringify(twice));
+
+    // A RATE must not be counted as a per-injection amount.
+    const rate = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                     dose:'250', unit:'mg/week', days:[1,4]}, wk);
+    check('a mg/week rate is converted, not multiplied as if it were per injection',
+      rate.totalMg === 250 * wk, JSON.stringify(rate));
+
+    // No dose yet: say so rather than vanishing.
+    const empty = G._calcTrtCartItem({id:'nebido', name:'Nebido', dose:'', unit:'mg',
+                                      freqVal:12, freqUnit:'weeks'}, wk);
+    check('a compound with no dose is listed, not dropped',
+      !!empty && empty.noData === true, JSON.stringify(empty));
+
+    // A compound with no parseable pack still reports its total.
+    const noPack = G._calcTrtCartItem({id:'unknown-ester', name:'Something', dose:'100',
+                                       unit:'mg', days:[1]}, wk);
+    check('an unknown ester still reports total mg',
+      noPack.totalMg === 100 * wk && noPack.units === null, JSON.stringify(noPack));
+
+    // And the renderer actually has a section for it.
+    const idx = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+    check('the cart renders a testosterone section',
+      /Testosterone — source separately/.test(idx));
+    check('  …built from st.trt.compounds', /st\.trt&&st\.trt\.compounds\)\?st\.trt\.compounds\.filter/.test(idx));
+    check('  …and the empty-cart message accounts for it',
+      /!hasItems&&!peptides\.length&&!enhanceCmpds\.length&&!trtCmpds\.length/.test(idx));
+  }
+
+  // ── The promotion carries every module the page loads ──────────────────────
+  // 2026-08-20, first Push to Prod after the rewrite: prod CI failed with
+  //   ENOENT: no such file or directory, open '.../inj-writer.js'
+  // The promote workflow copied `tab-*.js` by glob plus the whole tests/ directory.
+  // inj-writer.js arrived in Phase 3 as a root-level module that is not tab-*.js, so
+  // prod received the tests that read it without the file itself — 13 of 14 modules.
+  //
+  // A manifest that has to be remembered will be forgotten. index.html already lists
+  // what it loads, so the workflow derives from that; this pins the derivation so
+  // nobody replaces it with a glob again.
+  console.log('\n── Promotion syncs what index.html loads ──────────────────');
+  {
+    // STAGING-ONLY. promote-to-prod.yml is prod-owned and deliberately NOT synced —
+    // prod keeps its own copy, which legitimately lacks staging's derivation. Asserting
+    // it there is what failed prod PR #325 on 2026-08-20 with 3 of my own tests, the
+    // third time this class of mistake has blocked a promotion. Same guard as the gate
+    // tests below; see _isProdCheckout.
+    const _pmDir = path.dirname(path.resolve(htmlPath));
+    const wf = path.join(_pmDir, '.github', 'workflows', 'promote-to-prod.yml');
+    if (_isProdCheckout(_pmDir)) {
+      console.log('  – skipped on ' + _repoName(_pmDir) + ' (staging-only workflow)');
+    } else if (!fs.existsSync(wf)) {
+      check('promote-to-prod.yml is present', false, wf);
+    } else {
+      const y = fs.readFileSync(wf, 'utf8');
+      // A plain substring, not a regex: the thing being matched is itself a grep
+      // pattern full of brackets and backslashes, and escaping it twice is how you
+      // end up asserting nothing.
+      check('the promotion derives its module list from index.html',
+        y.indexOf('MODULES=$(grep -o') >= 0 && y.indexOf("../staging/index.html") >= 0,
+        'the module list must come from the script tags, not a hardcoded glob');
+      check('  …and no longer copies tab-*.js by glob alone',
+        !/for f in \.\.\/staging\/tab-\*\.js/.test(y));
+      check('  …failing loudly when a listed module is absent',
+        /index\.html loads \$f but staging has no such file/.test(y));
+      check('  …and refusing to promote a prod tree that cannot load',
+        /prod would be missing modules index\.html loads/.test(y));
+
+    }
+    // OUTSIDE the guard on purpose: index.html IS promoted, so this one is just as true
+    // on prod — and prod is exactly where its absence broke the build.
+    {
+      const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+      check('index.html still loads inj-writer.js, the module that was missed',
+        /src="inj-writer\.js/.test(html));
+    }
+  }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
@@ -4545,7 +5319,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
   var f4=G._wizFlow();
-  check('flow TRT+enhanced: 9 steps', f4.length===9, 'got '+f4.length);
+  check('flow TRT+enhanced: 8 steps', f4.length===8, 'got '+f4.length);
   check('flow TRT+enhanced: has advise before enhanced', f4.indexOf('advise')===f4.indexOf('enhanced')-1);
   check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
   check('flow TRT+enhanced: has validate', f4.includes('validate'));
@@ -4554,7 +5328,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
   var f5=G._wizFlow();
-  check('flow peps+TRT+enhanced: 12 steps', f5.length===12, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: 11 steps', f5.length===11, 'got '+f5.length);
   check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
   check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
 
@@ -4753,7 +5527,8 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     var gBody={innerHTML:''};var gFoot={innerHTML:''};
     G.initWizard();G._wiz.goals=['enhanced'];
     G.wizStepGoals(gBody,gFoot);
-    check('wizStepGoals T3: shows Enhanced Cycle toggle', gBody.innerHTML.includes('Enhanced Cycle'));
+    check('wizStepGoals T3: shows the single Compounds toggle',
+      gBody.innerHTML.includes('Testosterone &amp; enhanced compounds'));
 
     // #637: AM/PM split is user-toggleable on any enhanced compound
     check('editSetEnhAmPm defined', typeof G.editSetEnhAmPm==='function');
@@ -4806,7 +5581,7 @@ console.log('\n── Wizard step render tests ───────────
   check('wizStepGoals T1: body not empty', gB1.innerHTML.length>0);
   check('wizStepGoals T1: contains goal-chip', gB1.innerHTML.includes('goal-chip'));
   check('wizStepGoals T1: no Testosterone toggle (T1 has no TRT access)', !gB1.innerHTML.includes('Testosterone protocol'));
-  check('wizStepGoals T1: no Enhanced Cycle toggle', !gB1.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T1: no Enhanced toggle', !gB1.innerHTML.includes('Steroids'));
   check('wizStepGoals T1: footer has Next button', gF1.innerHTML.includes('Next'));
 
   // wizStepGoals T2: TRT toggle present, no Enhanced Cycle
@@ -4814,17 +5589,25 @@ console.log('\n── Wizard step render tests ───────────
   G.initWizard();
   var gB2={innerHTML:''};var gF2={innerHTML:''};
   G.wizStepGoals(gB2,gF2);
-  check('wizStepGoals T2: has Testosterone protocol toggle', gB2.innerHTML.includes('Testosterone protocol'));
-  check('wizStepGoals T2: no Enhanced Cycle toggle', !gB2.innerHTML.includes('Enhanced Cycle'));
+  // One toggle since 2026-08-20 ("TRT and Enhanced should never be separated"), at
+  // every tier that has compounds at all. What the tier changes is where the flow ENDS,
+  // not whether there are two switches to choose between.
+  check('wizStepGoals T2: has the Compounds toggle',
+    gB2.innerHTML.includes('Testosterone &amp; enhanced compounds'));
+  check('wizStepGoals T2: and only one toggle, not a TRT/Enhanced pair',
+    (gB2.innerHTML.match(/class="toggle-sw/g)||[]).length===1);
 
   // wizStepGoals T3: Enhanced Cycle section visible + toggleable
   G._userTier=3;
   G.initWizard();
   var gB3={innerHTML:''};var gF3={innerHTML:''};
   G.wizStepGoals(gB3,gF3);
-  check('wizStepGoals T3: shows Enhanced Cycle section', gB3.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T3: shows the same single Compounds toggle',
+    gB3.innerHTML.includes('Testosterone &amp; enhanced compounds'));
+  check('wizStepGoals T3: one toggle here too, same as tier 2',
+    (gB3.innerHTML.match(/class="toggle-sw/g)||[]).length===1);
   check('wizStepGoals T3: initWizard does not auto-include enhanced in goals', !G._wiz.goals.includes('enhanced'));
-  check('wizStepGoals T3: Enhanced toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
+  check('wizStepGoals T3: the toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
 
   // wizStepCheck: empty peptides
   G._userTier=1;
@@ -4964,23 +5747,31 @@ console.log('\n── Wizard step render tests ───────────
   check('wizToggleGoal enhanced: removes trt from goals', !G._wiz.goals.includes('trt'));
   check('wizToggleGoal enhanced: clears TRT compounds', G._wiz.trt.compounds.length===0);
 
-  // wizStepGoals: TRT toggle greyed when Enhanced is on
+  // ── THE MUTUAL EXCLUSION IS GONE (2026-08-20) ─────────────────────────────
+  // These asserted that turning one of TRT/Enhanced on GREYED THE OTHER OUT. That
+  // greying WAS the separation Henrik asked to end — "TRT and Enhanced should never be
+  // separated" — so what used to be the correct behaviour is now the bug. One toggle
+  // covers both, and neither state disables anything.
   G._userTier=3;
   G.initWizard();
   G._wiz.goals=['enhanced'];
   var gmB={innerHTML:''};var gmF={innerHTML:''};
   G.wizStepGoals(gmB,gmF);
-  check('wizStepGoals: TRT section visible when Enhanced is on', gmB.innerHTML.includes('TRT'));
-  check('wizStepGoals: TRT toggle greyed (pointer-events:none) when Enhanced is on', gmB.innerHTML.includes('pointer-events:none'));
+  check('wizStepGoals: the Compounds section is shown when enhanced is on',
+    gmB.innerHTML.includes('Compounds'));
+  check('  …and nothing is greyed out, because there is nothing to exclude',
+    !gmB.innerHTML.includes('pointer-events:none'));
+  check('  …with the toggle reading ON', gmB.innerHTML.includes('toggle-sw on'));
 
-  // wizStepGoals: Enhanced toggle greyed when TRT is on
   G._userTier=3;
   G.initWizard();
   G._wiz.trt.enabled=true;G._wiz.goals=['trt'];
   var gmB2={innerHTML:''};var gmF2={innerHTML:''};
   G.wizStepGoals(gmB2,gmF2);
-  check('wizStepGoals: Enhanced Cycle section visible when TRT is on', gmB2.innerHTML.includes('Enhanced Cycle'));
-  check('wizStepGoals: Enhanced toggle greyed (pointer-events:none) when TRT is on', gmB2.innerHTML.includes('pointer-events:none'));
+  check('wizStepGoals: TRT on reads as the same single toggle, ON',
+    gmB2.innerHTML.includes('Testosterone &amp; enhanced compounds') &&
+    gmB2.innerHTML.includes('toggle-sw on'));
+  check('  …and still greys nothing out', !gmB2.innerHTML.includes('pointer-events:none'));
 
   // wizStepEnhanced: mandatory Testosterone — Next disabled when no base compound selected
   G._userTier=3;
@@ -5007,24 +5798,52 @@ console.log('\n── _stackTabBar ───────────────
 {
   const G=sandbox;
 
-  // T1: all three tabs present; Enhanced is locked (opacity 0.45)
+  // Phase 4 merged TRT and Enhanced into ONE Compounds tab. The tier-3 gate did not
+  // disappear with them — it moved onto the groups inside the tab, so testosterone
+  // stays available to everyone (as the TRT tab was) and the rest stays gated (as
+  // Enhanced was). These checks follow the gate to where it now lives.
   G._userTier=1;
   var tb1=G._stackTabBar('peptides','setStackViewTab');
   check('_stackTabBar T1: renders Peptides tab', tb1.includes('Peptides'));
-  check('_stackTabBar T1: renders TRT tab', tb1.includes('TRT'));
-  check('_stackTabBar T1: renders Enhanced tab', tb1.includes('Enhanced'));
-  check('_stackTabBar T1: Enhanced tab locked (opacity:0.45)', tb1.includes('0.45'));
+  check('_stackTabBar: one Compounds tab, not TRT + Enhanced',
+    tb1.includes('Compounds') && !tb1.includes('>TRT<') && !tb1.includes('>Enhanced<'));
+  check('_stackTabBar: no tab is locked any more', !tb1.includes('0.45'));
 
-  // T3: Enhanced is not locked
+  // The gate: a tier-1 user still gets testosterone, and gets the CTA instead of the
+  // enhancement classes.
+  // The catalogue comes from the backend and carries `group`; the sandbox default has
+  // only `cls`, so give this block the shape the app actually receives.
+  const _catSave = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS=[
+    {id:'test_e',name:'Testosterone Enanthate',group:'Base',cls:'base',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#e05050'},
+    {id:'primo', name:'Primobolan',            group:'DHT-Derived',cls:'dht',  defaultDose:500,unit:'mg/week',defaultDays:[1,4],dot:'#3cffa0'},
+    {id:'deca',  name:'Deca',                  group:'19-Nor',     cls:'19nor',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#888'},
+  ];
+  G._editBuf={trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]}};
+  var cmpT1=G._renderEditCompounds({trt:{},enhanced:{}});
+  check('Compounds T1: testosterone is available',   cmpT1.includes('Testosterone'));
+  // Corrected 2026-08-20: "Tier 1 & 2 should see everything but greyed out if not
+  // included in their tier." Tier 1 gets the whole catalogue too, all of it locked —
+  // including testosterone, which tier 1 has no access to either.
+  check('  …tier 1 sees the enhancement classes as well, locked',  cmpT1.includes('19-Nor'));
+  check('  …with every card greyed at tier 1',
+    (cmpT1.match(/opacity:0\.45/g) || []).length >= 4);
+  check('  …and none of them selectable',
+    !cmpT1.includes("editToggleEnhancedCompound('deca')") &&
+    !cmpT1.includes("editToggleTRTCompound('"));
   G._userTier=3;
-  var tb3=G._stackTabBar('peptides','setStackViewTab');
-  check('_stackTabBar T3: Enhanced tab present', tb3.includes('Enhanced'));
-  check('_stackTabBar T3: Enhanced tab not locked (no opacity:0.45)', !tb3.includes('0.45'));
+  var cmpT3=G._renderEditCompounds({trt:{},enhanced:{}});
+  check('Compounds T3: the other classes appear',    cmpT3.includes('19-Nor'));
+  check('  …testosterone first, then by class',
+    cmpT3.indexOf('Testosterone') < cmpT3.indexOf('19-Nor'));
+  check('  …with no second testosterone group under its other spelling',
+    cmpT3.indexOf('DHT-Derived') > 0 && !/Base<\/div>/.test(cmpT3));
+
+  G.ENHANCEMENT_COMPOUNDS=_catSave;
 
   // Active tab gets accent background; others transparent
-  G._userTier=3;
-  var tbEnhActive=G._stackTabBar('enhanced','setEditInnerTab');
-  check('_stackTabBar T3: active Enhanced tab gets accent bg', tbEnhActive.includes('var(--accent)'));
+  var tbEnhActive=G._stackTabBar('compounds','setEditInnerTab');
+  check('_stackTabBar T3: active Compounds tab gets accent bg', tbEnhActive.includes('var(--accent)'));
 
   // Setter propagated to onclick handlers
   check('_stackTabBar view: onclick uses setStackViewTab', tb1.includes('setStackViewTab'));
@@ -5066,10 +5885,14 @@ console.log('\n── View & Edit tab render functions ────────�
     check('_renderTRTViewTab with compound: still shows injection log area', tvH2.includes('Injection Log'));
   }
 
-  // _renderEditTRT: null/empty → toggle is off, no compound cards visible
+  // _renderEditTRT: null/empty → toggle is off, no compound cards visible.
+  // Tier stated explicitly: below tier 2 the testosterone group renders LOCKED as of
+  // 2026-08-20, so exercising the editor itself needs a tier that has it.
+  var _prevTierTrt=G._userTier; G._userTier=2;
   var etH1=G._renderEditTRT(null);
   check('_renderEditTRT null: returns string', typeof etH1==='string');
-  check('_renderEditTRT null: shows TRT Protocol heading', etH1.includes('TRT Protocol'));
+  // The tier is no longer called TRT — it is the testosterone group of one Compounds tab.
+  check('_renderEditTRT null: shows the Testosterone heading', etH1.includes('Testosterone'));
   check('_renderEditTRT null: toggle is OFF (not "toggle-sw on")', etH1.includes('toggle-sw')&&!etH1.includes('toggle-sw on'));
 
   // _renderEditTRT: enabled with compound → toggle on, dose controls
@@ -5086,6 +5909,7 @@ console.log('\n── View & Edit tab render functions ────────�
     // #637: TRT compounds expose an AM/PM Time selector (parity with peptides/enhanced)
     check('_renderEditTRT enabled: shows Time row', etH2.includes('>Time<'));
     check('_renderEditTRT enabled: shows AM/PM time chips', etH2.includes('editSetTRTTime'));
+  G._userTier=_prevTierTrt;
     check('editSetTRTTime defined', typeof G.editSetTRTTime==='function');
     G.editSetTRTTime(tCat0.id,'PM');
     check('editSetTRTTime: sets time=PM', G._editBuf.trt.compounds[0].time==='PM');
@@ -5127,9 +5951,26 @@ console.log('\n── Source-code structural assertions ────────
   check('source: edit Enhanced branch does NOT call _buildEnhancementCycleSection',
     !(function(){var m=tsJs.match(/editInnerTab===.enhanced.[\s\S]{0,400}_buildEnhancementCycleSection/);return!!m;})());
 
-  // wizStepGoals must show Enhanced Cycle toggle for T3 (restored 2026-06-25)
-  check('source: wizStepGoals shows Enhanced Cycle for T3',
-    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,3000}/);return fn&&fn[0].includes('Enhanced Cycle');})());
+  // wizStepGoals must show the Enhanced toggle for T3 (restored 2026-06-25, when it
+  // was removed unasked and users lost per-stack opt-out). These checks used to look
+  // for the heading "Enhanced Cycle"; the headings merged into one "Compounds" section
+  // on 2026-08-20 at Henrik's request, because the tier merge made two headings
+  // describe an app that no longer exists. The TOGGLE is what the 2026-06-25 guard is
+  // actually about, so assert that instead — and the T1/T2 negatives above move with
+  // it, or they would pass for the wrong reason now the heading is gone everywhere.
+  check('source: wizStepGoals offers ONE compounds toggle, not a TRT/Enhanced pair',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && fn[0].includes('wizToggleCompounds()') &&
+             !fn[0].includes("wizToggleGoal(\\'enhanced\\')") &&
+             !fn[0].includes('wizToggleGoalTRT()');})());
+  check('source: the two headings became one Compounds section',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && fn[0].includes("wiz-section\">Compounds<") &&
+             !fn[0].includes("wiz-section\">TRT<") &&
+             !fn[0].includes("wiz-section\">Enhanced Cycle<");})());
+  check('  …and the description names TRT and the other enhanced compounds',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && /TRT and other enhanced compounds/.test(fn[0]);})());
 
   // #637: TRT injection entries must carry a real AM/PM time_of_day, never hardcoded null
   check('source: TRT injection builder sets time_of_day from c.time (not null)',
@@ -5148,8 +5989,18 @@ console.log('\n── Source-code structural assertions ────────
   check('source: function _renderTRTViewTab( defined', tsJs.includes('function _renderTRTViewTab('));
   check('source: function _stackTabBar( defined', tsJs.includes('function _stackTabBar('));
 
-  // Tier gates confirmed in source
-  check('source: edit Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEditEnhanced'));
+  // Tier gates confirmed in source.
+  // The gate moved inside the merged tab (Phase 4), then changed SHAPE on 2026-08-20:
+  // tier 2 now sees the whole catalogue with the compounds it cannot use greyed out,
+  // rather than a card in place of the list. So the gate is no longer "render or do
+  // not render at tier 3" — it is per-compound, inside the renderer.
+  check('source: the catalogue renders at every tier, gated per compound',
+    /html\+=_renderEditEnhanced\(_editBuf\.enhanced/.test(tsJs) &&
+    !tsJs.includes("if((_userTier||1)>=3){\n    html+=_renderEditEnhanced("));
+  check('source: and testosterone locks below tier 2 rather than hiding',
+    /if\(\(_userTier\|\|1\)<2\)\{\s*\n\s*var lockedHtml=/.test(tsJs));
+  check('source: and the lock is per compound, inside the renderer',
+    /var locked=!_compoundAllowedForTier\(c\);/.test(tsJs));
   check('source: view Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEnhancedViewTab'));
 
   // _buildEnhancementCycleSection still exists (used by Cycles tab via stackSetCyclePhase etc.)
@@ -5159,7 +6010,9 @@ console.log('\n── Source-code structural assertions ────────
   check('source: _refreshTRTGuide function defined', tsJs.includes('function _refreshTRTGuide('));
   check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,4000}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  // Window widened 2026-08-20: _renderEditTRT now opens with the tier-1 locked branch,
+  // which pushed the handler past the old 4000-char slice.
+  check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,5200}/);return m&&m[0].includes("id=\"trt-guide-");})());
   check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('trt-guide-');})());
 
@@ -5312,14 +6165,17 @@ console.log('\n── Wizard TRT step ──────────────
     check('  …and the footer still lets the user continue', /wizNext\(\)/.test(f2.innerHTML));
     G._tcAllCompIds=_svIds;
 
-    // The plan seeds from the live T-Calc plan so re-opening shows what is scheduled
+    // Phase 6: the step used to seed from T-Calc's simple plan, because that was where
+    // a schedule lived. That planner is gone, so a stored simplePlan must NOT leak back
+    // into the wizard — the protocol's own compound is the only seed.
     if(typeof G._wizEnsureTrtPlan==='function'){
       var _svTcp=G._tcp;
       G._tcp=Object.assign({},_svTcp||{},{simplePlan:{compId:'cypionate',doseMg:'150',cadenceDays:7,startDate:'2026-07-01'}});
-      G._wiz.trtPlan=null;
+      G._wiz.trtPlan=null; G._wiz.trt={enabled:false,compounds:[]};
       var seeded=G._wizEnsureTrtPlan();
-      check('the step seeds from the existing T-Calc plan',
-        seeded.compId==='cypionate' && String(seeded.doseMg)==='150' && Number(seeded.cadenceDays)===7);
+      check('a retired T-Calc plan no longer seeds the wizard step',
+        !seeded.compId && !seeded.doseMg,
+        JSON.stringify(seeded));
 
       // …and from a classic TRT compound when there is no T-Calc plan yet
       G._tcp=Object.assign({},_svTcp||{},{simplePlan:{}});
@@ -5348,8 +6204,58 @@ console.log('\n── Wizard TRT step ──────────────
     /footer\.innerHTML=[\s\S]{0,200}try\{/.test(_stSrc2));
   check('an empty body is backfilled rather than shown blank',
     /if\(!body\.innerHTML\|\|!body\.innerHTML\.trim\(\)\)/.test(_stSrc2));
-  check('saving commits the wizard plan into the T-Calc simple plan',
-    /_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && /_tcp\.plannerMode='simple'/.test(_stSrc2));
+  // ── The wizard plan becomes a scheduled compound, not planner state ───────
+  // Until 2026-08-20 this asserted the plan was committed to `_tcp.simplePlan`.
+  // Phase 6 deleted the planner that read it, so the commit wrote to a field the
+  // profile keeps only so old saves are not rewritten — the user's dose, cadence
+  // and start date went in and nothing ever came out. Behavioural now: drive the
+  // fold and read the protocol it produced.
+  check('the plan is no longer committed to the dead planner',
+    !/_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && !/_tcp\.plannerMode='simple'/.test(_stSrc2));
+  if(typeof G._wizFoldTrtPlanIntoProto==='function'){
+    const _svW=G._wiz;
+    G._wiz={goals:['trt'], trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:3,cadenceUnit:'day',cadenceDays:3.5,startDate:'2026-07-01'}};
+
+    const proto={id:'p1', name:'P1'};
+    const wrote=G._wizFoldTrtPlanIntoProto(proto);
+    const c=((proto.trt||{}).compounds||[])[0];
+    check('the wizard plan lands in the protocol as a real compound', wrote===true && !!c);
+    check('  …under the canonical id', !!c && c.id==='enanthate');
+    check('  …carrying the dose as a per-injection amount, never a rate',
+      !!c && c.dose==='125' && c.unit==='mg');
+    check('  …with the cadence as an interval the generator understands',
+      !!c && Number(c.freqVal)===3.5 && c.freqUnit==='days');
+    check('  …and the first-injection date the user picked',
+      !!c && c.start_date==='2026-07-01');
+    check('  …with the tier switched on, or nothing would generate',
+      !!proto.trt && proto.trt.enabled===true);
+
+    // A classic multi-compound configuration is the user's own work. A planner must
+    // never overwrite it — this is the guard `_trtInline` has always provided.
+    const classic={id:'p2', trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg'}]}};
+    const wrote2=G._wizFoldTrtPlanIntoProto(classic);
+    check('a classic configuration still wins over the wizard plan',
+      wrote2===false && classic.trt.compounds.length===1 && classic.trt.compounds[0].id==='nebido');
+
+    // An Enhanced cycle already picked its base ester in the wizard's `base` step.
+    // Folding again would schedule the same molecule twice — the doubling the whole
+    // rewrite exists to end — including across the two id spellings.
+    const enh={id:'p3', enhanced:{enabled:true, compounds:[{id:'test_e',name:'Testosterone Enanthate'}]}};
+    const wrote3=G._wizFoldTrtPlanIntoProto(enh);
+    check('an ester already on the protocol is not scheduled a second time',
+      wrote3===false && !((enh.trt||{}).compounds||[]).length);
+
+    // Half-filled is not a schedule. Inventing the missing half would be inventing
+    // doses nobody asked for.
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceDays:3.5,startDate:'2026-07-01'};
+    const partial={id:'p4'};
+    check('an incomplete plan schedules nothing at all',
+      G._wizFoldTrtPlanIntoProto(partial)===false && !((partial.trt||{}).compounds||[]).length);
+
+    G._wiz=_svW;
+  }else{
+    check('_wizFoldTrtPlanIntoProto exists', false);
+  }
 }
 
 // ── T-Calc simple planner (ester → dose → cadence → curve) ───────────────────
@@ -5358,222 +6264,49 @@ console.log('\n── Wizard TRT step ──────────────
 // below it, greyed out unless its switch is on. Exactly one drives the curve.
 console.log('\n── T-Calc simple planner ──────────────────────────────────');
 {
-  if(typeof G._tcPlannerMode==='function' && typeof G._tcSimplePlanInjections==='function'){
-    var _svTcp = G._tcp;
-    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-    var _today = _mk(new Date());
-    var _set = function(o){ G._tcp = Object.assign({manualLog:[], simplePlan:{}, plannerMode:''}, o); };
+  // ── The planner modes are gone (Phase 6) ──────────────────────────────────
+  // This block tested the simple/advanced switch: which of the two planners drove the
+  // curve, and that the greyed-out one did not contribute. Phase 6 deleted both, so the
+  // question no longer exists — and what replaced it is stricter, because there is now
+  // exactly one source of future doses rather than a rule about which of three wins.
+  check('the planner modes are gone, not merely disabled',
+    typeof G._tcPlannerMode !== 'function' && typeof G._tcSimplePlanInjections !== 'function');
 
-    // Mode derivation must never change what an existing user already had
-    _set({manualLog:[{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]});
-    check('a profile with a manual log defaults to ADVANCED (nothing changes for them)',
-      G._tcPlannerMode() === 'advanced');
-    _set({manualLog:[]});
-    check('a fresh profile defaults to SIMPLE', G._tcPlannerMode() === 'simple');
-    _set({manualLog:[{compId:'x',doseMg:'1',date:'2026-07-01'}], plannerMode:'simple'});
-    check('an explicit choice overrides the derivation', G._tcPlannerMode() === 'simple');
-
-    // Generation: 4 inputs → a schedule
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
-    var inj = G._tcSimplePlanInjections();
-    check('a complete plan generates injections', inj.length > 0);
-    check('  …every one carries the chosen ester and dose',
-      inj.every(function(e){ return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.source==='simple'; }));
-    check('  …the first is on the chosen start date', inj[0].date === _today);
-    check('  …spaced by the chosen cadence', (function(){
-      var d0=new Date(inj[0].date), d1=new Date(inj[1].date);
-      return Math.round((d1-d0)/86400000) === 4 || Math.round((d1-d0)/86400000) === 3; // 3.5 d
-    })());
-    check('  …bounded, so a daily cadence cannot run away', inj.length <= 800);
-
-    // Incomplete plans produce nothing rather than a half-curve
-    [['compId',''],['doseMg',''],['cadenceDays',0],['startDate','']].forEach(function(f){
-      var plan = {compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today};
-      plan[f[0]] = f[1];
-      _set({plannerMode:'simple', simplePlan:plan});
-      check('an incomplete plan (no '+f[0]+') generates nothing', G._tcSimplePlanInjections().length === 0);
-    });
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'-5',cadenceDays:7,startDate:_today}});
-    check('a negative dose generates nothing', G._tcSimplePlanInjections().length === 0);
-
-    // Which planner drives the curve
-    if(typeof G._tcCurveLog==='function'){
-      var _svCache = G._injectionsCache; G._injectionsCache = {};
-      _set({plannerMode:'simple',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      var curve = G._tcCurveLog();
-      check('in SIMPLE mode the curve comes from the plan',
-        curve.length > 0 && curve.every(function(e){ return e.source === 'simple'; }));
-      check('  …and the greyed-out manual log does NOT contribute',
-        !curve.some(function(e){ return e.compId === 'cypionate'; }));
-
-      _set({plannerMode:'advanced',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      var curve2 = G._tcCurveLog();
-      check('in ADVANCED mode the curve comes from the manual log',
-        curve2.length === 1 && curve2[0].compId === 'cypionate');
-      check('  …and the greyed-out simple plan does NOT contribute',
-        !curve2.some(function(e){ return e.source === 'simple'; }));
-
-      // Switching modes must not destroy either side's data
-      _set({plannerMode:'advanced',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      G._tcCurveLog();
-      check('switching planners keeps BOTH sets of data intact',
-        G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
-      G._injectionsCache = _svCache;
-    }
-
-    // ── The plan owns the curve from its start date ────────────────────────────
-    // Reported 2026-08-01: "changing testo dose in the planner doesn't update the
-    // rendered curve". _tcCurveLog merged the plan with the stack's own TRT protocol
-    // and de-duplicated only on an exact (compound, date) hit — so a plan for a
-    // different ester, or on a different cadence, collided with nothing and was ADDED
-    // on top of the protocol. The curve was dominated by the protocol underneath and
-    // barely moved when the plan's dose changed.
-    if(typeof G._tcCurveLog==='function'){
-      var _svCache2 = G._injectionsCache, _svHist2 = G._tcHistory, _svHState2 = G._tcHistoryState;
-      var _mkInj = function(date,mg,comp){ return {tier:'trt',active:true,cycle_id:'stack_x',
-        unit:'mg',dose:String(mg),compound_id:comp||'cypionate',date:date}; };
-      // Rewritten 2026-08-07. The past is CHECKED injections and nothing else, so the
-      // pre-plan dosing that used to sit in _injectionsCache as unticked past-dated
-      // rows now lives in the logged history. Unticked rows are the plan, and a plan
-      // is always in the future.
-      G._tcHistory = [{compId:'cypionate',doseMg:'250',date:'2026-07-20',source:'logged'},
-                      {compId:'cypionate',doseMg:'250',date:'2026-07-27',source:'logged'}];
-      G._tcHistoryState = 'ready';
-      G._injectionsCache = {'2026-09-03':[_mkInj('2026-09-03',250)],
-                            '2026-09-10':[_mkInj('2026-09-10',250)]};
-      _set({plannerMode:'simple',
-            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-      var _cl = G._tcCurveLog();
-      var _hist = _cl.filter(function(e){ return e.source==='logged'; });
-      check('checked injections before the plan starts are kept as history',
-        _hist.length===2 && _hist.every(function(e){ return e.date < '2026-08-01'; }),
-        JSON.stringify(_hist.map(function(e){return e.date;})));
-      check('  …and protocol dosing from the plan start on is dropped, not added on top',
-        !_cl.some(function(e){ return e.source==='protocol' && e.date>='2026-08-01'; }),
-        JSON.stringify(_cl.filter(function(e){return e.source==='protocol';}).map(function(e){return e.date;})));
-      check('  …so the plan is what drives the curve forward',
-        _cl.filter(function(e){ return e.source==='simple' && e.date>='2026-08-01'; }).length>0);
-
-      // The actual complaint: changing the dose must change the curve's total
-      var _totalAt = function(mg){
-        _set({plannerMode:'simple',
-              simplePlan:{compId:'enanthate',doseMg:String(mg),cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-        return G._tcCurveLog().filter(function(e){ return e.date>='2026-08-01'; })
-                              .reduce(function(a,e){ return a+parseFloat(e.doseMg); },0);
-      };
-      var _t10=_totalAt(10), _t20=_totalAt(20);
-      check('doubling the plan dose doubles the dose the curve sees',
-        _t20>0 && Math.abs(_t20-2*_t10)<1e-6, _t10+' -> '+_t20);
-
-      // An unfinished plan must not silently delete the protocol curve
-      _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''}});
-      check('an unfinished plan leaves the protocol curve intact',
-        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===2);
-      check('  …and never drops the checked history, whatever the planner is doing',
-        G._tcCurveLog().filter(function(e){ return e.source==='logged'; }).length===2);
-
-      // In advanced mode the plan is greyed out and owns nothing
-      _set({plannerMode:'advanced', manualLog:[],
-            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-      check('in ADVANCED mode the greyed-out plan does not claim any days',
-        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===2);
-
-      G._injectionsCache = _svCache2; G._tcHistory = _svHist2; G._tcHistoryState = _svHState2;
-    }
-
-  // ── Cadence: a number plus a unit, not a preset list ────────────────────────
-  // Reported 2026-08-01: "can't choose every 2nd day or third etc". The dropdown
-  // offered a fixed set (Daily, EOD, 3x/week, weekly, every 2/3/6/8/10/12 weeks), so
-  // every 3 days, every 5 weeks and so on were unreachable. Cadence is now "every
-  // N unit" with N in 1..20 and unit in day/week/month.
-  if(typeof G._tcCadenceToDays==='function'){
-    check('a month is a fixed 30-day step, not a calendar month',
-      G._TC_CADENCE_UNITS.day===1 && G._TC_CADENCE_UNITS.week===7 && G._TC_CADENCE_UNITS.month===30,
-      JSON.stringify(G._TC_CADENCE_UNITS));
-    check('every 3 days is 3 days', G._tcCadenceToDays(3,'day')===3);
-    check('every 2 weeks is 14 days', G._tcCadenceToDays(2,'week')===14);
-    check('every 3 months is 90 days', G._tcCadenceToDays(3,'month')===90);
-    check('a string from a <select> is accepted', G._tcCadenceToDays('5','week')===35);
-    check('no number yields no interval', G._tcCadenceToDays(0,'week')===0);
-    check('an unknown unit yields no interval', G._tcCadenceToDays(2,'fortnight')===0);
-
-    // Reading a saved day count back into the two fields
-    check('14 days reads back as every 2 weeks',
-      JSON.stringify(G._tcCadenceFromDays(14))==='{"n":2,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(14)));
-    check('90 days reads back as every 3 months',
-      JSON.stringify(G._tcCadenceFromDays(90))==='{"n":3,"unit":"month"}', JSON.stringify(G._tcCadenceFromDays(90)));
-    check('3 days reads back as every 3 days',
-      JSON.stringify(G._tcCadenceFromDays(3))==='{"n":3,"unit":"day"}', JSON.stringify(G._tcCadenceFromDays(3)));
-    check('7 days prefers weeks over days',
-      JSON.stringify(G._tcCadenceFromDays(7))==='{"n":1,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(7)));
-    check('an interval too long for 20 of any unit still reads as days',
-      G._tcCadenceFromDays(999).unit==='day');
-    check('no interval reads back as blank', G._tcCadenceFromDays(0).n===0);
-    check('the unit label pluralises with the number',
-      G._tcCadenceUnitLabel('day',1)==='day' && G._tcCadenceUnitLabel('day',3)==='days' &&
-      G._tcCadenceUnitLabel('week',2)==='weeks');
-
-    // Setting either field recomputes the one stored interval
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:_today}});
-    G._tcSetSimplePlanCadence('cadenceN','3');
-    check('picking a number recomputes the interval', G._tcp.simplePlan.cadenceDays===21,
-      String(G._tcp.simplePlan.cadenceDays));
-    G._tcSetSimplePlanCadence('cadenceUnit','day');
-    check('switching the unit recomputes it again, keeping the number',
-      G._tcp.simplePlan.cadenceDays===3 && G._tcp.simplePlan.cadenceN===3,
-      G._tcp.simplePlan.cadenceN+' x '+G._tcp.simplePlan.cadenceUnit+' = '+G._tcp.simplePlan.cadenceDays);
-    G._tcSetSimplePlanCadence('cadenceN','99');
-    check('a number beyond the maximum is clamped, never stored raw',
-      G._tcp.simplePlan.cadenceN===G._TC_CADENCE_MAX_N, String(G._tcp.simplePlan.cadenceN));
-    G._tcSetSimplePlanCadence('cadenceUnit','bogus');
-    check('an unrecognised unit falls back to weeks rather than zeroing the plan',
-      G._tcp.simplePlan.cadenceUnit==='week' && G._tcp.simplePlan.cadenceDays>0);
-
-    // Every-3-days actually generates a 3-day schedule — the reported gap
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'50',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:_today}});
-    var _inj3 = G._tcSimplePlanInjections();
-    check('every 3 days generates injections 3 days apart', _inj3.length>2 &&
-      Math.round((new Date(_inj3[1].date)-new Date(_inj3[0].date))/86400000)===3,
-      _inj3.length?_inj3.slice(0,3).map(function(e){return e.date;}).join(' '):'none');
-
-    // A plan saved before this control keeps its exact interval until it is edited
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
-    check('a legacy fractional cadence is preserved, not rounded away',
-      G._tcSimplePlan().cadenceDays===3.5, String(G._tcSimplePlan().cadenceDays));
-    check('  …and is still shown in the two fields as best it can be',
-      G._tcSimplePlan().cadenceN>0 && !!G._tcSimplePlan().cadenceUnit);
-    check('  …and still generates its 3.5-day schedule',
-      G._tcSimplePlanInjections().length>0);
-    G._tcSetSimplePlanCadence('cadenceN','4');
-    check('  …until the user picks a number, which replaces it',
-      G._tcp.simplePlan.cadenceDays===4, String(G._tcp.simplePlan.cadenceDays));
-  } else {
-    check('_tcCadenceToDays available', false);
-  }
-
-    G._tcp = _svTcp;
-  }else{
-    check('_tcPlannerMode / _tcSimplePlanInjections available', false);
-  }
-
-  // The advanced planner is kept and dimmed, never deleted
+  // ── The planner is GONE (Phase 6, 2026-08-20) ─────────────────────────────
+  // Henrik: "If I only can add injections in the protocol builder why is the injection
+  // scheduler still in t-calc?" Phase 5 disabled these write paths but left the UI
+  // standing, so the buttons were still there and only said "moved to Plan ▸ Compounds"
+  // once pressed. These checks used to assert the planner was kept and dimmed; they now
+  // assert it is not there at all.
   var _tcSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-  check('the advanced manual log UI is still present', /INJECTION SCHEDULE/.test(_tcSrc));
-  check('the advanced section is dimmed rather than hidden when off',
-    /_advLive \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
-  check('the simple planner dims the same way when advanced is on',
-    /var dim  = live \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
-  check('the planner choice is persisted to the backend profile',
-    /_tcp\.plannerMode = mode;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
-  check('every simple-plan field change is persisted', /_tcp\.simplePlan\[field\] = value;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
-  check('the simple planner never writes into the manual log',
-    !/_tcSimplePlanInjections[\s\S]{0,600}manualLog\.push/.test(_tcSrc));
+  check('the injection schedule card is gone', !/INJECTION SCHEDULE/.test(_tcSrc));
+  check('  …along with the simple planner and its switch',
+    !/function _tcSimplePlannerHtml/.test(_tcSrc) && !/function _tcPlannerSwitchHtml/.test(_tcSrc));
+  check('  …and the protocol picker and push-to-schedule',
+    !/function _tcStackPickerHtml/.test(_tcSrc) && !/function _tcPushLogToSchedule/.test(_tcSrc));
+  check('  …and the plan write paths behind them',
+    !/function _tcWritePlanToStack/.test(_tcSrc) && !/function _tcSavePlanToStack/.test(_tcSrc) &&
+    !/function _tcPostPlanInjections/.test(_tcSrc));
+  check('T-Calc points at Plan ▸ Compounds instead', /Plan ▸ Compounds/.test(_tcSrc));
+  // Record entry is not planning: logging a dose already taken is how a mid-cycle user
+  // gets their history in, and it has no other home yet (§8 of the rewrite plan).
+  // Record entry survived Phase 6 inside T-Calc, then MOVED to Today on 2026-08-20
+  // ("Move Add away from T-calc"). It still survives — it is how a mid-cycle user gets
+  // their history in — but T-Calc now routes to it rather than holding a second sheet.
+  {
+    const _thSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    check('  …while logging a dose already taken survives, on Today',
+      /function openPastInjection/.test(_thSrc) && /Log a past injection/.test(_thSrc));
+    check('  …with the date capped at today, so it cannot plan through the back door',
+      /max="'\+_thTodayStr\(\)\+'"/.test(_thSrc) &&
+      /return x <= today;/.test(_thSrc));
+    check('  …and T-Calc keeps only a route to it, not a sheet of its own',
+      /openPastInjection\(/.test(_tcSrc) && !/function _tcShowAddSheet/.test(_tcSrc));
+  }
+  // The curve reads stored rows only now — no planner can drive it invisibly.
+  check('the curve takes its future from the protocol alone',
+    /_add\(_tcProtocolInjections\(\)\);/.test(_tcSrc) &&
+    !/function _tcSimplePlanInjections/.test(_tcSrc));
 
   // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
   // _tcAllCompIds() was referenced by three call sites but never actually defined —
@@ -5664,17 +6397,22 @@ console.log('\n── T-Calc simple planner ────────────
   check('the wizard TRT step hands off to T-Calc', /trt:wizStepTRTHandoff/.test(_stSrc));
   check('the classic in-wizard TRT config is kept, one tap away',
     /function wizStepTRT\(body,footer\)/.test(_stSrc) && /wizToggleTrtClassic/.test(_stSrc));
-  check('saving a TRT protocol routes to T-Calc and links the stack',
-    /_tcp\.targetStackId=_savedStack\.id/.test(_stSrc) && /switchTab\('tcalc'/.test(_stSrc));
-  // Superseded 2026-08-14. This asserted that a protocol configured through the
-  // classic multi-compound step "still lands on Protocols" — correct while that step
-  // generated its own injections, a dead end now that it does not: settings saved,
-  // nothing scheduled, and no route to the only tab that can schedule it.
-  check('the classic TRT step routes to T-Calc as well — it schedules nothing itself',
-    !/_wantsTrt && !_trtInline && typeof _tcp/.test(_stSrc),
-    'the inline-config path is skipping the T-Calc hand-off again');
-  check('  …while a classic configuration still wins over a half-filled planner',
-    /_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete/.test(_stSrc));
+  // ── Where saving lands, and what it links (rewritten 2026-08-20) ──────────
+  // These asserted the T-Calc hand-off: route to 'tcalc' and set targetStackId so
+  // "the plan and the protocol stay linked". Phase 6 removed the planner at the
+  // other end, which turned the hand-off into the bug — the user was shown a tab
+  // that could not hold what they had just described, and the schedule was dropped
+  // on the way. The protocol is now both where it is built and where you land.
+  check('saving no longer routes to T-Calc',
+    !/switchTab\('tcalc'/.test(_stSrc),
+    'the wizard is sending the user back to a tab that cannot schedule');
+  check('  …nor re-binds a protocol as the T-Calc target',
+    !/_tcp\.targetStackId=_savedStack\.id/.test(_stSrc),
+    'setting targetStackId re-arms the single-source confirm + the writes-disabled alert');
+  check('  …and everyone lands on the protocol they just built',
+    /switchTab\('stacks',document\.getElementById\('tab-btn-stacks'\)\);/.test(_stSrc));
+  check('the classic in-wizard TRT config is still what wins when present',
+    /if\(existing\.length\) return false;/.test(_stSrc));
 
   // The hand-off triggers on WHAT THE PROTOCOL CARRIES, not the goal chip. Gating on
   // goals.includes('trt') missed the entire Enhanced path: an enhanced cycle picks its
@@ -5701,11 +6439,15 @@ console.log('\n── T-Calc simple planner ────────────
     check('  …and a TRT-tier ester is found by tier, brand name notwithstanding',
       (G._stackTestoComp({trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido'}]}})||{}).tier === 'trt');
   }
-  // Outside the guard, so they run — and fail — on a source that lacks the fix.
-  check('the hand-off is driven by that, not by the goal chip alone',
-    /_wantsTrt = \(_wiz\.goals\|\|\[\]\)\.indexOf\('trt'\)>=0 \|\| !!_testoIn/.test(_stSrc));
-  check('  …carrying the chosen ester into the planner, canonicalised',
-    /_tcCanonCompId\(_testoIn\.c\.id\)/.test(_stSrc) && /!_sp\.compId/.test(_stSrc));
+  // _stackTestoComp used to drive the hand-off. It now drives DUPLICATE DETECTION
+  // in the fold: an Enhanced cycle that already carries its base ester must not have
+  // the same molecule scheduled again from the wizard step. Same question — what does
+  // this protocol already carry — put to better use.
+  check('the fold asks what the protocol already carries',
+    /_stackTestoComp\(proto\)/.test(_stSrc),
+    'without this an Enhanced base ester gets scheduled twice');
+  check('  …and canonicalises the wizard ester before storing it',
+    /_canonCompoundId\(p\.compId\)/.test(_stSrc));
 }
 
 // ── T-Calc is populated by the planned TRT protocol ──────────────────────────
@@ -5737,29 +6479,41 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
       return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date==='2026-09-01' && e.source==='protocol';
     })());
 
-    // Manual wins where both describe the same compound on the same day
-    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]},
-           [{compId:'enanthate',doseMg:'150',date:'2026-09-01'}]);
+    // THE RECORD WINS OVER THE PLAN, on the same compound and day. Phase 6 removed the
+    // planner, so the record is the logged history rather than manualLog — the rule
+    // itself is unchanged and is what stops a dose being counted twice.
+    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    G._tcHistoryState = 'ready';
     var merged = G._tcCurveLog();
-    check('same compound + day is NOT double-counted', merged.length === 1);
-    check('the manually logged dose wins over the plan',
-      parseFloat(merged[0].doseMg) === 150 && merged[0].source === 'manual');
+    check('same compound + day is NOT double-counted', merged.length === 1,
+      JSON.stringify(merged.map(function(e){return e.compId+'@'+e.date+'='+e.doseMg;})));
+    check('the logged dose wins over the planned one',
+      parseFloat(merged[0].doseMg) === 150 && merged[0].source !== 'protocol',
+      merged[0].doseMg + ' / ' + merged[0].source);
 
     // Different day → both kept
-    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]},
-           [{compId:'enanthate',doseMg:'150',date:'2026-09-01'}]);
-    check('a plan on a different day is added alongside the log', G._tcCurveLog().length === 2);
+    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    G._tcHistoryState = 'ready';
+    check('a planned dose on another day is kept alongside the record',
+      G._tcCurveLog().length === 2);
     check('the merged log is sorted by date', (function(){
-      var l=G._tcCurveLog(); return l[0].date <= l[1].date;
+      var l=G._tcCurveLog(); return l.length === 2 && l[0].date <= l[1].date;
     })());
+    G._tcHistory = []; G._tcHistoryState = 'ready';
 
     // THE DOUBLE-COUNT TRAP: T-Calc pushes its own log into /injections under
     // cycle_id 'tcalc' / 'tcalc:<stackId>'. Reading those back would count every
     // T-Calc injection twice.
     _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125',cycle_id:'tcalc'})]},
            [{compId:'enanthate',doseMg:'125',date:'2026-09-01'}]);
+    // Rows T-Calc pushed under its old 'tcalc' namespace stay excluded. The curve used
+    // to still show the dose because manualLog supplied it; with the planner gone, an
+    // excluded row simply is not on the curve — which is the stronger statement.
     check('T-Calc\'s own pushed entries are not read back (no self-double-count)',
-      G._tcCurveLog().length === 1 && G._tcProtocolInjections().length === 0);
+      G._tcProtocolInjections().length === 0 && G._tcCurveLog().length === 0,
+      'curve ' + G._tcCurveLog().length + ', protocol ' + G._tcProtocolInjections().length);
     _setup({'2026-09-02':[P({compound_id:'enanthate',date:'2026-09-02',dose:'125',cycle_id:'tcalc:stack9'})]}, []);
     check('the tcalc:<stackId> namespace is excluded too', G._tcProtocolInjections().length === 0);
 
@@ -6493,30 +7247,40 @@ console.log('\n── _renderTRTGuide: sex / age personalization modifiers ─�
     return matches.map(function(m){var r=m.match(/>([^<]+)<\/span>/);return r?r[1].trim():'';});
   }
 
-  // Retatrutide at 3 mg → Therapeutic (2–4 mg/wk), NOT Optimal
-  var htmlReta3=G._renderDoseGuide('retatrutide',3);
+  // ── RETATRUTIDE IS SCALED PER WEEK, NOT PER DOSE (2026-08-20) ─────────────
+  // These numbers were always weekly — the tiers read "2–4 mg/wk" — but the guide was
+  // being handed a PER-DOSE amount, so "3" meant 3 mg per injection and matched the
+  // weekly band by coincidence. Reported as: "Adding a second 3mg dose on Wednesday
+  // doesn't change the dose info, it stuck on 2-4mg."
+  //
+  // The weekly total is now the third argument, and these pass it. Note the 5 mg case
+  // below kept PASSING through the bug, because an unmatched value falls back to the
+  // tier flagged b:1 — which is Optimal. A test that passes for the wrong reason is
+  // worse than one that fails.
+  // Retatrutide at 3 mg/week → Therapeutic (2–4 mg/wk), NOT Optimal
+  var htmlReta3=G._renderDoseGuide('retatrutide',0,3);
   check('_renderDoseGuide: reta 3mg highlights Therapeutic tier',
     activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Therapeutic')===0;}));
   check('_renderDoseGuide: reta 3mg does NOT highlight Optimal tier',
     !activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Optimal')===0;}));
 
   // Retatrutide at 5 mg → Optimal (4–8 mg/wk)
-  var htmlReta5=G._renderDoseGuide('retatrutide',5);
+  var htmlReta5=G._renderDoseGuide('retatrutide',0,5);
   check('_renderDoseGuide: reta 5mg highlights Optimal tier',
     activeTierLabel(htmlReta5).some(function(l){return l.indexOf('Optimal')===0;}));
 
   // Retatrutide at 1 mg → Start (0–2 mg/wk)
-  var htmlReta1=G._renderDoseGuide('retatrutide',1);
+  var htmlReta1=G._renderDoseGuide('retatrutide',0,1);
   check('_renderDoseGuide: reta 1mg highlights Start tier',
     activeTierLabel(htmlReta1).some(function(l){return l.indexOf('Start')===0;}));
 
   // Retatrutide at 9 mg → Max (>=8 mg/wk)
-  var htmlReta9=G._renderDoseGuide('retatrutide',9);
+  var htmlReta9=G._renderDoseGuide('retatrutide',0,9);
   check('_renderDoseGuide: reta 9mg highlights Max tier',
     activeTierLabel(htmlReta9).some(function(l){return l.indexOf('Max')===0;}));
 
   // Dose 0 → fall back to b:1 tier (Optimal for retatrutide)
-  var htmlReta0=G._renderDoseGuide('retatrutide',0);
+  var htmlReta0=G._renderDoseGuide('retatrutide',0,0);
   check('_renderDoseGuide: reta dose=0 falls back to b:1 (Optimal)',
     activeTierLabel(htmlReta0).some(function(l){return l.indexOf('Optimal')===0;}));
 
@@ -7021,53 +7785,38 @@ console.log('\n── T-calc: the live planner drives the curve ──');
 //
 // NOTE: CI runs in UTC, where no DST transition occurs, so a purely functional test cannot
 // reproduce it here. The source guard below is what actually protects this.
-console.log('\n── T-calc: DST-proof schedule generation ──');
+console.log('\n── DST-proof schedule generation ──');
 {
-  var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
-  // Slice to the END of the function, not a fixed character count — a 2200-char
-  // window silently clipped the guard the moment the function gained a comment,
-  // failing a test whose subject had not changed (2026-08-07).
-  var _dsAt  = _dsSrc.indexOf('function _tcSimplePlanInjections');
-  var _dsFn  = _dsSrc.slice(_dsAt, _dsSrc.indexOf('\nfunction ', _dsAt + 1));
-  check('schedule steps in calendar days (DST-proof)',
-    /start\.getDate\(\)\s*\+\s*Math\.round\(i \* cadence\)/.test(_dsFn),
-    'calendar-day stepping is gone');
-  check('schedule does NOT step in milliseconds from the start instant',
-    !/start\.getTime\(\)\s*\+\s*i\s*\*\s*stepMs/.test(_dsFn),
+  // The hazard did not go away with T-Calc's planner — it MOVED. _genInjBatches is now
+  // the only thing that expands a schedule into dates, and it stepped by 86400000 ms.
+  // A DST day is 23 or 25 hours, so crossing one the loop variable creeps to 23:00 the
+  // previous day and a date is emitted twice or skipped: a duplicated or missing
+  // injection, from a clock change.
+  //
+  // CI runs in UTC, where no transition occurs, so a purely functional test cannot
+  // reproduce it here — the source guard is what protects it, as it was for the planner.
+  var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-stack.js'),'utf8');
+  check('the generator steps in calendar days', /function _nextDay\(d\)\{[\s\S]{0,120}setDate\(n\.getDate\(\)\+1\)/.test(_dsSrc));
+  check('  …and never in milliseconds from the start instant',
+    !/d=new Date\(d\.getTime\(\)\+86400000\)/.test(_dsSrc),
     'ms stepping is back — this is the DST bug');
-  if (typeof G._tcSimplePlanInjections === 'function') {
-    var _dsSave = G._tcp;
-    function _dsGaps(cadence){
-      G._tcp = Object.assign({}, G._tcp, { manualLog: [], plannerMode: 'simple',
-        simplePlan: {compId:'testoviron', doseMg:'100', cadenceN:0, cadenceUnit:'days',
-                     cadenceDays:cadence, startDate:'2026-08-02'} });
-      var inj = G._tcSimplePlanInjections(), seen = {};
-      for (var i = 1; i < inj.length; i++){
-        var g = Math.round((new Date(inj[i].date+'T12:00:00') - new Date(inj[i-1].date+'T12:00:00'))/86400000);
-        seen[g] = 1;
-      }
-      return { n: inj.length, gaps: Object.keys(seen).map(Number).sort(function(a,b){return a-b;}) };
+
+  // Behavioural, in whatever zone CI runs: a daily compound across a month yields one
+  // dose per calendar day, none repeated and none missing.
+  var _dsStack = {id:'dst', cycle_start:'2026-03-01', cycle_length:8,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+         freqVal:1, freqUnit:'days'}]}};
+  var _dsDates = G._genInjBatches(_dsStack, 'dst', null)
+                  .reduce(function(a,b){ return a.concat((b.entries||[]).map(function(e){return e.date;})); }, []);
+  check('  …one dose per day, with no date repeated',
+    _dsDates.length === new Set(_dsDates).size, 'dupes in ' + _dsDates.length + ' dates');
+  check('  …and no calendar day skipped across the whole cycle', (function(){
+    for (var i = 1; i < _dsDates.length; i++){
+      var gap = Math.round((new Date(_dsDates[i]+'T12:00:00') - new Date(_dsDates[i-1]+'T12:00:00'))/86400000);
+      if (gap !== 1) return false;
     }
-    var _ds5 = _dsGaps(5);
-    check('every-5-days yields only 5-day gaps', _ds5.n > 50 && _ds5.gaps.length === 1 && _ds5.gaps[0] === 5,
-      'gaps ' + _ds5.gaps.join(','));
-    var _ds2 = _dsGaps(2);
-    check('EOD never puts two doses on consecutive days', _ds2.gaps.indexOf(1) < 0,
-      'gaps ' + _ds2.gaps.join(','));
-    // Fractional cadence must stay fractional on AVERAGE without drifting.
-    var _ds3 = _dsGaps(7/3);
-    check('3x/week alternates 2 and 3 day gaps only',
-      _ds3.gaps.length <= 2 && _ds3.gaps.every(function(g){ return g === 2 || g === 3; }),
-      'gaps ' + _ds3.gaps.join(','));
-    G._tcp = Object.assign({}, G._tcp, { simplePlan: {compId:'testoviron', doseMg:'100',
-      cadenceN:0, cadenceUnit:'days', cadenceDays:7/3, startDate:'2026-08-02'} });
-    var _dsI = G._tcSimplePlanInjections();
-    var _dsSpan = (new Date(_dsI[_dsI.length-1].date+'T12:00:00') - new Date(_dsI[0].date+'T12:00:00'))/86400000;
-    check('3x/week does not drift over a year',
-      Math.abs(_dsSpan/(_dsI.length-1) - 7/3) < 0.02,
-      'mean interval ' + (_dsSpan/(_dsI.length-1)).toFixed(4));
-    G._tcp = _dsSave;
-  }
+    return _dsDates.length > 40;
+  })(), _dsDates.length + ' dates from ' + _dsDates[0] + ' to ' + _dsDates[_dsDates.length-1]);
 }
 
 // ── A DATED draw calibrates even with no free T ──
@@ -7123,6 +7872,35 @@ console.log('\n\u2500\u2500 T-calc: a dated draw calibrates \u2500\u2500');
 // findings get triaged in the Security tab; they are not a reason to refuse to ship.
 // Test failures still block — that part must never be relaxed.
 console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
+// ── WHICH REPO IS THIS CHECKOUT? ────────────────────────────────────────────
+// tests/ is copied wholesale into prod by the promotion, so any test asserting
+// STAGING-ONLY infrastructure — the promote workflow, dev tooling — runs there too and
+// fails against files that legitimately differ or do not exist.
+//
+// This has now cost three promotions. It pinned prod at v1.271 in Aug 2026, it was
+// misreported as "5 pre-existing failures" on 2026-08-15, and on 2026-08-20 three new
+// promote-manifest tests failed prod PR #325 the same way. One helper, so the next
+// workflow test cannot repeat it.
+//
+// On CI, GITHUB_REPOSITORY names the repo. Locally it is unset and the origin remote
+// answers instead. An UNIDENTIFIABLE checkout runs the tests in full — indeterminate
+// stays loud, so a real regression in staging can never hide behind a missing remote.
+function _repoName(dir) {
+  var r = process.env.GITHUB_REPOSITORY || '';
+  if (!r) {
+    try {
+      var cfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
+      var m = cfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
+      if (m) r = m[1].replace(/\.git$/, '');
+    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
+  }
+  return r;
+}
+function _isProdCheckout(dir) {
+  var r = _repoName(dir);
+  return !!r && !/-(staging|stage)$/.test(r);
+}
+
 {
   // These assert THIS repo's promote-to-prod.yml — a staging-repo workflow. The
   // promotion copies index.html, tab-*.js, ci.yml and tests/ into prod, but not the
@@ -7141,17 +7919,10 @@ console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
   // nothing actually broken. Not hypothetical — that is exactly how prod came to be
   // reported as having "5 pre-existing failures" while its CI was green (2026-08-15).
   // The origin remote names the repo the working tree came from, so ask that instead.
-  var _pgRepo = process.env.GITHUB_REPOSITORY || '';
-  if (!_pgRepo) {
-    try {
-      var _pgCfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
-      var _pgM = _pgCfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
-      if (_pgM) _pgRepo = _pgM[1].replace(/\.git$/, '');
-    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
-  }
-  // Indeterminate stays LOUD: an unidentifiable checkout runs them rather than skipping,
-  // so a real regression in staging's gate can never hide behind a missing remote.
-  var _pgIsProd = _pgRepo && !/-(staging|stage)$/.test(_pgRepo);
+  // Detection lives in _repoName/_isProdCheckout above — one implementation, because
+  // two copies of this rule is how the 2026-08-20 repeat happened.
+  var _pgRepo = _repoName(dir);
+  var _pgIsProd = _isProdCheckout(dir);
   if (_pgIsProd) {
     console.log('  – skipped on ' + _pgRepo + ' (staging-only workflow)');
   } else {
@@ -9277,8 +10048,12 @@ if (typeof G._tcTargetCycleId === 'function') {
 }
 {
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('T-Calc sync writes the target cycle id', tc.includes('var _cid=_tcTargetCycleId();') && tc.includes('cycle_id:_cid'));
-  check('T-Calc copy-to-stack picker present',    tc.includes('_tcStackPickerHtml()') && tc.includes('onchange="_tcSetTargetStack(this.value)"'));
+  // Superseded by Phase 8: _tcSyncLogToBackend is deleted, so there is no T-Calc
+  // sync to write a cycle id. The protocol's generator owns cycle_id now.
+  check('T-Calc has no sync writing a cycle id any more',
+    !tc.includes('function _tcSyncLogToBackend') && !tc.includes('cycle_id:_cid'));
+  // The copy-to-stack picker was part of the schedule card and went with it (Phase 6).
+  check('the copy-to-stack picker is gone', !tc.includes('_tcStackPickerHtml'));
   const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
   check('badge detects testo from stack injections', idx.includes('_stackHasScheduledTrt(st.id)'));
 }
@@ -9349,7 +10124,11 @@ if (typeof G._reconcileStackTestoSource === 'function') {
 
   G._tcp = _svTcp; G.confirm = _svConfirm; G._tcSetTargetStack = _svSetTarget;
 } else {
-  check('_reconcileStackTestoSource present', false);
+  // Phase 8 removed _reconcileStackTestoSource: it arbitrated between a stack's TRT
+  // config and an assigned T-Calc plan, and a plan can no longer be assigned. Its
+  // absence is the expected state, not a missing dependency.
+  check('_reconcileStackTestoSource is gone, and nothing calls it',
+    typeof G._reconcileStackTestoSource !== 'function');
 }
 
 if (typeof G._tcClearStackConfigTrt === 'function') {
@@ -9361,14 +10140,22 @@ if (typeof G._tcClearStackConfigTrt === 'function') {
   check('clearStackConfigTrt: disables config testo, keeps peptides', _cs.trt && !_cs.trt.enabled && _cs.peptides.length === 1);
   G.saveStacksToBackend = _svSave; G.authHeaders = _svAuth;
 } else {
-  check('_tcClearStackConfigTrt present', false);
+  // Phase 8 removed _tcClearStackConfigTrt with the rest of T-Calc's write paths.
+  check('_tcClearStackConfigTrt is gone', typeof G._tcClearStackConfigTrt !== 'function');
 }
 
 {
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('T-Calc assign guards against config-testo conflict', tc.includes('_stackHasConfigTrt(_tgt)') && tc.includes('_tcClearStackConfigTrt(_tgt)'));
+  // Both of these asserted the two halves of the single-source guard — T-Calc
+  // clearing a protocol's own testosterone to make room for a plan, and the save
+  // paths reconciling the two sources. Phase 8 removed the conflict itself: a
+  // protocol holds testosterone in one place, so there is no second source and no
+  // arbitration. Assert neither half came back.
+  check('nothing clears a protocol\'s testosterone to make room for a plan',
+    !/function _tcClearStackConfigTrt/.test(tc) && !/_tcClearStackConfigTrt\(/.test(tc));
   const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
-  check('wizSave + editSave reconcile testo source', (stk.match(/_reconcileStackTestoSource\(/g) || []).length >= 2);
+  check('the save paths reconcile nothing, because there is one source',
+    (stk.match(/_reconcileStackTestoSource\(/g) || []).length === 0);
 }
 
 // ── Two-tier navigation: 5 primary tabs + nested sub-tabs ─────────────────────
@@ -10237,6 +11024,9 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
   var _prevEnhCat = G.ENHANCEMENT_COMPOUNDS;
+  // _renderEditEnhanced locks non-testosterone cards below tier 3 as of 2026-08-20, so
+  // the tier has to be stated to exercise the editor itself. It used to be ignored here.
+  var _prevTierEnh = G._userTier; G._userTier = 3;
   G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
     dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
     amPm:true,defaultDoseAm:2,defaultDosePm:0}];
@@ -10247,7 +11037,7 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every rendered enhanced dose input has the numeric keypad',
     _enhInputs.length>0 && _enhInputs.every(function(t){return t.indexOf('inputmode="decimal"')>=0;}));
   check('enhanced tier renders one dose input per slot', _enhInputs.length===3, 'got '+_enhInputs.length);
-  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
+  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat; G._userTier = _prevTierEnh;
 }
 
 // ── Every numeric field raises a numeric keypad, app-wide ─────────────────────
@@ -10318,6 +11108,9 @@ console.log('\n── Enhanced tier: fasted-window labels ───────�
   check('_isGhAxis resolves an enhanced-catalogue GH compound', G._isGhAxis('hgh')===true);
   check('_isGhAxis is false for a non-GH enhanced compound', G._isGhAxis('test_e')===false);
 
+  // Tier stated explicitly: _renderEditEnhanced locks non-testosterone cards below
+  // tier 3 as of 2026-08-20, and these exercise the editor itself.
+  var _prevTierSlots=G._userTier; G._userTier=3;
   var _mk=function(id){return G._renderEditEnhanced({enabled:true,compounds:[
     {id:id,name:id,dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});};
   var _hghHtml=_mk('hgh'), _tHtml=_mk('test_e');
@@ -10394,6 +11187,7 @@ console.log('\n── Enhanced tier: schedule chips ─────────�
     _off.indexOf('>Dose</div>')>=0 && _off.indexOf('AM Dose')<0);
   check('the split toggle is still present when off',
     _off.indexOf('Split across AM / Pre-GYM / PM')>=0);
+  G._userTier=_prevTierSlots;
 
   // seeding a fresh entry from the catalogue
   var _seed={};
@@ -10978,99 +11772,26 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // Structural backstop across all three files. A plan-clear that forgets
   // unlogged_only downgrades a record to a schedule; one that forgets compound_id
   // reaches a protocol's peptides and HGH. This holds for deletes added later.
-  // ── The save sheet: one dropdown, one button, no create-a-protocol ─────────
-  // "this is a fucked up dialog. remove the create new protocol choices, only
-  // input is a drop down with existing protocols, active protocol prechosen, and
-  // a big colored Save button." The New protocol buttons made an EMPTY protocol
-  // the active one — a destructive option inside a dialog whose job is "file
-  // these doses somewhere".
-  {
-    const _shSave = { us: G._userStacks, tp: G._tcp, ia: G._isActiveStack, doc: G.document };
-    let built = '';
-    G.document = Object.assign({}, G.document, {
-      createElement: () => ({ style:{cssText:''}, set innerHTML(v){ built = v; }, get innerHTML(){ return built; } }),
-      body: { appendChild(){}, removeChild(){} },
-      getElementById: () => null
-    });
-    G._userStacks = [{id:'my_stack_nostart',name:'My Stack'},{id:'protocol_2_nostart',name:'Protocol 2'}];
-    G._isActiveStack = (i) => i === 1;                 // Protocol 2 is active
-    G._tcp = { manualLog: [] };                        // nothing bound yet
-    if (typeof G._tcOpenSaveToStack === 'function') { try { G._tcOpenSaveToStack(); } catch(e) { built = 'THREW: '+e.message; } }
-    check('the save sheet offers a dropdown', /<select id="tc-save-stack-sel"/.test(built), built.slice(0,160));
-    check('  …with the ACTIVE protocol preselected',
-      /<option value="protocol_2_nostart" selected>/.test(built),
-      (built.match(/<option[^>]*>/g)||[]).join(' '));
-    check('  …listing every protocol', /My Stack/.test(built) && /Protocol 2/.test(built));
-    check('  …and one Save button', />Save<\/button>/.test(built));
-    check('  …with NO create-a-protocol buttons',
-      !/_tcCreateStackForTesto/.test(built) && !/New protocol/.test(built), built.slice(0,200));
 
-    // A bound protocol wins over the active one — that is the current destination.
-    G._tcp = { manualLog: [], targetStackId:'my_stack_nostart' };
-    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
-    check('  …a bound protocol is preselected over the active one',
-      /<option value="my_stack_nostart" selected>/.test(built));
-
-    // No protocols at all: point at Plan rather than offering to create an empty one.
-    G._userStacks = []; G._tcp = { manualLog: [] };
-    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
-    check('  …with no protocols it points at Plan, not a create button',
-      /Build one in <b>Plan<\/b>/.test(built) && !/_tcCreateStackForTesto/.test(built));
-
-    G._userStacks=_shSave.us; G._tcp=_shSave.tp; G._isActiveStack=_shSave.ia; G.document=_shSave.doc;
-  }
-
-  // ── Save keeps the sheet up until the write lands ──────────────────────────
-  // "the moment I hit Save the dialog disappears and the T-calc screen is shown, but
-  // the same warning that 7 injections isnt saved in any protocol is still visible
-  // for a few seconds." It closed FIRST and awaited afterwards, returning the user to
-  // a T-Calc still rendering the pre-save state — an orange "NOT SCHEDULED YET"
-  // banner shown immediately after pressing Save.
-  {
-    const _svSave = { doc: G.document, sts: G._tcSetTargetStack, aft: G._tcAfterSavedToStack };
-    let card = { innerHTML: '' }, removed = false;
-    const overlay = { id:'tc-save-stack-overlay', firstChild: card,
-                      parentNode: { removeChild(){ removed = true; } } };
-    G.document = Object.assign({}, G.document, {
-      getElementById: (i) => (i === 'tc-save-stack-overlay' && !removed) ? overlay : null
-    });
-    let resolveWrite; 
-    G._tcSetTargetStack = () => new Promise(r => { resolveWrite = r; });   // hangs
-    G._tcAfterSavedToStack = async () => {};
-
-    if (typeof G._tcSaveToExistingStack === 'function') {
-      G._tcSaveToExistingStack('protocol_2_nostart');   // deliberately NOT awaited
-    }
-    // Synchronously after the call the write is still in flight.
-    check('Save leaves the sheet OPEN while the write is in flight', !removed);
-    check('  …showing a spinner', /today-spinner-dot/.test(card.innerHTML), card.innerHTML.slice(0,120));
-    check('  …and saying what it is doing', /Saving to protocol/.test(card.innerHTML));
-    // Conjoined with the spinner: on the pre-fix source innerHTML is '' and a bare
-    // "no Cancel" assertion passes vacuously.
-    check('  …with no Cancel while the write is in flight',
-      /today-spinner-dot/.test(card.innerHTML) && !/_tcCloseSaveToStack\(\)/.test(card.innerHTML));
-
-    if (resolveWrite) resolveWrite();
-    G.document = _svSave.doc; G._tcSetTargetStack = _svSave.sts; G._tcAfterSavedToStack = _svSave.aft;
-  }
-
-  // Ordering: the close must come AFTER both awaits, and a failure must not close.
-  {
-    const _tcSrc3 = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-    const a = _tcSrc3.indexOf('async function _tcSaveToExistingStack');
-    const b = _tcSrc3.indexOf('function _tcSaveSheetBusy');
-    // Both markers must exist, or the slice degenerates and the ordering check below
-    // passes on a source that has neither — a vacuous green.
-    check('the busy-state helper exists to slice against', a >= 0 && b > a);
-    const fn = (a >= 0 && b > a) ? _tcSrc3.slice(a, b) : '';
-    check('the sheet closes only after the write and the refresh',
-      fn.indexOf('await _tcSetTargetStack') >= 0 &&
-      fn.indexOf('await _tcAfterSavedToStack') >= 0 &&
-      fn.indexOf('await _tcSetTargetStack') < fn.lastIndexOf('_tcCloseSaveToStack') &&
-      fn.indexOf('await _tcAfterSavedToStack') < fn.lastIndexOf('_tcCloseSaveToStack'));
-    check('  …and a failed save keeps it open instead of closing silently',
-      /_tcSaveSheetError\(/.test(fn) && /catch\(e\)\{/.test(fn));
-  }
+// ── The save-to-protocol sheet is gone (Phase 6) ────────────────────────────
+// It filed a planner's doses into a protocol: a dropdown of protocols, the active one
+// preselected, one Save button, and — until 2026-08-14 — a "New protocol" option that
+// created an empty stack, made it active and moved a protocol's injections to it with
+// nothing on screen saying so.
+//
+// With the planner gone there are no doses to file: the protocol generates its own.
+// The whole sheet and its after-save refresh went with it.
+{
+  const _ssSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('the save-to-protocol sheet is gone',
+    !/tc-save-stack-sel/.test(_ssSrc) && !/function _tcOpenSaveToStack/.test(_ssSrc));
+  check('  …with its after-save refresh',
+    !/function _tcAfterSavedToStack/.test(_ssSrc) && !/function _tcSaveSheetBusy/.test(_ssSrc));
+  // The protocol creator that dialog once carried must not survive it: creating an
+  // empty protocol and activating it is not something T-Calc does at all now.
+  check('  …and the protocol creator it used to offer',
+    !/function _tcCreateStackForTesto/.test(_ssSrc));
+}
 
   // ── The forward plan must not be counted twice after saving ────────────────
   // 2026-08-15, before/after in the same build: after saving 7 doses the curve read
@@ -11080,9 +11801,14 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // as the stored protocol rows they had just become.
   {
     const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState };
-    const days = ['2026-08-16','2026-08-18','2026-08-20'];
+    // Relative to today: these were fixed dates when written on 2026-08-15 and have
+    // since aged into the past, where the curve legitimately drops them. The point of
+    // the check is the double count, not the calendar.
+    const _dk = function(off){ var t = new Date(); t.setDate(t.getDate()+off);
+      return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+    const days = [_dk(2), _dk(4), _dk(6)];
     // Post-save state: the same doses in BOTH places, as the app had them.
-    G._tcHistory = [{compId:'nebido', doseMg:'100', date:'2026-08-06'}];
+    G._tcHistory = [{compId:'nebido', doseMg:'100', date:_dk(-14)}];
     G._tcHistoryState = 'ready';
     G._injectionsCache = {};
     days.forEach(function(d){
@@ -11094,7 +11820,7 @@ console.log('\n── injection deletes: scoped, and never a record ────
 
     if (typeof G._tcCurveLog === 'function') {
       const log = G._tcCurveLog();
-      const fut = log.filter(function(e){ return e.date >= '2026-08-16'; });
+      const fut = log.filter(function(e){ return e.date >= days[0]; });
       check('a saved dose is not counted twice on the curve',
         fut.length === days.length,
         'got ' + fut.length + ' forward doses from ' + days.length + ' injections: ' +
@@ -11104,22 +11830,31 @@ console.log('\n── injection deletes: scoped, and never a record ────
       // stored the RAW compound_id while history and protocol rows store the
       // canonical one, so test_u and nebido were two keys for one injection.
       G._tcp = { targetStackId:'protocol_2_nostart',
-                 manualLog: [{compId:'test_u', doseMg:'100', date:'2026-08-16', draft:true}] };
-      const log2 = G._tcCurveLog().filter(function(e){ return e.date === '2026-08-16'; });
+                 manualLog: [{compId:'test_u', doseMg:'100', date:days[0], draft:true}] };
+      const log2 = G._tcCurveLog().filter(function(e){ return e.date === days[0]; });
       check('  …nor under a second spelling of the same ester',
         log2.length === 1, 'got ' + log2.map(function(e){ return e.compId; }).join(','));
     }
     G._tcp=_dupSave.tp; G._injectionsCache=_dupSave.ic; G._tcHistory=_dupSave.h; G._tcHistoryState=_dupSave.hs;
   }
 
-  // Saving must do what a cold start does: re-read the record, then rebuild.
+  // Saving must do what a cold start does: re-read the record, then rebuild. The
+  // after-save hook belonged to the save-to-protocol sheet and went with it (Phase 6);
+  // the requirement moved to the one write path T-Calc still has — record entry.
   {
     const _srcA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-    const a = _srcA.indexOf('async function _tcAfterSavedToStack');
-    const fn = a >= 0 ? _srcA.slice(a, a + 1400) : '';
-    check('the after-save hook exists', a >= 0);
-    check('  …forces a fresh history read', /_tcFetchHistory\(true\)/.test(fn));
-    check('  …and rebuilds manualLog from the record', /_tcLoadLogFromStack\(\)/.test(fn));
+    check('the after-save hook is gone with the sheet it served',
+      !/function _tcAfterSavedToStack/.test(_srcA));
+    // The add path moved to Today (2026-08-20); the requirement follows it. Rebuilding
+    // manualLog from the record is no longer part of it — savePastInjection appends the
+    // doses it just wrote and re-reads the history, which is the same guarantee without
+    // routing through a profile cache.
+    const _thA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    const addFn = _thA.slice(_thA.indexOf('async function savePastInjection()'),
+                             _thA.indexOf('async function savePastInjection()') + 6000);
+    check('logging a dose forces a fresh history read', /_tcFetchHistory\(true\)/.test(addFn));
+    check('  …and the curve only sees what was actually taken',
+      /tier === 'trt' && logged &&/.test(addFn));
     check('manualLog stores the CANONICAL compound id',
       /compId:_tcCanonCompId\(e\.compound_id\)/.test(_srcA));
   }
@@ -11132,8 +11867,19 @@ console.log('\n── injection deletes: scoped, and never a record ────
     check(f + ': every /injections DELETE passes unlogged_only',
       bad.length === 0, bad.join(' | ').slice(0, 200));
   });
-  check('_tcSetTargetStack guards against an empty old cycle id',
-    /if\(oldCid&&oldCid!==newCid\)/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+  // _tcSetTargetStack held the empty-cycle-id guard: an unbound plan produced
+  // `DELETE /injections?cycle_id=&from_date=…`, which is NO filter, and on 2026-08-14
+  // wiped every forward injection in the account. Phase 8 deleted the function, so
+  // assert the guard is enforced where deletes actually live now — one module, which
+  // is the stronger form of the same protection.
+  check('the empty-cycle-id delete cannot be issued from T-Calc any more',
+    !/function _tcSetTargetStack/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+  {
+    const iw = fs.readFileSync(path.join(_dsDir,'inj-writer.js'),'utf8');
+    check('  …because inj-writer refuses an unscoped delete outright',
+      /if\(!cycleId \|\| !compoundId \|\| !fromDate\)/.test(iw),
+      'inj-writer is the only place a delete is issued — the guard has to be here');
+  }
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -11146,80 +11892,25 @@ console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // with the true aggregate.
 process.exitCode = failed > 0 ? 1 : 0;
 
-// ── A DRAFT THAT IS NOT BOUND IS NOT SCHEDULED — THE UI MUST SAY SO ──────────
-// 2026-08-14: "no injections show up from today in Today view even if T-calc graph
-// looks fine." The record settled it — 7 draft doses (14–26 Aug) in the profile and
-// `targetStackId` absent, so _tcSyncLogToBackend returned at `if(!_cid)return;` and
-// wrote nothing. The add sheet closed as if it had worked and the curve redrew from
-// the drafts, so nothing anywhere indicated the doses were not scheduled.
-console.log('\n── T-Calc: unsaved drafts are announced ───────────────────');
+// ── A draft that is not bound: no longer possible (Phase 6) ─────────────────
+// This block tested the banner that announced unsaved planner drafts. 2026-08-14: "no
+// injections show up from today in Today view even if T-calc graph looks fine" — seven
+// draft doses sat in the profile with no protocol bound, so the sync wrote nothing while
+// the curve drew from them.
+//
+// Phase 6 removed the planner, so nothing creates a draft and there is no unbound state
+// to announce: a dose is scheduled by the protocol or it does not exist. What the block
+// was really protecting — that the curve never shows doses the record does not hold —
+// is now structural, and is asserted against how the curve is built.
+console.log('\n── Drafts cannot exist: the planner is gone ───────────────');
 {
-  const save = { tp: G._tcp, us: G._userStacks };
-  const drafts = ['2026-08-14','2026-08-16','2026-08-18','2026-08-20','2026-08-22','2026-08-24','2026-08-26']
-    .map(d => ({ compId:'nebido', doseMg:'100', date:d, draft:true }));
-
-  check('_tcUnsavedDraftBanner exists', typeof G._tcUnsavedDraftBanner === 'function');
-  // Call through a shim, not directly: on a source without the fix the bare call
-  // throws and aborts the whole run at the first assertion, hiding the rest. Every
-  // check below must be able to report its own failure.
-  const banner = () => (typeof G._tcUnsavedDraftBanner === 'function') ? G._tcUnsavedDraftBanner() : '';
-
-  // Unbound + drafts → the banner appears, counts them, and offers the real action.
-  G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
-  G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
-  const _saveIsActive = G._isActiveStack;
-  G._isActiveStack = function(i){ return i === 0; };
-  const unbound = banner();
-  check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
-  check('  …counting them', /7 planned doses/.test(unbound));
-  check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
-  check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
-  check('  …and offering the save action', /_tcOpenSaveToStack\(\)/.test(unbound));
-  // "Save to protocol" alone reads as if the app already knows where. It does not,
-  // and there is deliberately no default — picking one for the user is what put a
-  // protocol's injections into a new empty stack (2026-08-14).
-  check('  …saying there is NO destination yet', /no destination yet/.test(unbound));
-  check('  …that the user picks it next', /You pick it in the next step/.test(unbound));
-  check('  …naming the protocols on offer, active marked',
-    /Protocol 2 \(active\)/.test(unbound), unbound.replace(/<[^>]*>/g,'').slice(0,200));
-  check('  …and the button says a choice follows', /Choose a protocol/.test(unbound));
-
-  // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
-  // the only place the target was shown was the simple planner's card header, which
-  // is off whenever the manual planner is in use (Henrik, 2026-08-14: "how do I know
-  // which protocol ... anyone would assume is the active protocol").
-  G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
-  const bound = banner();
-  check('a bound plan names the destination protocol', /Protocol 2/.test(bound));
-  check('  …saying doses are saved into it', /saved into/.test(bound));
-  check('  …and offers a way to change it', /_tcOpenSaveToStack\(\)/.test(bound));
-  check('  …without the unsaved warning', !/Not scheduled yet/.test(bound));
-
-  // Bound to a stack that no longer exists → _tcTargetCycleId is '' (unbound), so the
-  // warning path runs rather than naming a protocol that is gone.
-  G._tcp = { targetStackId:'gone', manualLog: drafts };
-  check('  …a target that no longer exists falls back to the warning',
-    /Not scheduled yet/.test(banner()));
-
-  // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
-  // returns '' for it, so the sync silently no-ops and the banner must fire.
-  G._tcp = { targetStackId:'deleted_stack', manualLog: drafts };
-  check('  …but a dangling stack id still counts as unbound',
-    /Not scheduled yet/.test(banner()));
-
-  // No drafts → nothing to warn about, bound or not.
-  G._tcp = { manualLog: [{compId:'nebido',doseMg:'100',date:'2026-08-14'}] };
-  check('a log with no drafts shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
-  G._tcp = { manualLog: [] };
-  check('an empty log shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
-
-  // It must be rendered, not merely defined.
-  const _tcSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  check('buildTCalc renders it above the curve',
-    /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
-
-  G._isActiveStack = _saveIsActive;
-  G._tcp = save.tp; G._userStacks = save.us;
+  const _dfSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('nothing stages an unsaved draft any more',
+    !/function _tcUnsavedDraftBanner/.test(_dfSrc) && !/draft:true/.test(_dfSrc));
+  check('  …and the save-to-protocol route is gone with it',
+    !/function _tcOpenSaveToStack/.test(_dfSrc) && !/function _tcSaveToExistingStack/.test(_dfSrc));
+  check('the curve is built from the record and the protocol only',
+    /_add\(_tcLoggedHistory\(\)\);/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)\);/.test(_dfSrc));
 }
 
 // ── T-History: the "as of" readout follows the series end ────────────────────
@@ -11271,24 +11962,6 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // body itself further down (search: "buildTHist never captures/persists"). A
   // whole-file grep for those names matches the comment that says they are absent,
   // which is why the duplicate attempted here was both redundant and wrong.
-}
-
-// The save sheet must label what each choice does. An unmarked "New protocol" button
-// beside the existing ones created an empty stack, made it active and moved a
-// protocol's injections to it — with nothing on screen saying so (2026-08-14).
-{
-  const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
-  // The other three checks here described the New-protocol section and its warning
-  // text. That section is gone by request (2026-08-14) — a dialog for filing doses
-  // no longer carries an option that empties Today. What replaced them is asserted
-  // by rendering the sheet: dropdown, active preselected, single Save, no creator.
-  // Match the MARKUP, not the words: /New protocol/ also hits the comment that
-  // explains why the section was removed. That is the same trap as the earlier
-  // whole-file grep for _thComputeFreeT, which matched the comment saying it is
-  // deliberately absent.
-  check('  …and the destination is a single dropdown, not a list of buttons',
-    /<select id="tc-save-stack-sel"/.test(_tcSrc2) && !/>New protocol<\/div>/.test(_tcSrc2));
 }
 
 // ── Today: a finished cycle says so ──────────────────────────────────────────
@@ -11477,4 +12150,722 @@ console.log('\n── Month calendar ──────────────�
 
   G.document = _cSave.doc; G._injectionsCache = _cSave.cache; G.window._peptideLog = _cSave.plog;
   G._viewDate = _cSave.vd; G.showDayInline = _cSave.sdi; G.switchTab = _cSave.st;
+}
+
+// ── No fixed banners over the navbar ─────────────────────────────────────────
+// Henrik, 2026-08-19: "Remove the bottom of screen banners, they block navigation
+// menu in apps. Also stuff like this should already live in Settings."
+// .navbar is position:fixed;bottom:0;z-index:100 — anything else pinned to bottom:0
+// sits on top of it and the app's own navigation stops being reachable.
+console.log('\n── No fixed banners over the navbar ───────────────────────');
+{
+  const _bSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  const _bToday = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  const _allJs = rawScript + _bToday;
+  check('nothing pins itself to the bottom of the screen',
+    !/position:fixed;bottom:0/.test(_allJs));
+  check('  …the local-data sync bar is gone',      !/sync-bar/.test(_allJs));
+  check('  …and the update banner with it',        !/New version <strong/.test(_allJs));
+
+  // Removing a banner must not remove the action it carried.
+  check('syncing local dose logs moved into Settings',
+    /id="peptide-sync-btn" onclick="pushAllPeptideToBackend\(\)"/.test(_bSrc));
+  check('  …inside the Data section',
+    _bSrc.indexOf('id="s-sec-data"') < _bSrc.indexOf('id="peptide-sync-btn"') &&
+    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-app"'));
+  check('  …and the button resets instead of removing a bar it no longer sits in',
+    /btn.textContent='Sync';btn.disabled=false;/.test(rawScript) &&
+    !/closest\('\.sync-bar'\)/.test(rawScript));
+
+  // A version found on load lands on the Settings row, same as pressing Check.
+  const _uSave = {doc:G.document};
+  let _btn = {textContent:'Check', disabled:false, style:{}, onclick:null};
+  G.document = Object.assign({}, _uSave.doc,
+    {getElementById:(id)=> id==='s-update-btn' ? _btn : _uSave.doc.getElementById(id)});
+  G._markUpdateAvailable('9.99');
+  check('a detected update marks the Settings version row',
+    _btn.textContent === 'Update to v9.99' && _btn.disabled === false &&
+    typeof _btn.onclick === 'function');
+  _btn = null;
+  G.document = Object.assign({}, _uSave.doc, {getElementById:()=>null});
+  let _threw = false;
+  try { G._markUpdateAvailable('9.99'); } catch(e){ _threw = true; }
+  check('  …and does nothing when that row is not on screen', !_threw);
+  G.document = _uSave.doc;
+}
+
+// ── Phase 3: one module owns every injection write ───────────────────────────
+// docs/unified-plan-rewrite.md §3.2. Ten call sites across tab-stack.js and
+// tab-tcalc.js each built their own request and did not agree with each other.
+// Every injection bug of 2026-08-15/16 lived in that gap.
+console.log('\n── One writer for injections ──────────────────────────────');
+{
+  const _fs2 = require('fs'), _p2 = require('path');
+  const _injSrc = _fs2.readFileSync(_p2.join(__dirname, '../inj-writer.js'), 'utf8');
+
+  // The invariant, checked by construction: no module but inj-writer.js may issue a
+  // planning write. Today's tick is the documented exception — it records an event
+  // that already happened.
+  const _mods = _fs2.readdirSync(_p2.join(__dirname, '..'))
+    .filter(f => (f.endsWith('.js') && f !== 'inj-writer.js'))
+    .concat(['index.html']);
+  // ⚠️ `method:\s*'…'` — WITH optional whitespace. Until 2026-08-20 this pattern
+  // required `method:'POST'` with none, and tab-thist.js's past-injection write said
+  // `method: 'POST'`. One space was the whole difference between a rule and a rule
+  // that is enforced: the single direct write left in the app sat here reported as
+  // compliant. A guard that can be stepped around by a formatter is not a guard.
+  const _writeRe = /fetch\(\s*AGENT_URL\s*\+\s*'(\/injections[^']*)'[^;]{0,300}?method:\s*'(POST|DELETE|PUT)'/gs;
+  const _offenders = [];
+  _mods.forEach(f => {
+    const body = _fs2.readFileSync(_p2.join(__dirname, '..', f), 'utf8');
+    let m;
+    const re = new RegExp(_writeRe.source, 'gs');
+    while((m = re.exec(body)) !== null){
+      const isTick = m[2] === 'PUT' && f === 'tab-today.js';
+      if(!isTick) _offenders.push(`${f}: ${m[2]} ${m[1]}`);
+    }
+  });
+  check('nothing outside inj-writer.js writes an injection', _offenders.length === 0,
+        _offenders.join(' | '));
+
+  // …and the exception is still exactly two ticks, not a door left open.
+  const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
+  check('  …except Today\'s tick, which records rather than plans',
+    (_todaySrc.match(/method:'PUT'/g) || []).length === 2 &&
+    /body:JSON.stringify\(\{logged:newLogged\}\)/.test(_todaySrc));
+
+  // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
+  // immediately before each call — this block runs after the synchronous suite, and
+  // other in-flight async tests swap the shared fetch between awaits.
+  const _wSave = {fetch:G.fetch, auth:G.authHeaders};
+  let _calls = [];
+  const _arm2 = (impl) => {
+    _calls = [];
+    G.authHeaders = (extra) => Object.assign({Authorization:'Bearer x'}, extra || {});
+    G.fetch = impl || (async (url, opts) => {
+      _calls.push({url, opts});
+      return {ok:true, status:200, json:async()=>({})};
+    });
+  };
+
+  (async () => {
+    _arm2();
+    await G.injWriteBatch('cyc1', 'nebido', '2026-08-19', [{date:'2026-08-19', dose:'100'}], 'test');
+    const _batchCalls = _calls.filter(c => /\/injections\/batch$/.test(c.url) &&
+                                          String(c.opts.body).includes('"cycle_id":"cyc1"'));
+    check('injWriteBatch posts one batch to /injections/batch',
+      _batchCalls.length === 1 && _batchCalls[0].opts.method === 'POST',
+      'saw ' + _batchCalls.length);
+    const _body = JSON.parse(_batchCalls[0].opts.body);
+    check('  …carrying cycle, compound, from_date and the entries',
+      _body.cycle_id === 'cyc1' && _body.compound_id === 'nebido' &&
+      _body.from_date === '2026-08-19' && _body.entries.length === 1);
+
+    _arm2();
+    await G.injClearFuture('cyc1', 'nebido', '2026-08-19', {tag:'test'});
+    const _del = _calls.filter(c => c.opts.method === 'DELETE');
+    check('injClearFuture deletes only from the given date forward',
+      _del.length === 1 && /cycle_id=cyc1/.test(_del[0].url) &&
+      /compound_id=nebido/.test(_del[0].url) && /from_date=2026-08-19/.test(_del[0].url),
+      'saw ' + _del.length);
+    // The whole point of the default: a logged dose is the record of something that
+    // was administered, and clearing a plan must never take one with it.
+    check('  …and spares logged doses unless told otherwise, by default',
+      /unlogged_only=true/.test(_del[0].url));
+
+    _arm2();
+    await G.injClearFuture('cyc1', 'nebido', '2026-08-19', {unloggedOnly:false});
+    check('  …with removing the record itself requiring an explicit flag',
+      _calls.some(c => /unlogged_only=false/.test(c.url)));
+
+    _arm2();
+    await G.injClearFutureMany('cyc1', ['nebido','test_u','enanthate'], '2026-08-19', {});
+    check('injClearFutureMany covers every id it is given',
+      ['nebido','test_u','enanthate'].every(id =>
+        _calls.some(c => c.url.includes('compound_id=' + id))));
+
+    // A phone doing these one at a time was slow enough to see, and the sequential
+    // version moved the following write down the microtask queue.
+    let _open = 0, _maxOpen = 0;
+    _arm2(async () => { _open++; _maxOpen = Math.max(_maxOpen, _open);
+                        await Promise.resolve(); _open--; return {ok:true, status:200}; });
+    await G.injClearFutureMany('cyc1', ['a','b','c'], '2026-08-19', {});
+    check('  …in parallel, not one round trip after another', _maxOpen > 1, `maxOpen ${_maxOpen}`);
+
+    // One failure must not abort the rest, nor the write that follows it.
+    _arm2(async (url) => { if(String(url).includes('compound_id=b')) throw new Error('network');
+                           return {ok:true, status:200}; });
+    let _blew = false;
+    try { await G.injClearFutureMany('cyc1', ['a','b','c'], '2026-08-19', {}); }
+    catch(e){ _blew = true; }
+    check('  …and one failed prune does not abort the others', !_blew);
+
+    _arm2(async () => { throw new Error('offline'); });
+    const _r = await G.injWriteBatch('c','n','2026-08-19',[], 'test');
+    check('a network failure returns null rather than throwing at the caller', _r === null);
+
+    G.fetch = _wSave.fetch; G.authHeaders = _wSave.auth;
+  })();
+}
+
+// ── Phase 4: one Compounds tier ───────────────────────────────────────────────
+// Henrik, 2026-08-16: "We will fold enhanced and TRT into one unified tab, all is part
+// of a Protocol." And 2026-08-19: "Group by class testosterone on top", "any pre
+// existing protocol needs to be merged into the new format".
+console.log('\n── Compounds tier: folding an old protocol ────────────────');
+{
+  const G2 = sandbox;
+  const _fSave = {stacks:G2._userStacks, buf:G2._editBuf, idx:G2._editIdx, doc:G2.document};
+  G2.document = Object.assign({}, _fSave.doc, {getElementById:()=>null});
+
+  const _open = (stack) => {
+    G2._userStacks = [stack];
+    G2.showStackEditor(0);
+    return G2._editBuf;
+  };
+
+  // The exact shape that caused the 2026-08-16 mess: testosterone configured in the
+  // Enhanced tier under its own spelling, while T-Calc wrote the TRT one.
+  let buf = _open({id:'p2', name:'Protocol 2', peptides:[], trt:{},
+                   enhanced:{enabled:true, compounds:[
+                     {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350',
+                      unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days'},
+                     {id:'hgh',    name:'HGH (Somatropin)', dose:'3', unit:'IU/day'}]}});
+  check('an Enhanced testosterone folds into the one tier',
+    (buf.trt.compounds || []).length === 1);
+  check('  …under the canonical id, not the tier it came from',
+    buf.trt.compounds[0].id === 'nebido', buf.trt.compounds[0].id);
+  // A rate becomes an amount on the way in: this block stores what goes in the syringe.
+  // 350 mg/week on an every-2-days cadence is 100 mg. Carrying "mg/week" across is what
+  // produced a dose the editor could not display, and a 28.6 mg injection (2026-08-19).
+  check('  …converting the rate into the amount in the syringe',
+    buf.trt.compounds[0].dose === '100' && buf.trt.compounds[0].unit === 'mg',
+    buf.trt.compounds[0].dose + ' ' + buf.trt.compounds[0].unit);
+  check('  …and leaves the tier enabled so it is not silently dormant',
+    buf.trt.enabled === true);
+  check('non-testosterone compounds stay exactly where they were',
+    buf.enhanced.compounds.length === 1 && buf.enhanced.compounds[0].id === 'hgh');
+
+  // A protocol holding the SAME molecule in both blocks is the double-stream case.
+  // The TRT entry is the one T-Calc has been scheduling from, so it wins; the point is
+  // that exactly one survives.
+  buf = _open({id:'p3', peptides:[],
+               trt:{enabled:true, compounds:[{id:'nebido', dose:'100', unit:'mg'}]},
+               enhanced:{enabled:true, compounds:[{id:'test_u', dose:'350', unit:'mg/week'}]}});
+  check('the same molecule in both blocks collapses to one entry',
+    buf.trt.compounds.length === 1 && buf.trt.compounds[0].dose === '100');
+  check('  …and the duplicate is gone from the other block',
+    buf.enhanced.compounds.length === 0);
+
+  // Nothing is written until Save — the fold happens in the edit buffer.
+  check('the stored protocol is untouched until the user saves',
+    G2._userStacks[0].enhanced.compounds.length === 1 &&
+    G2._userStacks[0].enhanced.compounds[0].id === 'test_u');
+
+  // A protocol with nothing to fold must come through unchanged.
+  buf = _open({id:'p4', peptides:[], trt:{enabled:true, compounds:[{id:'nebido', dose:'100'}]},
+               enhanced:{enabled:true, compounds:[{id:'deca', dose:'300'}]}});
+  check('a protocol with nothing to fold is left alone',
+    buf.trt.compounds.length === 1 && buf.enhanced.compounds.length === 1 &&
+    buf.enhanced.compounds[0].id === 'deca');
+
+  check('folding an empty protocol is a no-op, not a crash',
+    G2._editFoldTestosterone({}) === 0 && G2._editFoldTestosterone(null) === 0);
+
+  // Old tab ids must land somewhere real rather than on a tab that no longer exists.
+  check('a stored "trt" tab id lands on Compounds',      G2._compTabId('trt') === 'compounds');
+  check('  …and so does "enhanced"',                     G2._compTabId('enhanced') === 'compounds');
+  check('  …while peptides is left alone',               G2._compTabId('peptides') === 'peptides');
+
+  G2._userStacks = _fSave.stacks; G2._editBuf = _fSave.buf; G2._editIdx = _fSave.idx;
+  G2.document = _fSave.doc;
+}
+
+// ── Migrating stored protocols to the merged tier ─────────────────────────────
+// Henrik, 2026-08-19: "any pre existing protocol needs to be merged into the new
+// format" → "Ok just migrate". The stored protocol is rewritten, rather than each one
+// having to be opened and saved.
+console.log('\n── Protocol migration ─────────────────────────────────────');
+{
+  const G3 = sandbox;
+  const _mSave = {save:G3.saveStacksToBackend, bs:G3.buildStackStore,
+                  bt:G3.buildToday, confirm:G3.confirm, alert:G3.alert};
+  let _saved = 0, _asked = '', _told = '';
+  G3.saveStacksToBackend = async () => { _saved++; };
+  G3.buildStackStore = () => {}; G3.buildToday = () => {};
+  G3.alert = (m) => { _told = m; };
+
+  // The migration takes the list it operates on, so these tests never touch
+  // _userStacks — the suite's other async blocks share that global.
+  // Exactly the shape staging holds today: one protocol, testosterone in the Enhanced
+  // block under its own spelling, HGH beside it.
+  const _live = () => ([{id:'protocol_2_nostart', name:'Protocol 2', peptides:[{id:'glow'}],
+                         trt:{}, enhanced:{enabled:true, compounds:[
+                           {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350',
+                            unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days'},
+                           {id:'hgh', name:'HGH (Somatropin)', dose:'2', unit:'IU/day'}]}}]);
+
+  let _stacks = _live();
+  let _rep = G3._migrateProtocolsReport(_stacks);
+  check('the report names what would move', _rep.length === 1);
+  check('  …from the old spelling to the canonical one',
+    _rep[0].from === 'test_u' && _rep[0].to === 'nebido');
+  check('  …carrying the dose so the confirm can show it',
+    _rep[0].dose === '350' && _rep[0].unit === 'mg/week');
+  check('  …and naming the protocol it belongs to', _rep[0].stack === 'Protocol 2');
+  check('a report changes nothing on its own',
+    _stacks[0].enhanced.compounds.length === 2 &&
+    (_stacks[0].trt.compounds || []).length === 0);
+
+  (async () => {
+    // Declining the confirm must leave everything alone — including the backend.
+    G3.confirm = () => false;
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('declining the confirm writes nothing',
+      _saved === 0 && _stacks[0].enhanced.compounds.length === 2);
+
+    G3.confirm = (m) => { _asked = m; return true; };
+    // Deltas, not totals: this block runs after the synchronous suite and other
+    // in-flight tests share the stubbed saveStacksToBackend.
+    let _before = _saved;
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('the confirm says protocols stay separate',
+      /Protocols stay separate/.test(_asked));
+    check('  …and that no injection is touched',
+      /no injection is added, changed or deleted/.test(_asked));
+    check('migrating moves testosterone into the one tier',
+      _stacks[0].trt.compounds.length === 1 && _stacks[0].trt.compounds[0].id === 'nebido');
+    check('  …converting the weekly rate to the per-injection amount',
+      _stacks[0].trt.compounds[0].dose === '100' && _stacks[0].trt.compounds[0].unit === 'mg',
+      _stacks[0].trt.compounds[0].dose + ' ' + _stacks[0].trt.compounds[0].unit);
+    check('  …leaving everything else where it was',
+      _stacks[0].enhanced.compounds.length === 1 &&
+      _stacks[0].enhanced.compounds[0].id === 'hgh');
+    check('  …keeping the protocol itself intact',
+      _stacks.length === 1 && _stacks[0].peptides.length === 1);
+    check('  …and persisting it', _saved > _before);
+
+    // Running it twice must be a no-op, not a second round of moves.
+    // Capture every message: other blocks share the stubbed alert in this window.
+    const _msgs2 = [];
+    G3.alert = (m) => { _msgs2.push(String(m)); };
+    const _snapshot = JSON.stringify(_stacks);
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('running it again reports nothing to do',
+      _msgs2.some(m => /Nothing to migrate/.test(m)), _msgs2.join(' || ').slice(0,120));
+    // Idempotence is the real requirement — asserting on a save COUNT is unreliable
+    // here, because other in-flight blocks share the stubbed saveStacksToBackend.
+    check('  …and changes nothing the second time', JSON.stringify(_stacks) === _snapshot);
+
+    // Two protocols stay two protocols — the tier merge is not a protocol merge.
+    const _two = _live().concat(_live().map(x => JSON.parse(JSON.stringify(
+      Object.assign({}, x, {id:'other', name:'Other'})))));
+    await G3.migrateProtocolsToCompounds(_two);
+    check('two protocols are migrated, not collapsed into one',
+      _two.length === 2 && _two.every(x => x.trt.compounds.length === 1));
+
+    G3.saveStacksToBackend = _mSave.save; G3.buildStackStore = _mSave.bs;
+    G3.buildToday = _mSave.bt; G3.confirm = _mSave.confirm; G3.alert = _mSave.alert;
+  })();
+}
+
+// ── A rate unit is not the amount in the syringe — in EITHER block ────────────
+// Found by reading the record after Henrik ran Merge tiers (2026-08-19). The
+// migration moved his testosterone from the Enhanced block to the merged tier
+// carrying "350 mg/week", and the TRT branch of _genInjBatches never converted a rate
+// to a per-injection amount — it had never needed to, because TRT compounds were
+// always configured as plain mg. The result would have been "Nebido 350 mg/week" on
+// every second day in Today: the exact rendering the 2026-08-07 fix removed, and a
+// 3.5x overstatement of the dose sitting next to a real 100 mg shot.
+console.log('\n── Rate units convert in both blocks ──────────────────────');
+{
+  const G4 = sandbox;
+  // Henrik's protocol exactly as stored after the migration.
+  const st = {id:'protocol_2_nostart', name:'Protocol 2', cycle_start:'2026-05-18', cycle_length:20,
+              trt:{enabled:true, compounds:[{id:'nebido', name:'Testosterone Undecanoate (Nebido)',
+                   dose:'350', unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days',
+                   days:[1,3], dot:'#b84a4a'}]}};
+  const rows = G4._genInjBatches(st, 'protocol_2_nostart', null)
+                 .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a migrated mg/week compound still generates', rows.length > 0);
+  check('  …as an AMOUNT per injection, not the weekly rate',
+    rows.every(e => String(e.dose) === '100'),
+    'first: ' + JSON.stringify(rows.slice(0,2).map(e => e.dose + ' ' + e.unit)));
+  check('  …with the rate unit stripped, as the record stores amounts',
+    rows.every(e => String(e.unit).indexOf('/') === -1),
+    'units: ' + [...new Set(rows.map(e => e.unit))].join(','));
+
+  // A plain per-injection TRT entry must pass through untouched — the conversion is
+  // for rate units only, and 100 mg every 2 days means 100 mg in the syringe.
+  const plain = G4._genInjBatches({id:'p', cycle_start:'2026-08-01', cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+         freqVal:2, freqUnit:'days'}]}}, 'p', null)
+    .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a plain mg dose is unchanged',
+    plain.length > 0 && plain.every(e => String(e.dose) === '100' && e.unit === 'mg'));
+
+  // And the weekday-cadence form: 350 mg/week over two days a week is 175 each.
+  const wk = G4._genInjBatches({id:'w', cycle_start:'2026-08-01', cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate',
+         dose:'350', unit:'mg/week', days:[1,4]}]}}, 'w', null)
+    .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a weekly rate split across two days is halved',
+    wk.length > 0 && wk.every(e => String(e.dose) === '175' && e.unit === 'mg'),
+    'first: ' + JSON.stringify(wk.slice(0,2).map(e => e.dose + ' ' + e.unit)));
+}
+
+// ── A dose unit is never displayed as something it is not ────────────────────
+// Henrik, 2026-08-19: "Choosing 100mg every 2 day generates a 28mg dose instead of the
+// planned 100mg. The compound planner still treats it as weekly dose."
+//
+// The entry stored unit "mg/week" — carried in from the Enhanced block by the tier
+// migration — while this dropdown offered only mg/ml/IU/%. A <select> whose options do
+// not contain its value renders the FIRST option, so the screen said "100 mg" and
+// storage said "100 mg/week". The generator then divided, correctly, by a rate the user
+// had never been shown: 100 / 7 * 2 = 28.6 mg.
+console.log('\n── Dose units are shown as stored ─────────────────────────');
+{
+  const G5 = sandbox;
+  const _uSave = {tier:G5._userTier, buf:G5._editBuf};
+  G5._userTier = 3;
+  G5._editBuf = {trt:{enabled:true, compounds:[]}, enhanced:{enabled:false, compounds:[]}};
+
+  const html = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'100', unit:'mg/week', cadence:'interval',
+     freqVal:2, freqUnit:'days'}]});
+  // The <select> for this compound must carry the stored unit as its selected option.
+  check('a stored rate unit is offered, not silently replaced',
+    /<option selected>mg\/week<\/option>/.test(html),
+    (html.match(/<option[^>]*>[^<]*<\/option>/g) || []).slice(0,8).join(''));
+  check('  …and mg is NOT the one shown as selected',
+    !/<option selected>mg<\/option>/.test(html));
+
+  const plain = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]});
+  check('a plain mg entry still shows mg', /<option selected>mg<\/option>/.test(plain));
+
+  // Any unit that somehow reaches this screen must be visible, including one the list
+  // does not know — the failure was a value with nowhere to render, not this value.
+  const odd = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'1', unit:'ampoule/fortnight'}]});
+  check('an unknown unit is appended rather than hidden',
+    /<option selected>ampoule\/fortnight<\/option>/.test(odd));
+
+  check('the list covers the rate units the other tier can produce',
+    ['mg/week','mg/day','mg/EOD'].every(u => G5.TRT_UNITS.indexOf(u) >= 0));
+
+  G5._userTier = _uSave.tier; G5._editBuf = _uSave.buf;
+}
+
+// ── Half-life on every compound card ─────────────────────────────────────────
+// Henrik, 2026-08-19: "For all compounds can we list half time? Instead of the
+// 'short ester' etc." A class label and a phrase like "Short ester" are ways of saying
+// a number without saying it — and the number is what decides injection frequency and
+// how long a side effect persists after stopping.
+console.log('\n── Half-life on compound cards ────────────────────────────');
+{
+  const G5 = sandbox;
+  const hl = G5._halfLifeLabel;
+
+  check('a peptide half-life is read straight off the catalogue',
+    hl({id:'cjc-ipa', halfLife:'GHRH ~30 min · IPA ~2 h'}) === 't½ GHRH ~30 min · IPA ~2 h');
+  check('an enhanced compound reads its cadence half-life',
+    hl({id:'deca', cadence:{halfLife:'~6 days'}}) === 't½ ~6 days');
+
+  // The stored strings are written for a detail panel, not a 44px card.
+  check('a long clinical string is trimmed to its leading figure',
+    hl({id:'nebido'}) === 't½ ~56 days', hl({id:'nebido'}));
+  // A blend states both components with a middle dot; keeping only the first would hide
+  // half the answer, so that separator is deliberately not a split point.
+  check('  …but a two-part blend keeps both parts',
+    hl({id:'cjc-ipa', halfLife:'GHRH ~30 min · IPA ~2 h'}) === 't½ GHRH ~30 min · IPA ~2 h');
+  check('  …and a clause with no figure never wins over one that has it',
+    hl({id:'sus-x', cadence:{halfLife:'blended esters; effective ~4–5 days'}}) === 't½ effective ~4–5 days',
+    hl({id:'sus-x', cadence:{halfLife:'blended esters; effective ~4–5 days'}}));
+  check('  …and a trailing qualification after a semicolon is dropped',
+    hl({id:'x', cadence:{halfLife:'~34 days terminal; released over ~10–14 weeks'}}) === 't½ ~34 days terminal');
+
+  // NOTHING IS INVENTED. A compound with no published half-life keeps its old subtitle
+  // rather than being given a number — this app has shipped an invented fallback before
+  // (the mg/day free-T axis, 2026-08-02) and it cost a day.
+  check('a compound with no half-life gets no label', hl({id:'unknown-thing'}) === '');
+  check('  …and neither does a missing entry', hl(null) === '' && hl(undefined) === '');
+
+  // The vial spec is concrete data, so it survives behind the half-life.
+  check('the TRT card keeps its vial spec after the half-life',
+    G5._metaWithHalfLife({id:'nebido', halfLife:'~56 days'}, 'Testosterone Undecanoate 1000mg/4ml') ===
+    't½ ~56 days · Testosterone Undecanoate 1000mg/4ml');
+  check('  …and shows the spec alone when the half-life is unknown',
+    G5._metaWithHalfLife({id:'nope'}, 'Some 250mg/ml') === 'Some 250mg/ml');
+
+  // The backend PK catalogue outranks the bundled fallback: the card must not disagree
+  // with the curve, which integrates that same figure.
+  const _exSave = G5._tcExtraCatalog;
+  G5._tcExtraCatalog = [{id:'nebido', halfLife:'~56 days (backend)'}];
+  check('the backend PK catalogue wins over the bundled guide',
+    hl({id:'nebido'}) === 't½ ~56 days');
+  G5._tcExtraCatalog = _exSave;
+
+  // Rendered, not just computed: every tier's card must carry it.
+  const _cSave = {cat:G5.ENHANCEMENT_COMPOUNDS, buf:G5._editBuf, tier:G5._userTier};
+  G5._userTier = 3;
+  G5.ENHANCEMENT_COMPOUNDS = [{id:'deca', name:'Deca', group:'19-Nor', cls:'19nor',
+                               dot:'#888', defaultDose:300, unit:'mg/week',
+                               cadence:{halfLife:'~6 days', rec:'Twice weekly'}}];
+  G5._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+  const enhHtml = G5._renderEditEnhanced({enabled:false, compounds:[]});
+  check('an enhanced card shows the half-life instead of its class',
+    /t½ ~6 days/.test(enhHtml) && !/>19-Nor<\/div><\/div>/.test(enhHtml));
+  G5.ENHANCEMENT_COMPOUNDS = _cSave.cat; G5._editBuf = _cSave.buf; G5._userTier = _cSave.tier;
+}
+
+// ── The app reads the merged catalogue ───────────────────────────────────────
+// Henrik, 2026-08-19: "Didn't we merge the catalogs?" We had — in the backend, in
+// Phase 1 — and nothing in the app was reading it. Two sources were still being
+// fetched and reconciled client-side, which is the work the merged endpoint removes.
+console.log('\n── Merged catalogue: the app reads it ─────────────────────');
+{
+  const G6 = sandbox;
+  const _mcSave = {fetch:G6.fetch, cat:G6.ENHANCEMENT_COMPOUNDS, merged:G6._COMPOUND_CATALOG,
+                   al:G6._COMPOUND_ALIASES};
+  const MERGED = {
+    compounds:[
+      {id:'nebido', name:'Nebido', group:'Base', isTestosterone:true, aliases:['test_u'],
+       pk:{halfLife:'~56 days plateau-equivalent (37-75 d individual range)'},
+       cadence:{halfLife:'~34 days terminal'}},
+      {id:'deca', name:'Deca', group:'19-Nor', isTestosterone:false,
+       cadence:{halfLife:'~14–16 days'}},
+      {id:'hgh', name:'HGH', group:'GH Axis', isTestosterone:false, cadence:{halfLife:'~20 min active'}},
+    ],
+    aliases:{test_u:'nebido', test_e:'enanthate'},
+  };
+
+  (async () => {
+    // Only this call's catalogue requests: other in-flight blocks share the stub.
+    let asked = [];
+    const _armCat = (handler) => { asked = []; G6.fetch = async (u, o) => {
+      const url = String(u);
+      if (/\/compounds\//.test(url)) asked.push(url);
+      return handler(url, o);
+    }; };
+
+    _armCat(async () => ({ok:true, status:200, json: async () => MERGED}));
+    await G6.syncEnhancedCompoundsFromAgent();
+    check('the app fetches /compounds/catalog', asked.some(u => /\/compounds\/catalog$/.test(u)));
+    // Ordering is asserted on the source rather than on a call log: this block runs
+    // after the synchronous suite, and other in-flight tests swap the shared fetch stub
+    // between the two awaits inside the function — a flaky log, not a real signal.
+    const _cycSrc = fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8');
+    check('  …with the pre-merge endpoint only as a fallback beneath it',
+      _cycSrc.indexOf("'/compounds/catalog'") < _cycSrc.indexOf("'/compounds/enhanced'") &&
+      /A backend that predates the merge still serves the old endpoint/.test(_cycSrc));
+    check('  …keeping the whole merged list for lookups',
+      G6._COMPOUND_CATALOG.length === 3);
+    check('  …and the alias map the backend owns',
+      G6._COMPOUND_ALIASES.test_u === 'nebido');
+
+    // ENHANCEMENT_COMPOUNDS must keep meaning what it meant: the compounds the Enhanced
+    // editor renders. Testosterone has its own section in the merged tab, and listing
+    // the esters in both would show every one of them twice.
+    check('the Enhanced list excludes testosterone, which has its own section',
+      G6.ENHANCEMENT_COMPOUNDS.length === 2 &&
+      !G6.ENHANCEMENT_COMPOUNDS.some(c => c.id === 'nebido'));
+
+    // The join is what removes the client-side reconciliation: pk wins over cadence for
+    // the same compound, because pk is the figure the plasma curve integrates.
+    // The PK string is the one the curve integrates, qualifier and all: Nebido's
+    // "plateau-equivalent" is the difference between the depot releasing and
+    // testosterone clearing, which is exactly what a reader needs to know.
+    check('a half-life comes from the merged entry\'s PK figure, not its cadence text',
+      G6._halfLifeLabel({id:'nebido', pk:MERGED.compounds[0].pk,
+                         cadence:MERGED.compounds[0].cadence}) === 't½ ~56 days plateau-equivalent',
+      G6._halfLifeLabel({id:'nebido', pk:MERGED.compounds[0].pk, cadence:MERGED.compounds[0].cadence}));
+    check('  …and a non-PK compound reads its own catalogue entry',
+      G6._halfLifeLabel({id:'deca', cadence:{halfLife:'~14–16 days'}}) === 't½ ~14–16 days');
+
+    // A backend that predates the merge must still work.
+    check('an older backend still gets a catalogue, from the old endpoint',
+      /if\(!r2\.ok\)\{_logHttp\('syncEnhanced'/.test(_cycSrc) &&
+      /ENHANCEMENT_COMPOUNDS=Array\.isArray\(d2\)/.test(_cycSrc));
+    check('  …and a failed catalogue fetch is reported, not swallowed',
+      /_logHttp\('syncCatalog',r\.status,'\/compounds\/catalog'\)/.test(_cycSrc));
+
+    G6.fetch = _mcSave.fetch; G6.ENHANCEMENT_COMPOUNDS = _mcSave.cat;
+    G6._COMPOUND_CATALOG = _mcSave.merged; G6._COMPOUND_ALIASES = _mcSave.al;
+  })();
+}
+
+// ── The PK model reads the merged catalogue, and the curve does not move ──────
+// Henrik, 2026-08-19: "Do it but verify curve data before and after this change, make
+// sure output for different t esters produces the same results before merge of anything."
+//
+// These numbers ARE the model: half-life, the uncertainty band, tmax, bioavailability
+// and the ester fraction the plasma curve integrates. The refactor was verified by
+// fingerprinting every ester's curve — PK inputs, raw plasma peak, and the calibrated
+// free-T series — through both paths against the live payloads; identical to six
+// decimals. These checks keep it that way.
+console.log('\n── PK catalogue from the merged endpoint ──────────────────');
+{
+  const G7 = sandbox;
+  // Shaped exactly like the live payload: the merged entry carries the trt-catalog row
+  // verbatim under `pk`.
+  const PK_NEBIDO = {id:'nebido', name:'Nebido (Testosterone Undecanoate)', dot:'#e8a020',
+                     halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75,
+                     tmaxDays:7, testosteroneFraction:0.6315, halfLife:'~56 days'};
+  const PK_ENAN   = {id:'enanthate', name:'Testosterone Enanthate', dot:'#e05050',
+                     halfLifeDays:4.5, tmaxDays:2.25, testosteroneFraction:0.7199};
+  const MERGED = {compounds:[
+    {id:'nebido', name:'Nebido', isTestosterone:true, pk:PK_NEBIDO},
+    {id:'enanthate', name:'Enanthate', isTestosterone:true, pk:PK_ENAN},
+    {id:'deca', name:'Deca', isTestosterone:false},          // no pk — not testosterone
+  ]};
+
+  const rows = G7._tcPkRowsFromMerged(MERGED);
+  check('every PK entry is pulled out of the merged catalogue', rows.length === 2);
+  check('  …verbatim, so the model reads the same numbers it always did',
+    rows.find(r => r.id === 'nebido') === PK_NEBIDO);
+  check('  …and a compound with no PK entry is skipped, not faked',
+    !rows.some(r => r.id === 'deca'));
+  check('a payload with no compounds yields nothing', G7._tcPkRowsFromMerged({}).length === 0 &&
+    G7._tcPkRowsFromMerged(null).length === 0);
+
+  // THE FAILURE THAT WOULD MATTER MOST: an empty or malformed response must never be
+  // applied. _tcExtraCatalog is what the model integrates — emptying it silently drops
+  // every ester back to the 7-day default and flattens the curve, with nothing on screen
+  // to say why.
+  const _pkSave = G7._tcExtraCatalog;
+  G7._tcExtraCatalog = [PK_NEBIDO];
+  check('an empty catalogue is refused rather than applied',
+    G7._tcApplyPkCatalog([]) === false && G7._tcExtraCatalog.length === 1);
+  check('  …and so is a non-array', G7._tcApplyPkCatalog(null) === false &&
+    G7._tcApplyPkCatalog({compounds:[]}) === false && G7._tcExtraCatalog.length === 1);
+
+  // The model's own reader must see the merged numbers, unchanged.
+  G7._tcExtraCatalog = rows;
+  const nb = G7._tcCompInfo('nebido');
+  check('the model reads the merged half-life, band and tmax',
+    nb.halfLifeDays === 56 && nb.halfLifeDaysLow === 37 && nb.halfLifeDaysHigh === 75 &&
+    nb.tmaxDays === 7);
+  check('  …and the ester fraction, which is 14% between enanthate and undecanoate',
+    nb.testosteroneFraction === 0.6315 &&
+    G7._tcCompInfo('enanthate').testosteroneFraction === 0.7199);
+  G7._tcExtraCatalog = _pkSave;
+
+  // /trt-catalog stays as the fallback: it is public unauthenticated reference data, and
+  // it is what an older backend serves.
+  const _tcSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('the merged endpoint is tried first, /trt-catalog second',
+    _tcSrc.indexOf("'/compounds/catalog'") < _tcSrc.indexOf("'/trt-catalog'"));
+  check('  …and the fallback is inside the catch, so a failure cannot leave it unset',
+    /catch\(function\(\)\{[\s\S]{0,400}\/trt-catalog/.test(_tcSrc));
+}
+
+// ── Nothing calls a function that no longer exists ──────────────────────────
+// Phase 8 deleted _tcSyncLogToBackend while three live call sites still named it.
+// Shipping that would have thrown ReferenceError the moment one ran — the same
+// shape as the admin UI's dmWhere on 2026-08-20, where a missing function was
+// reported to the user as a network failure.
+//
+// Source greps cannot catch this: every assertion about a deleted function passes
+// precisely BECAUSE the name is absent. So check the other direction — every
+// helper this app CALLS must also be DEFINED in a file the page loads.
+console.log('\n── No call reaches a function that was deleted ─────────────');
+{
+  const base = path.dirname(path.resolve(htmlPath));
+  const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+  // Every module the page actually loads, taken from its own script tags, so a new
+  // file cannot silently fall outside the check.
+  const loaded = [...html.matchAll(/src="([a-z-]+\.js)/g)].map(m => m[1]);
+  check('the loaded modules were discovered from index.html', loaded.length >= 10);
+
+  let all = html;
+  for (const f of loaded) {
+    const fp = path.join(base, f);
+    if (fs.existsSync(fp)) all += '\n' + fs.readFileSync(fp, 'utf8');
+  }
+
+  // Strip line comments and block comments so prose ("_tcSyncLogToBackend would
+  // also have re-posted…") is not read as a call. Strings are left in place: an
+  // inline onclick="_tcFoo()" IS a real call site and must count.
+  const code = all.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                  .split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
+
+  const defined = new Set();
+  let m;
+  const reDecl = /\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = reDecl.exec(code))) defined.add(m[1]);
+  const reAssign = /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=/g;
+  while ((m = reAssign.exec(code))) defined.add(m[1]);
+
+  // A call behind `typeof X === 'function'` is a deliberate optional dependency —
+  // load order across these modules is real, and those guards are how it is handled.
+  const guarded = new Set();
+  const reGuard = /typeof\s+([A-Za-z_$][\w$]*)\s*[!=]==?\s*'(?:function|undefined)'/g;
+  while ((m = reGuard.exec(code))) guarded.add(m[1]);
+
+  // This app's own helpers only, by prefix: browser and DOM builtins are out of
+  // scope and cannot produce a false failure.
+  const isOurs = n => /^(_tc|_wiz|_gen|_enh|_canon|_inj|inj|_cal|_trt)[A-Z_]/.test(n);
+  const called = new Set();
+  // Not preceded by '.', or `canvas._tcTouchMove(e)` — a property holding a
+  // function, defined by assignment on the element — reads as a missing global.
+  const reCall = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = reCall.exec(code))) if (isOurs(m[2])) called.add(m[2]);
+
+  const missing = [...called].filter(n => !defined.has(n) && !guarded.has(n)).sort();
+  check('every helper the app calls is defined in a module it loads',
+    missing.length === 0,
+    missing.length ? 'undefined: ' + missing.join(', ')
+                   : 'checked ' + called.size + ' helpers across ' + loaded.length + ' modules');
+
+  // The three Phase 8 removed, named so a re-add is caught.
+  for (const gone of ['_tcSyncLogToBackend','_tcSetTargetStack','_tcClearStackConfigTrt']) {
+    check('  \u2026' + gone + ' is defined nowhere', !defined.has(gone));
+  }
+}
+
+// ── An unscoped delete never leaves the app ─────────────────────────────────
+// On 2026-08-14 `DELETE /injections?cycle_id=&from_date=<today>` went out and
+// destroyed a user's entire forward schedule: an empty value is not a narrow
+// filter, it is NO filter, and the backend matched every row in the account.
+// The guard lived in _tcSetTargetStack; Phase 8 deleted that with the rest of
+// T-Calc's write paths, so it now lives in inj-writer.js — the only module that
+// issues a delete. Driven for real, not grepped.
+console.log('\n── inj-writer refuses an unscoped delete ──────────────────');
+{
+  const _svFetch = G.fetch, _svAuth = G.authHeaders;
+  let urls = [];
+  G.fetch = function(u, o){ urls.push(String(u) + ' [' + ((o && o.method) || 'GET') + ']');
+                            return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])}); };
+  G.authHeaders = function(){ return {}; };
+
+  const today = '2026-08-20';
+  const cases = [
+    ['empty cycle id',    ['',        'nebido', today]],
+    ['empty compound id', ['cyc1',    '',       today]],
+    ['empty from date',   ['cyc1',    'nebido', '']],
+    ['all three missing', ['',        '',       '']],
+  ];
+  for (const [label, args] of cases) {
+    urls = [];
+    G.injClearFuture(args[0], args[1], args[2], {tag:'guardtest'});
+    check('refused: ' + label, urls.length === 0, urls.join(' | '));
+  }
+
+  // …and a fully scoped delete still goes out, or the guard would be a bug of its own.
+  urls = [];
+  G.injClearFuture('cyc1', 'nebido', today, {tag:'guardtest'});
+  const sent = urls.join(' | ');
+  check('a fully scoped delete is still issued', urls.length === 1, sent);
+  check('  …carrying all three filters', /cycle_id=cyc1/.test(sent) &&
+        /compound_id=nebido/.test(sent) && /from_date=2026-08-20/.test(sent));
+  check('  …and unlogged_only, so a recorded dose is never taken with the plan',
+        /unlogged_only=true/.test(sent));
+
+  // injClearFutureMany fans out through the same guard.
+  urls = [];
+  G.injClearFutureMany('', ['nebido','enanthate'], today, {tag:'guardtest'});
+  check('the many-compound form is guarded too, not just the single', urls.length === 0, urls.join(' | '));
+
+  G.fetch = _svFetch; G.authHeaders = _svAuth;
 }
