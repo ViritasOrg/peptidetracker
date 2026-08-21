@@ -887,6 +887,13 @@ async function saveEditBuf(){
   buildWeekStrip();buildToday();buildSchedule();
   buildStackStore();
   buildTimeline();
+  // Levels reads the forward plan out of _injectionsCache (_tcProtocolInjections), which
+  // the refresh above has just rewritten. Rebuilding Today and Schedule but not the
+  // plasma curve left the tab showing the plan as it was before the save whenever it was
+  // already on screen. switchTab() rebuilds it on entry, so this only matters when the
+  // user never leaves the tab — which is exactly when the stale curve is visible.
+  try{ if(typeof buildTCalc==='function'&&document.getElementById('tcalc-body'))buildTCalc(); }
+  catch(e){ if(typeof _logErr==='function')_logErr('saveEditBufTCalc',e); }
 }
 // ── Modified wizard save ─────────────────────────────────────────────────────
 // ── Modified wizard step 4 review ────────────────────────────────────────────
@@ -1997,7 +2004,9 @@ function stackAddAASCompound(){
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;';
   // Build grouped compound select from backend catalogue
-  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral'];
+  // Appended, not reordered — a compound whose group is absent from this list renders
+  // nowhere at all, which is why the backend has a test pinning the two in step.
+  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends'];
   var selHtml='<select id="aas-name" onchange="stackAASAutoFill(this.value)" style="'+ins+'"><option value="">— Choose compound —</option>';
   _grps.forEach(function(g){var ge=(ENHANCEMENT_COMPOUNDS||[]).filter(function(e){return e.group===g;});if(!ge.length)return;selHtml+='<optgroup label="'+g+'">';ge.forEach(function(e){selHtml+='<option value="'+e.id+'">'+e.name+'</option>';});selHtml+='</optgroup>';});
   selHtml+='</select>';
@@ -2656,7 +2665,7 @@ function _renderEditEnhanced(enh,opts){
 // Every existing handler — editToggleTRTCompound, editSetEnhDose, the cadence editors —
 // keeps working untouched. A rewrite of both editors in the same change as the merge
 // would have made any regression impossible to attribute.
-var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis'];
+var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends'];
 
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
@@ -3485,7 +3494,22 @@ function _genInjBatches(stack,cycleId,fromDate){
         if(dose)compEntries.push({cycle_id:cycleId,date:dk,compound_id:p.id,compound_name:p.name,tier:'peptide',dose:dose,unit:unit,dot:dot,time_of_day:t,active:true,logged:false});
       });
     }
-    if(compEntries.length)batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
+    // AN EMPTY PLAN IS STILL A PLAN — PUSH IT.
+    // This used to read `if(compEntries.length)`, so a compound that generates NOTHING
+    // in the remaining window produced no batch at all, and POST /injections/batch —
+    // the only thing that prunes — was never called for it. The rows written by the
+    // PREVIOUS, longer cycle therefore survived untouched.
+    //
+    // Reported 2026-08-21: "Levels graph isn't redrawn when I shorten the Cycle". It was
+    // redrawn; the record had not changed. Nebido every 14 days with the next dose on
+    // 29 Aug, cycle shortened to end 24 Aug: zero entries, zero batches, and all four
+    // stale doses out to 10 Oct stayed in the record and stayed in the plasma curve.
+    //
+    // An empty `entries` list is a valid instruction to that endpoint and means exactly
+    // what is wanted here: drop this compound's UNLOGGED rows from from_date onwards and
+    // write nothing back. Logged doses are preserved by the backend either way — the
+    // record of what was administered is never a plan and is never cleared.
+    batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
   });
 
   // ── Testosterone generates here, like everything else (Phase 5) ────────────
@@ -3541,7 +3565,8 @@ function _genInjBatches(stack,cycleId,fromDate){
         if(!hit)continue;
         compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_tpd.dose||'',unit:_tpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
-      if(compEntries.length)batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
+      // Empty batches are pushed too — see the note in the peptide branch above.
+      batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
     });
   }
 
@@ -3576,7 +3601,8 @@ function _genInjBatches(stack,cycleId,fromDate){
           compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:_pd.dose,unit:_pd.unit,dot:dot,time_of_day:null,active:true,logged:false});
         }
       }
-      if(compEntries.length)batches.push({compound_id:c.id,from_date:dateKey(genStart),entries:compEntries});
+      // Empty batches are pushed too — see the note in the peptide branch above.
+      batches.push({compound_id:c.id,from_date:dateKey(genStart),entries:compEntries});
     });
   }
 
