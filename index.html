@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.295</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -1344,12 +1344,9 @@ async function _resolveConflict(action){
     }
   }
   // 'keep' changes nothing — the user has acknowledged the duplicate deliberately.
-  updateWEEKLY();
-  await saveStacksToBackend();
-  buildWeekStrip();
-  buildToday();
-  buildSchedule();
-  buildStackStore();
+  // This path ends an ACTIVATION, so it needs the same work as the other two — it used not
+  // even to refresh the injection cache.
+  await _afterActiveStackChange(_activeStackIndices.length>0);
 }
 // Check the active protocol for duplicate dosing on startup, so a protocol that
 // was already saved with the same compound in two tiers surfaces without waiting
@@ -1380,6 +1377,48 @@ function _ensureCycleStart(idx){
   st.cycle_start=dateKey(NOW);
   return true;
 }
+// ── EVERYTHING THAT MUST HAPPEN WHEN THE ACTIVE PROTOCOL CHANGES ────────────
+// Reported 2026-08-26: "T-calc curve isn't updated when I add a new protocol and set it to
+// active. I had to kill app and restart to get the plot done."
+//
+// Three separate reasons a restart was the only thing that worked, and the activation paths
+// did none of them:
+//
+//  1. A NEWLY ACTIVATED PROTOCOL HAD NO INJECTIONS. Activation saved the stack and refreshed
+//     the cache, but never GENERATED anything, so there was nothing for the curve to plot.
+//     Startup did generate (loadStacks calls generateInjectionsForActiveStacks when the cache
+//     comes back empty) — which is precisely why killing the app "fixed" it.
+//  2. _tcHistory IS CACHED FOR THE SESSION. _tcFetchHistory returns early when it already has
+//     data, and buildTCalc only re-fetches when the state is 'idle'. So even switching to the
+//     Levels tab could not pick up the change; only a fresh process could.
+//  3. buildTCalc WAS NEVER CALLED. switchTab covers a user who navigates, but not one already
+//     looking at Levels.
+//
+// _resolveConflict was worse again: activating a protocol that tripped the duplicate-compound
+// modal refreshed no injection cache at all.
+//
+// generateOnActivate is false when switching a protocol OFF — there is nothing to schedule,
+// and regenerating would rewrite future rows for no reason.
+async function _afterActiveStackChange(generateOnActivate){
+  updateWEEKLY();
+  await saveStacksToBackend();
+  if(generateOnActivate&&typeof generateInjectionsForActiveStacks==='function'){
+    var _from=new Date(NOW);_from.setHours(0,0,0,0);
+    try{ await generateInjectionsForActiveStacks(_from); }
+    catch(e){ if(typeof _logErr==='function')_logErr('activateGenInj',e); }
+  }
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  buildWeekStrip();
+  buildToday();
+  buildSchedule();
+  buildStackStore();
+  // Force, not a plain call: the whole point is that the cached history is now wrong.
+  // _tcFetchHistory ends by calling buildTCalc itself, so the curve redraws from fresh data.
+  try{
+    if(typeof _tcFetchHistory==='function')await _tcFetchHistory(true);
+    else if(typeof buildTCalc==='function')buildTCalc();
+  }catch(e){ if(typeof _logErr==='function')_logErr('activateTCalc',e); }
+}
 // ── Toggle a stack active/inactive ───────────────────────────────────────────
 // Only one protocol may be active. Switching one on switches every other one off,
 // so this is a radio, not a set of checkboxes; switching the active one off leaves
@@ -1399,26 +1438,14 @@ async function toggleStack(idx){
   } else {
     _activeStackIndices=[];
   }
-  updateWEEKLY();
-  await saveStacksToBackend();
-  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-  buildWeekStrip();
-  buildToday();
-  buildSchedule();
-  buildStackStore();
+  await _afterActiveStackChange(_activeStackIndices.length>0);
 }
 // ── Activate a single stack exclusively (used from detail view header) ───────
 async function useStack(idx){
   if(idx>=0&&idx<_userStacks.length){
     _activeStackIndices=[idx];
     _ensureCycleStart(idx);
-    updateWEEKLY();
-    await saveStacksToBackend();
-    if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-    buildWeekStrip();
-    buildToday();
-    buildSchedule();
-    buildStackStore();
+    await _afterActiveStackChange(true);
   }
 }
 // ── Delete a stack ───────────────────────────────────────────────────────────
@@ -2420,20 +2447,20 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="inj-writer.js?v=1.294"></script>
-<script src="tab-cycles.js?v=1.294"></script>
-<script src="tab-macros.js?v=1.294"></script>
-<script src="tab-stack.js?v=1.294"></script>
-<script src="tab-today.js?v=1.294"></script>
-<script src="tab-schedule.js?v=1.294"></script>
-<script src="tab-timeline.js?v=1.294"></script>
-<script src="tab-body.js?v=1.294"></script>
-<script src="tab-recon.js?v=1.294"></script>
-<script src="tab-blood.js?v=1.294"></script>
-<script src="tab-labs.js?v=1.294"></script>
-<script src="tab-tcalc.js?v=1.294"></script>
-<script src="tab-thist.js?v=1.294"></script>
-<script src="tab-supplements.js?v=1.294"></script>
+<script src="inj-writer.js?v=1.295"></script>
+<script src="tab-cycles.js?v=1.295"></script>
+<script src="tab-macros.js?v=1.295"></script>
+<script src="tab-stack.js?v=1.295"></script>
+<script src="tab-today.js?v=1.295"></script>
+<script src="tab-schedule.js?v=1.295"></script>
+<script src="tab-timeline.js?v=1.295"></script>
+<script src="tab-body.js?v=1.295"></script>
+<script src="tab-recon.js?v=1.295"></script>
+<script src="tab-blood.js?v=1.295"></script>
+<script src="tab-labs.js?v=1.295"></script>
+<script src="tab-tcalc.js?v=1.295"></script>
+<script src="tab-thist.js?v=1.295"></script>
+<script src="tab-supplements.js?v=1.295"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
