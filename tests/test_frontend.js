@@ -4253,6 +4253,256 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       lDates[lDates.length-1] === '2026-09-22', lDates[lDates.length-1]);
   }
 
+
+  // ── Female protocol flow (doc 07 §9) ──────────────────────────────────────
+  // The failure this guards against is the male frame leaking across: an objective
+  // picker that drives nothing, a "best addition" over a risk-ordered list, or a male
+  // dose tier shown to a woman with no marker that it is a male number.
+  {
+    const FEM = {
+      sex:'female',
+      headline:'Female protocols are a different order of magnitude.',
+      compounds:[
+        {id:'topical',name:'Testosterone, transdermal',risk:'low',dose:'~300 mcg/day (patch/cream)',
+         evidence:'clinical',dose_anchor:'community',basis:'route is the evidenced part',
+         dose_note:'not stated in either source',cite:['testosterone-women-meta']},
+        {id:'anavar',name:'Anavar (Oxandrolone)',risk:'moderate',dose:'5–10 mg/day, 4–8 weeks',
+         evidence:'clinical',dose_anchor:'label',basis:'most studied oral in women',
+         dose_note:'inside the label range',cite:['label-oxandrolone']},
+        {id:'npp',name:'NPP (Nandrolone Phenylpropionate)',risk:'high',dose:'25–50 mg/week',
+         evidence:'community',dose_anchor:'trial',basis:'shorter ester clears faster',
+         dose_note:'below doses women received under supervision',cite:['label-nandrolone']},
+      ],
+      avoid_compounds:[{id:'tren_a',name:'Trenbolone Acetate',reason:'avoid outright',cite:['no-tren-human-trial']}],
+      hard_rules:[{rule:'STOP AT THE FIRST SIGN OF VOICE CHANGE.',why:'irreversible',cite:['voice-change-women-review']}],
+      bloodwork:['LH and FSH — HPG axis suppression'],
+      prompts:[{id:'pregnancy',question:'Have you confirmed you are not pregnant?',blocking:true,why:'teratogenic',cite:[]},
+               {id:'voice_baseline',question:'Baseline voice sample recorded?',blocking:false,why:'needs a baseline',cite:[]}],
+      warnings:['Irreversible voice change is a risk of any androgenic compound.'],
+      max_cycle_weeks:8, nudge_weeks:6,
+      evidence_note:'Every dose is labelled with what anchors it.',
+      notes:['no effect on body composition'],
+      base:null, best_addition:null, primary:[], consider:[], save_for_later:[], avoid:[],
+      on_cycle:[], guardrails:[],
+    };
+
+    check('_isFemaleAdvice recognises the female payload', G._isFemaleAdvice(FEM)===true);
+    check('  …and not a male one', G._isFemaleAdvice({sex:'male',primary:[]})===false);
+
+    // Lookup must reach the avoid list too — a ruled-out compound returning null would
+    // render as unremarkable, which is the one case that must never look ordinary.
+    check('_femaleRiskFor finds a listed compound', (G._femaleRiskFor(FEM,'anavar')||{}).risk==='moderate');
+    check('  …and reaches the avoid list', (G._femaleRiskFor(FEM,'tren_a')||{}).risk==='avoid');
+    check('  …and returns null for an unknown id', G._femaleRiskFor(FEM,'nope')===null);
+
+    // TIER PARITY: the TRT tier calls it 'enanthate', the backend calls it 'test_e'.
+    // Without the alias the guard renders on Enhanced and is silently absent on TRT —
+    // the tier a woman is most likely to be configuring testosterone in.
+    (G.TRT_CAT||[]).forEach(function(c){
+      check('  …TRT ester '+c.id+' maps onto a female entry', G._femaleTestoAlias(c.id)!==null);
+    });
+    check('  …and every mapped ester resolves through _femaleRiskFor', (function(){
+      const F=Object.assign({},FEM,{compounds:FEM.compounds.concat([
+        {id:'test_e',name:'Testosterone, injectable',risk:'high',dose:'5–25 mg/week',
+         evidence:'community',dose_anchor:'community',basis:'IM is the higher-vocal-risk route',
+         dose_note:'not anchored to the meta-analysis',cite:['voice-change-women-review']}])});
+      return (G.TRT_CAT||[]).every(function(c){
+        const hit=G._femaleRiskFor(F,c.id); return hit && hit.risk==='high';
+      });
+    })());
+    check('  …but a non-testosterone id is not aliased into one', G._femaleTestoAlias('anavar')===null);
+
+    // Dose-range parsing — the ceiling is what the guard compares against.
+    check('_femaleDoseRange parses a two-ended range', (function(){
+      const r=G._femaleDoseRange({dose:'5–10 mg/day, 4–8 weeks'});
+      return r && r.lo===5 && r.hi===10 && r.unit==='mg/day';
+    })());
+    check('  …a weekly range', (function(){
+      const r=G._femaleDoseRange({dose:'25–50 mg/week'}); return r && r.hi===50 && r.unit==='mg/week';
+    })());
+    check('  …and mcg without collapsing it into mg', (function(){
+      const r=G._femaleDoseRange({dose:'~300 mcg/day (patch/cream)'});
+      return r && r.hi===300 && r.unit==='mcg/day';
+    })());
+    check('  …returning null rather than guessing on an unparseable dose',
+      G._femaleDoseRange({dose:'as directed'})===null);
+
+    // A wrong ceiling is worse than none: it fires on correct doses and teaches the
+    // user to dismiss the warning that matters.
+    check('_femaleDoseCompare stays silent inside the range',
+      G._femaleDoseCompare(FEM.compounds[1],10,'mg/day')===null);
+    check('  …and fires above it', (function(){
+      const c=G._femaleDoseCompare(FEM.compounds[1],50,'mg/day');
+      return c && c.ceiling===10 && c.times===5;
+    })());
+    check('  …but never compares mg/week against a mg/day ceiling',
+      G._femaleDoseCompare(FEM.compounds[1],50,'mg/week')===null);
+
+    check('_femaleDoseWarning names the compound and the multiple', (function(){
+      const w=G._femaleDoseWarning(FEM,'anavar',50,'mg/day');
+      return w.includes('Anavar')&&w.includes('5×')&&w.toLowerCase().includes('voice');
+    })());
+    check('  …and reports an avoid compound as ruled out, not as a dose problem',
+      G._femaleDoseWarning(FEM,'tren_a',1,'mg/week').startsWith('Ruled out for women'));
+
+    // The blocking prompt.
+    G._wiz = G._wiz || {}; G._wiz.femaleAck = {};
+    check('_femBlockingUnanswered blocks on the pregnancy prompt',
+      G._femBlockingUnanswered(FEM).map(p=>p.id).join(',')==='pregnancy');
+    G._wiz.femaleAck = {pregnancy:true};
+    check('  …and clears once it is answered', G._femBlockingUnanswered(FEM).length===0);
+    G._wiz.femaleAck = {};
+
+    // The rendered step.
+    G._wiz.enhanced = {enabled:false,compounds:[]};
+    const html = G._wizAdviseFemaleHtml(FEM);
+    check('female step renders the risk ranking, not an objective ranking',
+      html.includes('Ranked by virilization risk')&&!html.includes('Best addition'));
+    check('  …with the voice warning present', html.toLowerCase().includes('voice change'));
+    check('  …the required pregnancy question', html.includes('REQUIRED')&&html.includes('not pregnant'));
+    check('  …every risk level labelled', html.includes('LOW VIRILIZATION RISK')&&html.includes('HIGH VIRILIZATION RISK'));
+    check('  …the evidence level shown per compound',
+      html.includes('Clinical evidence')&&html.includes('Community practice'));
+    check('  …what anchors each dose', html.includes('Label dose')&&html.includes('Trial dose')&&html.includes('Community practice'));
+    check('  …the avoid list', html.includes('Avoid outright')&&html.includes('Trenbolone Acetate'));
+    check('  …the non-negotiable rules with their reasons',
+      html.includes('Non-negotiable')&&html.includes('STOP AT THE FIRST SIGN'));
+    check('  …and the female bloodwork additions', html.includes('LH and FSH'));
+
+    // A female protocol is never pre-ticked: choosing one compound at a time IS the
+    // harm reduction, so handing the user a selection she did not make defeats it.
+    check('the female step pre-selects nothing', (G._wiz.enhanced.compounds||[]).length===0);
+  }
+
+
+  // ── Ester transitions: two esters, per-compound windows, TRT dose ramps ────
+  // Switching Nebido → Test E means running both for a while. The PK engine already
+  // summed mixed esters and _genInjBatches already read per-compound start/end dates;
+  // what was missing was that ramps did not apply to TRT, so a tapered incoming ester
+  // generated its FLAT dose and the taper was silently ignored.
+  {
+    const transProto = () => ({
+      id:'p-trans', cycle_start:'2026-09-01', end_date:'2026-11-24', peptides:[],
+      trt:{enabled:true,compounds:[
+        {id:'nebido',name:'Nebido',dose:'1000',unit:'mg',freqVal:14,freqUnit:'days',
+         end_date:'2026-09-15'},
+        {id:'enanthate',name:'Testosterone Enanthate',dose:'100',unit:'mg',days:[1,4],
+         start_date:'2026-09-29',
+         dose_phases:[{w:4,d:'40',u:'mg'},{w:6,d:'70',u:'mg'},{w:8,d:'100',u:'mg'}]},
+      ]}, enhanced:{}
+    });
+    const byId = (bs,id) => (bs.find(b=>b.compound_id===id)||{entries:[]}).entries;
+    const B = G._genInjBatches(transProto(),'c1',null)||[];
+
+    // Both esters generate. The generator dedups by MOLECULE, so two different esters
+    // must not suppress each other — that guard exists to stop ONE molecule being
+    // scheduled twice, not to stop a transition.
+    check('two esters both generate in one protocol',
+      byId(B,'nebido').length>0 && byId(B,'enanthate').length>0);
+
+    // The outgoing ester stops at its own end date, before the protocol's.
+    check('  …the outgoing ester stops at its own end_date',
+      byId(B,'nebido').every(e=>e.date<='2026-09-15'));
+    check('  …and not at the protocol end date',
+      byId(B,'nebido').every(e=>e.date<'2026-11-24'));
+
+    // The incoming ester waits for its own start date.
+    check('  …the incoming ester waits for its own start_date',
+      byId(B,'enanthate').every(e=>e.date>='2026-09-29'));
+
+    // The ramp actually steps. Week is counted from PROTOCOL start, which is what the
+    // UI copy tells the user.
+    const enh = byId(B,'enanthate');
+    check('  …and the incoming dose ramps rather than starting flat',
+      enh[0].dose==='40' && enh[enh.length-1].dose==='100');
+    check('  …stepping at the weeks configured', (function(){
+      const at = d => (enh.find(e=>e.date===d)||{}).dose;
+      return at('2026-10-01')==='40' && at('2026-10-15')==='70' && at('2026-10-29')==='100';
+    })());
+
+    // WITHOUT dose_phases nothing changes — the flat dose still generates. A ramp that
+    // is off must be indistinguishable from one that never existed.
+    const flat = transProto();
+    delete flat.trt.compounds[1].dose_phases;
+    check('  …while a compound with no ramp keeps its flat dose',
+      byId(G._genInjBatches(flat,'c1',null)||[],'enanthate').every(e=>e.dose==='100'));
+
+    // A RAMP PHASE MAY BE A RATE, exactly like the flat dose field. Converting one and
+    // not the other would make the ramp silently mean something different from the
+    // field above it — the 2026-08-19 "100mg every 2 days generated 28mg" class of bug.
+    const rate = transProto();
+    rate.trt.compounds[1].unit='mg/week';
+    rate.trt.compounds[1].dose_phases=[{w:4,d:'140',u:'mg/week'}];
+    const rEnh = byId(G._genInjBatches(rate,'c1',null)||[],'enanthate');
+    check('  …and a ramp phase written as a RATE is converted per injection',
+      rEnh.length>0 && rEnh.every(e=>e.unit==='mg' && e.dose!=='140'));
+
+    // An inverted window generates nothing. The editor warns; the generator must not
+    // invent entries to paper over it.
+    const inv = transProto();
+    inv.trt.compounds[1].start_date='2026-11-01';
+    inv.trt.compounds[1].end_date='2026-10-01';
+    check('  …and an inverted window generates nothing rather than guessing',
+      byId(G._genInjBatches(inv,'c1',null)||[],'enanthate').length===0);
+
+    // The editor handlers.
+    G._editBuf = {trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'100',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G.editToggleTRTRamp('enanthate');
+    check('editToggleTRTRamp seeds week 0 from the flat dose', (function(){
+      const ph=G._editBuf.trt.compounds[0].dose_phases;
+      return ph && ph.length===1 && ph[0].w===0 && ph[0].d==='100' && ph[0].u==='mg';
+    })(), 'a ramp must not silently change what is already scheduled');
+    G.editAddTRTPhase('enanthate');
+    check('  …and adding a phase advances the week',
+      G._editBuf.trt.compounds[0].dose_phases[1].w===2);
+    G.editToggleTRTRamp('enanthate');
+    check('  …toggling off removes the ramp entirely',
+      G._editBuf.trt.compounds[0].dose_phases===undefined);
+    G.editSetTRTDate('enanthate','start_date','2026-09-29');
+    check('editSetTRTDate writes the window', G._editBuf.trt.compounds[0].start_date==='2026-09-29');
+    G.editSetTRTDate('enanthate','start_date','');
+    check('  …and clearing it removes the key rather than storing an empty string',
+      !('start_date' in G._editBuf.trt.compounds[0]));
+
+    // SCOPE. The wizard and the editor render TRT compounds through two parallel code
+    // paths; one renderer emitting the right handler names for each is what stops them
+    // drifting apart. Each surface's markup must call ITS OWN scope, never the other's.
+    const comp={id:'enanthate',name:'Test E',dose:'100',unit:'mg',
+                start_date:'2026-09-29',dose_phases:[{w:4,d:'40',u:'mg'}]};
+    const eHtml=G._renderTRTTransition({id:'enanthate'},comp,'edit');
+    const wHtml=G._renderTRTTransition({id:'enanthate'},comp,'wiz');
+    check('the transition panel renders for the editor scope', /trtSetDate\('edit'/.test(eHtml));
+    check('  …and for the wizard scope',                        /trtSetDate\('wiz'/.test(wHtml));
+    check('  …with neither leaking the other\'s scope',
+      !/'wiz'/.test(eHtml) && !/'edit'/.test(wHtml));
+    check('  …both offering the window and the ramp',
+      ['Transition window','Dose ramp','trtToggleRamp','trtAddPhase','trtRemovePhase','trtSetPhase']
+        .every(k=>eHtml.includes(k)&&wHtml.includes(k)));
+
+    // The flat Dose field is IGNORED while a ramp is on. Saying so is the whole guard
+    // against editing Dose and seeing nothing change.
+    check('  …and stating that the ramp overrides the Dose field',
+      /overrides the Dose field/.test(eHtml)&&/overrides the Dose field/.test(wHtml));
+
+    // An inverted window warns in the UI as well as generating nothing.
+    check('  …warning on an inverted window',
+      /End is before start/.test(G._renderTRTTransition({id:'x'},
+        {start_date:'2026-11-01',end_date:'2026-10-01'},'edit')));
+    check('  …and staying quiet on a valid one',
+      !/End is before start/.test(G._renderTRTTransition({id:'x'},
+        {start_date:'2026-10-01',end_date:'2026-11-01'},'edit')));
+
+    // The wizard scope writes to _wiz.trt, not _editBuf.trt.
+    G._wiz=G._wiz||{}; G._wiz.trt={enabled:true,compounds:[{id:'nebido',name:'Nebido',dose:'1000',unit:'mg'}]};
+    G.trtSetDate('wiz','nebido','end_date','2026-09-15');
+    check('the wizard scope writes to the wizard buffer',
+      G._wiz.trt.compounds[0].end_date==='2026-09-15');
+    check('  …and leaves the editor buffer alone',
+      !('end_date' in G._editBuf.trt.compounds[0]));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -5265,7 +5515,7 @@ console.log('\n── dose dedup migration ────────────�
   check('_renderEnhancedGuide renders sides field',
     tabStackJs.includes('cat.sides'));
   check('stackAASAutoFill populates aas-info-block on compound select',
-    tabStackJs.includes('aas-info-block')&&tabStackJs.includes('_renderEnhancedGuide(cat)'));
+    tabStackJs.includes('aas-info-block')&&/infoEl\.innerHTML=_renderEnhancedGuide\(cat,/.test(tabStackJs));
   // E2 management: class-based detection
   check('E2 management uses cls field from ENHANCEMENT_COMPOUNDS catalogue',
     tabStackJs.includes('ec.cls'));
@@ -11126,7 +11376,8 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every text dose input declares inputmode="decimal"', _textDose.length===0,
     _textDose.length+' dose input(s) missing inputmode');
   const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
-  check('all 9 dose inputs are covered', _withMode.length===9, 'found '+_withMode.length);
+  // 10 since the TRT dose-ramp phase input (ester transitions) was added.
+  check('all 10 dose inputs are covered', _withMode.length===10, 'found '+_withMode.length);
 
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
@@ -12087,6 +12338,55 @@ console.log('\n── Activating a protocol refreshes Levels ──────�
   // Switching the active protocol OFF must not regenerate anything.
   check('deactivating passes generateOnActivate = false',
     /_afterActiveStackChange\(_activeStackIndices\.length>0\)/.test(_fn('toggleStack')));
+}
+
+
+// ── Ancillary groups render, and tier 2 can finally see them ────────────────
+// The backend gained AIs, SERMs, hCG, cabergoline and finasteride on 2026-08-26. Three
+// hardcoded group lists decide what the pickers iterate, so a compound whose group is
+// absent from one is in the catalogue and invisible in that view.
+//
+// The tier-2 lists are the sharper point: _TIER2_EXTRA_IDS and _TIER2_EXTRA_GROUPS were
+// written for compounds that did not exist. Every id (hcg, clomid, clomiphene, nolvadex,
+// tamoxifen) and every group (PCT, Recovery, Post-Cycle, HCG) matched nothing, so tier 2
+// was gated to see ancillaries and saw an empty set.
+console.log('\n── Ancillary groups and tier-2 access ─────────────────────');
+{
+  const _src = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
+  const _cyc = require('fs').readFileSync(__dirname + '/../tab-cycles.js', 'utf8');
+  ['Estrogen Control', 'PCT & Recovery', 'Side-Effect Support'].forEach(function(g){
+    check('_grps renders ' + g, new RegExp("var _grps=\\[[^\\]]*'" + g + "'").test(_src));
+    check('  …COMPOUND_GROUP_ORDER renders ' + g,
+          new RegExp("COMPOUND_GROUP_ORDER=\\[[^\\]]*'" + g + "'").test(_src));
+    check('  …_cgrps renders ' + g, new RegExp("var _cgrps=\\[[^\\]]*'" + g + "'").test(_cyc));
+  });
+
+  // Tier gating, driven for real rather than grepped.
+  const _sv = G._userTier;
+  G._userTier = 2;
+  const ai   = {id:'anastrozole', group:'Estrogen Control'};
+  const serm = {id:'tamoxifen',   group:'PCT & Recovery'};
+  const supp = {id:'finasteride', group:'Side-Effect Support'};
+  const tren = {id:'tren_e',      group:'19-Nor'};
+  check('tier 2 may use an aromatase inhibitor', G._compoundAllowedForTier(ai, 2) === true);
+  check('  …a PCT SERM', G._compoundAllowedForTier(serm, 2) === true);
+  check('  …and side-effect support', G._compoundAllowedForTier(supp, 2) === true);
+  check('  …but still not an anabolic', G._compoundAllowedForTier(tren, 2) === false);
+  check('tier 1 sees none of them as usable',
+    G._compoundAllowedForTier(ai, 1) === false && G._compoundAllowedForTier(serm, 1) === false);
+  check('tier 3 may use everything',
+    [ai, serm, supp, tren].every(c => G._compoundAllowedForTier(c, 3) === true));
+
+  // Matching by GROUP must work even for an id the list does not name — that is what
+  // makes the gating survive the next ancillary being added.
+  check('an unlisted id in an ancillary group is still allowed at tier 2',
+    G._compoundAllowedForTier({id:'some_new_ai', group:'Estrogen Control'}, 2) === true);
+  // The pre-existing spellings stay aliases so a stored protocol still resolves.
+  ['hcg','clomid','clomiphene','nolvadex','tamoxifen'].forEach(function(id){
+    check('  …legacy id ' + id + ' still resolves at tier 2',
+      G._compoundAllowedForTier({id:id, group:'whatever'}, 2) === true);
+  });
+  G._userTier = _sv;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

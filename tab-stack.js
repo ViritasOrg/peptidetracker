@@ -702,6 +702,148 @@ function editToggleTRTCompound(id){
 // The list therefore covers the rate units too, and any unit actually stored is appended
 // if it is still not in the list. A wrong unit the user can SEE is a wrong unit the user
 // can fix; a wrong unit the UI hides is a dose error.
+// ── ESTER TRANSITIONS: per-compound window + dose ramp ──────────────────────
+// Switching esters (Nebido → Test E) means running both for a while: the outgoing
+// ester's tail is still decaying when the incoming one starts, so the incoming dose
+// has to start low and step up as the tail clears. Two esters were already
+// selectable here (the cap is 2), and _genInjBatches already honoured per-compound
+// start_date/end_date — but nothing wrote them, and ramps did not apply to TRT.
+//
+// NO CROSSOVER IS COMPUTED. There is no published undecanoate→enanthate transition
+// protocol to anchor one to, so the app does not propose a date or a taper: it lets
+// the user express one and shows the summed curve. T-Calc already sums mixed esters
+// with each one's own half-life, tmax and testosterone fraction (undecanoate 0.6315
+// vs enanthate 0.7199), so the combined free-T line is the real answer to "does this
+// hold steady" — and it is the user's judgement, on a model they can see.
+// SCOPE, because the wizard and the editor render TRT compounds through two parallel
+// code paths (_wiz.trt vs _editBuf.trt, wizSetTRT* vs the inline editor handlers).
+// Duplicating the transition panel into both is how they drift apart; one renderer that
+// emits the right handler names for its scope is how they cannot.
+function _trtComps(scope){
+  var box=(scope==='wiz')?(typeof _wiz!=='undefined'&&_wiz&&_wiz.trt)
+                         :(typeof _editBuf!=='undefined'&&_editBuf&&_editBuf.trt);
+  return (box&&box.compounds)||[];
+}
+function _trtComp(scope,id){
+  return _trtComps(scope).find(function(c){return c&&c.id===id;});
+}
+// Re-render whichever surface asked. The editor also has to re-collect its DOM inputs
+// first or an in-progress dose edit is lost by the redraw.
+function _trtRerender(scope){
+  if(scope==='wiz'){
+    if(typeof wizStepTRT==='function')
+      wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+    return;
+  }
+  if(typeof _collectEditInputs==='function')_collectEditInputs();
+  if(typeof renderStackEditor==='function')renderStackEditor();
+}
+function trtSetDate(scope,id,which,val){
+  var c=_trtComp(scope,id);if(!c)return;
+  if(val)c[which]=val;else delete c[which];
+  _trtRerender(scope);
+}
+function trtToggleRamp(scope,id){
+  var c=_trtComp(scope,id);if(!c)return;
+  if(c.dose_phases&&c.dose_phases.length){
+    delete c.dose_phases;
+  }else{
+    // Seed week 0 from the flat dose so turning the ramp ON never changes what is
+    // scheduled until a phase is actually edited. A ramp that silently rewrites week 0
+    // is a dose change the user did not ask for.
+    c.dose_phases=[{w:0,d:String(c.dose||''),u:c.unit||'mg'}];
+  }
+  _trtRerender(scope);
+}
+function trtAddPhase(scope,id){
+  var c=_trtComp(scope,id);if(!c)return;
+  if(!c.dose_phases)c.dose_phases=[];
+  var lastW=c.dose_phases.length?Math.max.apply(null,c.dose_phases.map(function(ph){return ph.w||0;})):0;
+  var lastU=c.dose_phases.length?c.dose_phases[c.dose_phases.length-1].u:(c.unit||'mg');
+  c.dose_phases.push({w:lastW+2,d:'',u:lastU});
+  _trtRerender(scope);
+}
+function trtRemovePhase(scope,id,phi){
+  var c=_trtComp(scope,id);if(!c||!c.dose_phases)return;
+  c.dose_phases.splice(phi,1);
+  if(!c.dose_phases.length)delete c.dose_phases;
+  _trtRerender(scope);
+}
+function trtSetPhase(scope,id,phi,field,val){
+  var c=_trtComp(scope,id);if(!c||!c.dose_phases||!c.dose_phases[phi])return;
+  c.dose_phases[phi][field]=val;
+}
+// Editor-scoped aliases — the editor's existing handlers are all edit*-named, and the
+// inline onclick attributes elsewhere in that block follow that convention.
+function _editTrtComp(id){return _trtComp('edit',id);}
+function editSetTRTDate(id,which,val){trtSetDate('edit',id,which,val);}
+function editToggleTRTRamp(id){trtToggleRamp('edit',id);}
+function editAddTRTPhase(id){trtAddPhase('edit',id);}
+function editRemoveTRTPhase(id,phi){trtRemovePhase('edit',id,phi);}
+function editSetTRTPhase(id,phi,field,val){trtSetPhase('edit',id,phi,field,val);}
+
+// ── ESTER TRANSITIONS: per-compound window + dose ramp ──────────────────────
+// Switching esters (Nebido → Test E) means running both for a while: the outgoing
+// ester's tail is still decaying when the incoming one starts, so the incoming dose
+// starts low and steps up as the tail clears. Two esters were already selectable (the
+// cap is 2) and _genInjBatches already honoured per-compound start_date/end_date — but
+// nothing wrote them, and dose ramps did not apply to TRT at all.
+//
+// NO CROSSOVER IS COMPUTED. There is no published undecanoate→enanthate transition
+// protocol to anchor one to, so the app does not propose a date or a taper: it lets the
+// user express one and shows the summed curve. T-Calc already sums mixed esters with
+// each one's own half-life, tmax and testosterone fraction (undecanoate 0.6315 vs
+// enanthate 0.7199 — a 14% error if it were ignored), so the combined free-T line is
+// the real answer to "does this hold steady", on a model the user can see.
+function _renderTRTTransition(c,selData,scope){
+  scope=(scope==='wiz')?'wiz':'edit';
+  var id=c.id, q=function(fn,args){return fn+'(\''+scope+'\',\''+id+'\''+(args||'')+')';};
+  var sd=String(selData.start_date||''),ed=String(selData.end_date||'');
+  var hasRamp=!!(selData.dose_phases&&selData.dose_phases.length);
+  var h='<div class="cfg-row" style="display:block;border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Transition window</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Leave blank to run for the whole protocol. Set these to overlap two esters — the outgoing one gets an end date, the incoming one a start date.</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+    +'<span style="font-size:11px;color:var(--muted2);min-width:38px">Start</span>'
+    +'<input class="note-in" type="date" value="'+_esc(sd)+'" onchange="'+q('trtSetDate',',\'start_date\',this.value')+'" style="flex:1">'
+    +(sd?('<button onclick="'+q('trtSetDate',',\'start_date\',\'\'')+'" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'):'')
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+    +'<span style="font-size:11px;color:var(--muted2);min-width:38px">End</span>'
+    +'<input class="note-in" type="date" value="'+_esc(ed)+'" onchange="'+q('trtSetDate',',\'end_date\',this.value')+'" style="flex:1">'
+    +(ed?('<button onclick="'+q('trtSetDate',',\'end_date\',\'\'')+'" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'):'')
+    +'</div>';
+  // An inverted window generates NOTHING, silently. Say so rather than letting the user
+  // save a compound that will never appear in the schedule.
+  if(sd&&ed&&ed<sd){
+    h+='<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-top:6px;font-weight:600">⚠ End is before start — this compound would generate no injections.</div>';
+  }
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;margin-bottom:'+(hasRamp?'8px':'0')+'">'
+    +'<span style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase">Dose ramp</span>'
+    +'<div onclick="'+q('trtToggleRamp')+'" style="cursor:pointer"><div class="toggle-sw'+(hasRamp?' on':'')+'"></div></div></div>';
+  if(hasRamp){
+    var phases=(selData.dose_phases||[]).slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+    // THE DOSE FIELD ABOVE IS OVERRIDDEN while a ramp is on — the generator reads the
+    // phases, not the flat dose. Editing Dose and seeing nothing change is exactly the
+    // silent mismatch this app keeps getting bitten by, so it is stated rather than
+    // discovered. (The peptide editor cancels the ramp instead; here the ramp is the
+    // point of the feature, so deleting it on a stray keystroke would be worse.)
+    h+='<div style="font-size:11px;color:var(--muted2);margin-bottom:8px;line-height:1.5">Week counts from the PROTOCOL start, not this compound\'s start date. While the ramp is on it overrides the Dose field above.</div>';
+    h+=phases.map(function(ph,phi){
+      var uOpts=_trtUnitOptions(ph.u||selData.unit||'mg');
+      return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:5px">'
+        +'<span style="font-size:11px;color:var(--muted2);white-space:nowrap;min-width:30px">Wk</span>'
+        +'<input class="dose-in" type="number" inputmode="numeric" min="0" value="'+String(ph.w||0)+'" oninput="'+q('trtSetPhase',','+phi+',\'w\',+this.value')+'" style="width:44px;text-align:center;">'
+        +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(ph.d||''))+'" oninput="'+q('trtSetPhase',','+phi+',\'d\',this.value')+'" placeholder="dose" style="width:60px;">'
+        +'<select class="unit-sel" onchange="'+q('trtSetPhase',','+phi+',\'u\',this.value')+'">'+uOpts+'</select>'
+        +'<button onclick="'+q('trtRemovePhase',','+phi)+'" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'
+        +'</div>';
+    }).join('');
+    h+='<button onclick="'+q('trtAddPhase')+'" style="font-size:11px;color:var(--accent);background:none;border:1px solid var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-top:2px">+ Add phase</button>';
+  }
+  h+='</div>';
+  return h;
+}
 var TRT_UNITS=['mg','ml','IU','%','mg/week','mg/day','mg/EOD'];
 function _trtUnitOptions(sel){
   var cur=String(sel||'mg');
@@ -810,7 +952,7 @@ function _renderEditTRT(trt){if(!trt)trt={};
     });
     return lockedHtml;
   }
-  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -1077,7 +1219,7 @@ function showEnhancedCard(id){
   }
   var overlay=document.createElement('div');overlay.className='pcard-overlay';overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
   var sheet=document.createElement('div');sheet.className='pcard-sheet';
-  sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+(cat.name||id)+'</div><div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'+(cat.group||'')+'</div></div>'+myDoseHtml+_renderEnhancedGuide(cat,activeDose)+'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;"><button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
+  sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+(cat.name||id)+'</div><div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'+(cat.group||'')+'</div></div>'+myDoseHtml+_renderEnhancedGuide(cat,activeDose,(userComp&&userComp.unit)||cat.unit||'')+'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;"><button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
   overlay.appendChild(sheet);document.body.appendChild(overlay);
 }
 // ── Wizard ────────────────────────────────────────────────────────────────────
@@ -2006,7 +2148,7 @@ function stackAddAASCompound(){
   // Build grouped compound select from backend catalogue
   // Appended, not reordered — a compound whose group is absent from this list renders
   // nowhere at all, which is why the backend has a test pinning the two in step.
-  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends'];
+  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends','Estrogen Control','PCT & Recovery','Side-Effect Support'];
   var selHtml='<select id="aas-name" onchange="stackAASAutoFill(this.value)" style="'+ins+'"><option value="">— Choose compound —</option>';
   _grps.forEach(function(g){var ge=(ENHANCEMENT_COMPOUNDS||[]).filter(function(e){return e.group===g;});if(!ge.length)return;selHtml+='<optgroup label="'+g+'">';ge.forEach(function(e){selHtml+='<option value="'+e.id+'">'+e.name+'</option>';});selHtml+='</optgroup>';});
   selHtml+='</select>';
@@ -2022,9 +2164,37 @@ function stackAddAASCompound(){
     +'</div>';
   overlay.appendChild(sheet);document.body.appendChild(overlay);
 }
-function _renderEnhancedGuide(cat,activeDose){
+// ── FEMALE DOSE GUARD (doc 07 §9 constraint 3) ──────────────────────────────
+// Rendered by _renderEnhancedGuide, which is the ONE function behind every dose guide
+// in the app — wizard, edit view and the add-compound modal all route through it. Put
+// anywhere else and the guard would be present on one screen and absent on the two
+// where a dose actually gets typed.
+//
+// The male dose tiers below it stay exactly as they are. This does not replace them —
+// it says, above them, that those numbers are male numbers.
+function _femaleGuardHtml(cat,activeDose,unit){
+  if(!cat||typeof _wizUserIsFemale!=='function'||!_wizUserIsFemale())return '';
+  var adv=(typeof femaleAdvice==='function')?femaleAdvice():null;
+  if(!adv)return '';
+  var entry=_femaleRiskFor(adv,cat.id);
+  if(!entry)return '';
+  var m=_FEM_RISK_STYLE[entry.risk]||_FEM_RISK_STYLE.moderate;
+  var warn=_femaleDoseWarning(adv,cat.id,activeDose,unit||cat.unit||'');
+  var h='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:'+m[0]+';text-transform:uppercase;margin-bottom:4px">For women</div>'
+    +'<div style="background:var(--surface2);border:1px solid '+m[0]+';border-radius:6px;padding:8px 10px;">'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+_femRiskChip(entry.risk)
+    +(entry.dose?('<span style="font-size:12px;font-weight:700;color:var(--accent);">'+_esc(entry.dose)+'</span>'):'')
+    +(entry.evidence&&entry.evidence!=='none'?_femEvChip(entry.evidence):'')+'</div>'
+    +(entry.basis?('<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:5px;">'+_esc(entry.basis)+'</div>'):'')
+    +(entry.dose_note?('<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:5px;padding-left:8px;border-left:2px solid var(--border);">'+_esc(entry.dose_note)+'</div>'):'')
+    +(warn?('<div style="font-size:11px;color:#f59e0b;line-height:1.55;margin-top:6px;font-weight:600;">⚠ '+_esc(warn)+'</div>'):'')
+    +'<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:6px;font-style:italic;">The dose tiers below are male doses.</div>'
+    +'</div></div>';
+  return h;
+}
+function _renderEnhancedGuide(cat,activeDose,unit){
   if(!cat)return'';
-  var html='';
+  var html=_femaleGuardHtml(cat,activeDose,unit);
   if(cat.cadence){var cad=cat.cadence;html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Injection Frequency</div><div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;"><div style="font-size:12px;font-weight:700;color:var(--accent);">'+cad.rec+'</div><div style="font-size:11px;color:var(--muted2);margin-top:2px;line-height:1.5;">'+cad.note+'</div><div style="font-size:10px;color:var(--muted2);margin-top:3px;font-style:italic;">½-life: '+cad.halfLife+'</div></div></div>';}
   var tiers=(cat.doseTiers&&cat.doseTiers.length)?cat.doseTiers:(DOSE_GUIDE&&DOSE_GUIDE[cat.id]?DOSE_GUIDE[cat.id]:null);
   if(tiers&&tiers.length){var rows=tiers.map(function(t){var _isActive=(activeDose&&activeDose>0)?(function(){var _ns=(t.d||'').match(/[\d.]+/g);if(_ns&&_ns.length>=2){var _mn=parseDec(_ns[0]),_mx=parseDec(_ns[_ns.length-1]);return activeDose>=_mn&&activeDose<=_mx;}return!!t.b;})():!!t.b;var bg=_isActive?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';var _ev=t.ev||null;var _badge=(_ev&&typeof _evBadge==='function')?_evBadge(_ev.g):'';var _anch=(typeof _anchorLine==='function')?_anchorLine(cat.evidence,_ev):'';var _cit=(_ev&&typeof _citeChips==='function')?_citeChips(_ev.cite):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:10px;font-weight:700;color:'+(_isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+_badge+'</div>'+note+risk+_anch+_cit+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
@@ -2037,7 +2207,7 @@ function stackAASAutoFill(id){
   if(!cat)return;
   var dEl=document.getElementById('aas-dose');if(dEl&&cat.defaultDose)dEl.value=cat.defaultDose;
   var uEl=document.getElementById('aas-unit');if(uEl&&cat.unit){Array.from(uEl.options).forEach(function(o,i){if(o.value===cat.unit||o.text===cat.unit)uEl.selectedIndex=i;});}
-  var infoEl=document.getElementById('aas-info-block');if(infoEl)infoEl.innerHTML=_renderEnhancedGuide(cat);
+  var infoEl=document.getElementById('aas-info-block');if(infoEl){var _du=document.getElementById('aas-unit');infoEl.innerHTML=_renderEnhancedGuide(cat,parseDec(dEl?dEl.value:0)||0,_du?_du.value:(cat.unit||''));}
 }
 async function stackConfirmAddAAS(){
   var c=_cycle;if(!c||!c.id)return;
@@ -2171,9 +2341,21 @@ function _renderTRTGuide(cId,weeklyDoseMg){
   var modHtml=mods.length?'<div style="margin-top:5px;border-top:1px solid var(--border);padding-top:5px">'+mods.map(function(m){var c=colorMap[m.type]||'#3b9eff';return'<div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px"><span style="color:'+c+';font-size:12px;line-height:1.4;margin-top:1px">●</span><span style="font-size:11px;color:var(--text);line-height:1.4">'+m.text+'</span></div>';}).join('')+'</div>':'';
   var supraHtml='';
   if(weeklyDoseMg>250){supraHtml='<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:7px 10px;margin-bottom:5px"><div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:2px">⚠ Supraphysiological dose</div><div style="font-size:11px;color:var(--muted2);line-height:1.5;">'+Math.round(weeklyDoseMg)+' mg/week exceeds the TRT range (100–200 mg/wk). At this dose you are running a blast, not a TRT protocol. Consider tracking this compound in the Enhanced tab instead and running TRT-range Test here.</div></div>';}
+  // TIER PARITY (CLAUDE.md): the female guard lives on the Enhanced tier via
+  // _renderEnhancedGuide, and it has to be here too. The TRT tier is where `topical`
+  // and `test_e` actually live — the two compounds the female table has the most to say
+  // about — so a guard present only on Enhanced would be missing from the tier where a
+  // woman is most likely to be typing a dose.
+  var femHtml='';
+  try{
+    if(typeof _femaleGuardHtml==='function'){
+      var _fc=(typeof TRT_CAT!=='undefined'&&TRT_CAT)?TRT_CAT.find(function(x){return x&&x.id===id;}):null;
+      femHtml=_femaleGuardHtml(_fc||{id:id,unit:'mg/week'},weeklyDoseMg,'mg/week');
+    }
+  }catch(e){if(typeof _logErr==='function')_logErr('trtFemaleGuard',e);}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
     +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">TRT Guide</div>'
-    +supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
+    +femHtml+supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
 // T-Calc is the single place a testosterone schedule is built, so the wizard's TRT
@@ -2404,6 +2586,7 @@ function wizStepTRT(body,footer){
       html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';
       if(!isNebido){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}
       else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
+      html+=_renderTRTTransition(c,selData,'wiz');
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
       html+='</div>';
     }
@@ -2456,9 +2639,9 @@ function editToggleEnhancedCompound(id){
   _editBuf.enhanced.enabled=_editBuf.enhanced.compounds.length>0;
   renderStackEditor();
 }
-function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0));}}
+function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
 function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
-function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
+function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
 // Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
 // the peptide tier, including the guard that the last remaining slot cannot be removed.
 // A deselected slot keeps its dose value so re-selecting it restores what was typed.
@@ -2541,9 +2724,18 @@ function _enhDormantNoteHtml(c,stackLike){
 // is itself already filtered to non-testosterone, so in practice everything it holds is
 // locked at tier 2 today — the allowance is written out in full anyway, because the
 // PCT and hCG entries are expected in this catalogue and must not arrive locked.
+// These lists were written for compounds that did not exist. Every id here — hcg,
+// clomid, clomiphene, nolvadex, tamoxifen — and every group — PCT, Recovery, Post-Cycle,
+// HCG — matched nothing in the catalogue, so tier 2 was gated to see ancillaries and saw
+// an empty set. The ancillaries landed on 2026-08-26; the names below are now the real
+// catalogue ids and groups, with the old spellings kept as aliases so a stored protocol
+// referring to one still resolves.
 var _TIER2_EXTRA_IDS = ['hcg','hmg','clomid','clomiphene','enclomiphene','nolvadex',
-                        'tamoxifen','raloxifene','toremifene'];
-var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG'];
+                        'tamoxifen','raloxifene','toremifene',
+                        'anastrozole','exemestane','cabergoline','finasteride',
+                        'dutasteride','minoxidil'];
+var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG',
+                           'Estrogen Control','PCT & Recovery','Side-Effect Support'];
 
 function _compoundAllowedForTier(c, tier){
   var t = tier || _userTier || 1;
@@ -2654,7 +2846,7 @@ function _renderEditEnhanced(enh,opts){
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
           html+=_renderEnhCadence(c,selData,'edit');
         }
-        html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
+        html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
         html+='</div>';
       }
     });
@@ -2671,7 +2863,7 @@ function _renderEditEnhanced(enh,opts){
 // Every existing handler — editToggleTRTCompound, editSetEnhDose, the cadence editors —
 // keeps working untouched. A rewrite of both editors in the same change as the merge
 // would have made any regression impossible to attribute.
-var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends'];
+var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends','Estrogen Control','PCT & Recovery','Side-Effect Support'];
 
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
@@ -2882,7 +3074,10 @@ function _wizAdviseInputs(){
   var sex=(prof&&prof.sex)||(typeof _userProfile==='function'&&_userProfile().sex)||'male';
   var bfEntry=(typeof _latestBodyFat==='function')?_latestBodyFat():null;
   var bf=(bfEntry&&typeof bfEntry.bf==='number')?bfEntry.bf:(typeof bfEntry==='number'?bfEntry:null);
-  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId()};
+  // `weeks` matters for the female path — the backend nudges from 6 weeks and caps at 8,
+  // where the male path only nudges at 12. Without it the nudge could never fire.
+  var wk=(typeof _wiz!=='undefined'&&_wiz&&_wiz.cycle_length)?_wiz.cycle_length:null;
+  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId(),weeks:wk};
 }
 function wizAdviseSetExperience(v){
   var st=_wizAdviseState();st.experience=v;_wizAdviseInvalidate(st);
@@ -2922,7 +3117,7 @@ async function wizAdviseFetch(){
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
   var res=await enhancedAdvisorFromAgent(_wizAdviseInputs());
   st.loading=false;st.fetched=true;st._autoSel=false;
-  if(res.ok&&res.advice){st.result=res.advice;}
+  if(res.ok&&res.advice){st.result=res.advice;if(_isFemaleAdvice(res.advice))_FEMALE_ADVICE=res.advice;}
   else{st.result=null;st.error='Could not load recommendations'+(res.status?(' (HTTP '+res.status+')'):'')+'.';}
   if(_wizFlow()[_wiz.step]==='advise')wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
@@ -3080,6 +3275,10 @@ function wizApplyAdviseRecommendations(){
   // pick OFF, which leaves the list empty on purpose.
   if(st._touched)return;
   if(_wiz.enhanced.compounds.length)return;
+  // NEVER auto-seed a female protocol. Doc 07's rule is one compound at a time, chosen
+  // deliberately — pre-ticking a compound for a woman hands her a selection she did not
+  // make, in the one place where the selection IS the harm reduction.
+  if(_isFemaleAdvice(res))return;
   var picks=[];
   // Not a `pick` — picks go into the enhanced list, which cannot hold testosterone.
   if(res.base&&res.base.id&&!_wizTrtHasTesto())_wizSeedTrtBase(res.base.id);
@@ -3095,10 +3294,257 @@ function wizApplyAdviseRecommendations(){
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
 }
 function wizAdviseNext(){wizApplyAdviseRecommendations();wizNext();}
+// ── FEMALE PROTOCOL FLOW ────────────────────────────────────────────────────
+// A female user reaching the advise step used to get the male renderer pointed at an
+// empty payload: no compounds, no guidance, an objective picker that drove nothing.
+// The backend now answers sex=female with its own shape (doc 07 §8/§9), and this
+// renders it.
+//
+// ⚠️ THE ONE THING THAT MUST NOT LEAK ACROSS: the male frame. There is no testosterone
+// base, the ranking is by VIRILIZATION RISK rather than by objective, and doses differ
+// from the male catalogue by an order of magnitude. Rendering the female payload
+// through _wizAdviseSection would put "Best addition" over a compound list ordered by
+// risk — the same words meaning something entirely different.
+function _isFemaleAdvice(res){return !!(res&&res.sex==='female');}
+// The female compound table, cached module-wide. The dose guard has to work on every
+// surface that shows a dose — the wizard, the edit view, the add-compound modal — and
+// only the wizard ever calls the advisor. Without a cache the guard would exist on one
+// screen and be silently absent on the two where a dose is most often typed in.
+var _FEMALE_ADVICE=null;
+var _femAdvicePending=null;
+function femaleAdvice(){return _FEMALE_ADVICE;}
+async function syncFemaleAdviceFromAgent(){
+  if(_FEMALE_ADVICE)return _FEMALE_ADVICE;
+  if(_femAdvicePending)return _femAdvicePending;
+  _femAdvicePending=(async function(){
+    try{
+      var r=await fetch(AGENT_URL+'/compounds/enhanced-advisor',{method:'POST',
+        headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sex:'female'})});
+      if(!r.ok){if(typeof _logHttp==='function')_logHttp('femaleAdvice',r.status,'/compounds/enhanced-advisor');return null;}
+      var d=await r.json();
+      var a=(d&&d.advice)||null;
+      if(_isFemaleAdvice(a))_FEMALE_ADVICE=a;
+      return _FEMALE_ADVICE;
+    }catch(e){if(typeof _logErr==='function')_logErr('femaleAdvice',e);return null;}
+    finally{_femAdvicePending=null;}
+  })();
+  return _femAdvicePending;
+}
+function _wizUserIsFemale(){
+  var prof=(typeof getData==='function')?getData('pep-profile',null):null;
+  var sx=(prof&&prof.sex)||(typeof localStorage!=='undefined'&&localStorage.getItem('user_sex'))||'male';
+  return String(sx).toLowerCase()==='female';
+}
+// Risk record for one compound id, from whichever list it is on. The avoid list is
+// searched too — a compound being ruled out is the single most important thing to be
+// able to look up, and returning null for it would render it as unremarkable.
+// Ester ids differ between the two catalogues — the TRT tier calls it 'enanthate',
+// the backend calls it 'test_e' — and the female table only names 'test_e'. Without
+// this alias the guard would render on Enhanced and be silently absent on the TRT tier,
+// which is the tier a woman is most likely to be configuring testosterone in.
+//
+// Every injectable ester maps to the same female entry on purpose: the female warning
+// is about the ROUTE (intramuscular testosterone) and the order-of-magnitude dose gap,
+// neither of which changes with which ester is in the vial.
+function _femaleTestoAlias(id){
+  if(!id)return null;
+  var esters=['enanthate','cypionate','propionate','phenylpropionate','testoviron','sustanon','nebido',
+              'test_e','test_c','test_p','test_pp','test_u','supertest'];
+  if(esters.indexOf(id)>=0)return 'test_e';
+  if(id==='topical'||id==='gel'||id==='cream')return 'topical';
+  return null;
+}
+function _femaleRiskFor(res,id){
+  if(!res||!id)return null;
+  var hit=(res.compounds||[]).find(function(c){return c.id===id;});
+  if(hit)return hit;
+  var alias=_femaleTestoAlias(id);
+  if(alias){
+    var ah=(res.compounds||[]).find(function(c){return c.id===alias;});
+    if(ah)return ah;
+  }
+  var av=(res.avoid_compounds||[]).find(function(c){return c.id===id;});
+  if(av)return {id:av.id,name:av.name,risk:'avoid',dose:null,evidence:'none',
+                dose_anchor:null,dose_note:null,basis:av.reason,cite:av.cite||[]};
+  return null;
+}
+var _FEM_RISK_STYLE={low:['#4ade80','LOW VIRILIZATION RISK'],moderate:['#f59e0b','MODERATE VIRILIZATION RISK'],
+  high:['#f97316','HIGH VIRILIZATION RISK'],avoid:['#ef4444','AVOID']};
+// Doc 07 §9 constraint 6 — evidence level is shown, never implied. 'community' is not a
+// weaker grade of 'clinical'; it means nothing was measured, and it has to read that way.
+var _FEM_EV_STYLE={clinical:['#4ade80','Clinical evidence'],community:['#f59e0b','Community practice — no trial'],
+  none:['#ef4444','No evidence']};
+function _femRiskChip(risk){
+  var m=_FEM_RISK_STYLE[risk]||_FEM_RISK_STYLE.moderate;
+  return '<span style="font-size:9px;font-weight:700;letter-spacing:0.8px;color:'+m[0]
+    +';border:1px solid '+m[0]+';border-radius:4px;padding:1px 5px;white-space:nowrap;">'+m[1]+'</span>';
+}
+function _femEvChip(ev){
+  var m=_FEM_EV_STYLE[ev]||_FEM_EV_STYLE.community;
+  return '<span style="font-size:9px;font-weight:700;letter-spacing:0.8px;color:'+m[0]
+    +';border:1px solid '+m[0]+';border-radius:4px;padding:1px 5px;white-space:nowrap;">'+_esc(m[1])+'</span>';
+}
+// ── DOSE GUARD (doc 07 §9 constraint 3) ─────────────────────────────────────
+// The female dose strings are ranges written for humans ("5–10 mg/day, 4–8 weeks",
+// "25–50 mg/week"). Parsing the ceiling out of them is what lets the app say "that is
+// above the female range" instead of silently accepting a male dose.
+//
+// Returns null rather than guessing when the string has no readable range — a wrong
+// ceiling would fire false warnings on correct doses, which teaches the user to ignore
+// the warning that matters.
+function _femaleDoseRange(entry){
+  if(!entry||!entry.dose)return null;
+  var m=String(entry.dose).match(/(\d+(?:\.\d+)?)\s*(?:[–\-—]\s*(\d+(?:\.\d+)?))?\s*(mcg|mg)\s*\/\s*(day|week)/i);
+  if(!m)return null;
+  var lo=parseDec(m[1]);var hi=m[2]?parseDec(m[2]):lo;
+  return {lo:lo,hi:hi,unit:m[3].toLowerCase()+'/'+m[4].toLowerCase()};
+}
+// Normalise a wizard dose+unit onto the range's unit so mg/day and mg/week compare.
+// Only same-magnitude, same-period comparisons are made; anything else returns null,
+// because converting mg/week to mg/day silently would compare a weekly total against a
+// daily ceiling and scream on a correct dose.
+function _femaleDoseCompare(entry,dose,unit){
+  var r=_femaleDoseRange(entry);if(!r)return null;
+  var d=parseDec(dose);if(!(d>0))return null;
+  var u=String(unit||'').toLowerCase().replace(/\s+/g,'');
+  if(u!==r.unit)return null;
+  if(d<=r.hi)return null;
+  return {over:d,ceiling:r.hi,unit:r.unit,times:Math.round((d/r.hi)*10)/10};
+}
+// The warning a female user sees on a compound dosed above its female range.
+function _femaleDoseWarning(res,id,dose,unit){
+  var entry=_femaleRiskFor(res,id);if(!entry)return '';
+  if(entry.risk==='avoid'){
+    return 'Ruled out for women — '+String(entry.basis||'').replace(/\s+/g,' ');
+  }
+  var cmp=_femaleDoseCompare(entry,dose,unit);if(!cmp)return '';
+  return cmp.over+' '+cmp.unit+' is '+cmp.times+'× the top of the female range for '
+    +entry.name+' ('+entry.dose+'). Virilization risk is dose-dependent and voice change '
+    +'is the one that does not reverse.';
+}
+
+// ── The blocking prompt (doc 07 §9 constraint 5) ────────────────────────────
+// Pregnancy is an absolute contraindication, not a risk to weigh, so it is ASKED and
+// the step does not advance until it is answered. Every other warning in this app is
+// passive; this one is the exception on purpose.
+//
+// The answer lives on the wizard, not in storage: it is a statement about right now,
+// and a remembered "yes" from six weeks ago is not an answer to today's question.
+function _femAck(){if(!_wiz.femaleAck)_wiz.femaleAck={};return _wiz.femaleAck;}
+function wizFemaleAck(key){
+  var a=_femAck();a[key]=!a[key];
+  wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function _femBlockingUnanswered(res){
+  var a=_femAck();
+  return ((res&&res.prompts)||[]).filter(function(p){return p.blocking&&!a[p.id];});
+}
+function _femPromptCard(p,answered){
+  var c=p.blocking?'#ef4444':'#f59e0b';
+  return '<div style="background:'+(answered?'rgba(74,222,128,0.07)':'rgba(239,68,68,0.07)')
+    +';border:1px solid '+(answered?'#4ade80':c)+';border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+    +'<div style="display:flex;align-items:flex-start;gap:8px;">'
+    +'<div onclick="wizFemaleAck(\''+_esc(p.id)+'\')" style="cursor:pointer;width:18px;height:18px;flex-shrink:0;margin-top:1px;border-radius:4px;border:1.5px solid '+(answered?'#4ade80':c)+';background:'+(answered?'#4ade80':'transparent')+';display:inline-flex;align-items:center;justify-content:center;">'
+    +(answered?'<svg width="9" height="7" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div>'
+    +'<div style="flex:1;"><div onclick="wizFemaleAck(\''+_esc(p.id)+'\')" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text);line-height:1.4;">'+_esc(p.question)
+    +(p.blocking?' <span style="font-size:9px;font-weight:700;letter-spacing:0.8px;color:#ef4444;">REQUIRED</span>':'')+'</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:4px;">'+_esc(p.why)+'</div>'
+    +'</div></div></div>';
+}
+// One compound row. Carries risk, dose, what anchors the dose, and evidence level —
+// all four, because the whole point is that they are different claims.
+function _femCompoundRow(c,selected,warn){
+  var m=_FEM_RISK_STYLE[c.risk]||_FEM_RISK_STYLE.moderate;
+  var selectable=(c.risk!=='avoid');
+  var anchorTxt={label:'Label dose',trial:'Trial dose',community:'Community practice'}[c.dose_anchor]||'';
+  return '<div style="background:var(--surface2);border:1px solid '+(selected?'var(--accent)':'var(--border)')
+    +';border-left:3px solid '+m[0]+';border-radius:6px;padding:9px 11px;margin-bottom:7px;'+(selectable?'cursor:pointer;':'')+'"'
+    +(selectable?(' onclick="wizAdviseToggleCompound(\''+_esc(c.id)+'\')"'):'')+'>'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    +'<span style="font-size:13px;font-weight:700;color:var(--text);">'+_esc(c.name)+'</span>'
+    +_femRiskChip(c.risk)
+    +(selectable?('<span style="margin-left:auto;width:18px;height:18px;border-radius:50%;border:1.5px solid '+(selected?'var(--accent)':'var(--border)')+';background:'+(selected?'var(--accent)':'transparent')+';display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">'+(selected?'<svg width="9" height="7" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</span>'):'')
+    +'</div>'
+    +(c.dose?('<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;">'
+      +'<span style="font-size:12px;font-weight:700;color:var(--accent);">'+_esc(c.dose)+'</span>'
+      +(anchorTxt?('<span style="font-size:9px;color:var(--muted2);letter-spacing:0.5px;">'+_esc(anchorTxt)+'</span>'):'')
+      +_femEvChip(c.evidence)+'</div>'):'')
+    +(c.basis?('<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:5px;">'+_esc(c.basis)+'</div>'):'')
+    +(c.dose_note?('<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:5px;padding-left:8px;border-left:2px solid var(--border);">'+_esc(c.dose_note)+'</div>'):'')
+    +(warn?('<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-top:6px;font-weight:600;">⚠ '+_esc(warn)+'</div>'):'')
+    +'</div>';
+}
+// The female advise step. Returns the whole body HTML — wizStepAdvise hands over to it
+// entirely rather than interleaving, so no male section can appear by accident.
+function _wizAdviseFemaleHtml(res){
+  var selIds=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).map(function(c){return c.id;});
+  var h='';
+  if(res.headline){
+    h+='<div style="background:rgba(232,255,60,0.06);border:1px solid rgba(232,255,60,0.3);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;font-weight:600;color:var(--text);line-height:1.5;">'+_esc(res.headline)+'</div>';
+  }
+  // Warnings first — a voice-change warning below the fold is a warning that did not happen.
+  ((res.warnings)||[]).forEach(function(w){
+    h+='<div style="background:rgba(239,68,68,0.09);border:1px solid rgba(239,68,68,0.45);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12px;color:#fca5a5;line-height:1.55;">⚠ '+_esc(w)+'</div>';
+  });
+  if(res.prompts&&res.prompts.length){
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:14px 0 6px;">Before you start</div>';
+    var a=_femAck();
+    res.prompts.forEach(function(p){h+=_femPromptCard(p,!!a[p.id]);});
+  }
+  // Compounds, ordered by risk — NOT by objective. The subheading says so, because the
+  // male step above this one asks for an objective and the user will expect it to matter.
+  if(res.compounds&&res.compounds.length){
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:14px 0 4px;">Ranked by virilization risk</div>'
+      +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px;">Lowest risk first. This order does not change with your objective — for women the limiting factor is androgenicity, not which goal you picked. Tap to add or remove.</div>';
+    res.compounds.forEach(function(c){
+      var sel=selIds.indexOf(c.id)>=0;
+      h+=_femCompoundRow(c,sel,'');
+    });
+  }
+  if(res.avoid_compounds&&res.avoid_compounds.length){
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#ef4444;text-transform:uppercase;margin:14px 0 6px;">Avoid outright</div>';
+    res.avoid_compounds.forEach(function(c){
+      h+='<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid #ef4444;border-radius:6px;padding:8px 11px;margin-bottom:6px;">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="color:#ef4444;font-weight:700;font-size:12px;">✕</span>'
+        +'<span style="font-size:13px;font-weight:700;color:var(--text);">'+_esc(c.name)+'</span></div>'
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:3px;">'+_esc(c.reason)+'</div></div>';
+    });
+  }
+  if(res.hard_rules&&res.hard_rules.length){
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:14px 0 6px;">Non-negotiable</div>';
+    res.hard_rules.forEach(function(r){
+      h+='<div style="border:1px solid var(--border);border-radius:6px;padding:8px 11px;margin-bottom:6px;background:var(--surface2);">'
+        +'<div style="font-size:12px;font-weight:700;color:var(--text);line-height:1.45;">'+_esc(r.rule)+'</div>'
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:4px;">'+_esc(r.why)+'</div></div>';
+    });
+  }
+  if(res.bloodwork&&res.bloodwork.length){
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:14px 0 6px;">Bloodwork to add</div>'
+      +'<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;margin-bottom:6px;">'
+      +res.bloodwork.map(function(b){return '<div style="font-size:11px;color:var(--text);line-height:1.6;">• '+_esc(b)+'</div>';}).join('')
+      +'</div>';
+  }
+  if(res.evidence_note){
+    h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 11px;margin-top:10px;font-size:11px;color:var(--muted2);line-height:1.55;">ℹ '+_esc(res.evidence_note)+'</div>';
+  }
+  ((res.notes)||[]).forEach(function(n){
+    h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 11px;margin-top:6px;font-size:11px;color:var(--muted2);line-height:1.55;">ℹ '+_esc(n)+'</div>';
+  });
+  h+=(typeof _renderSafetyNote==='function')?_renderSafetyNote('enhanced'):'';
+  return h;
+}
+
 function wizStepAdvise(body,footer){
   var st=_wizAdviseState();
   var inp=_wizAdviseInputs();
-  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Tell us where you are and what you\'re after — we\'ll recommend which compound to add (and what to save for later). You can still pick anything on the next step.</div>';
+  var _fem=(String(inp.sex||'').toLowerCase()==='female');
+  // The objective picker is hidden for a female user because the female path ranks by
+  // virilization risk and ignores the objective entirely. Showing a control that changes
+  // nothing is worse than showing none — it implies the ranking is goal-driven when the
+  // whole point is that it is not.
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">'
+    +(_fem?'Female protocols are dosed and ranked differently — by virilization risk rather than by goal. Tell us where you are and we\'ll show the compound set, the doses, and what each one actually rests on.'
+          :'Tell us where you are and what you\'re after — we\'ll recommend which compound to add (and what to save for later). You can still pick anything on the next step.')+'</div>';
   // Profile summary (sex + BF are read from your profile)
   html+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:11px;color:var(--muted2);">'
     +'From your profile: <b style="color:var(--text)">'+_esc(inp.sex)+'</b>'
@@ -3109,12 +3555,14 @@ function wizStepAdvise(body,footer){
     html+='<div onclick="wizAdviseSetExperience(\''+e[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'rgba(232,255,60,0.08)':'transparent')+';color:'+(sel?'var(--accent)':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+e[1]+'</div>';
   });
   html+='</div>';
-  // Objective
-  html+='<div class="wiz-section" style="margin-bottom:8px;">Primary objective</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
-  _ADV_OBJECTIVES.forEach(function(o){var sel=st.objective===o[0];
-    html+='<div onclick="wizAdviseSetObjective(\''+o[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'rgba(232,255,60,0.08)':'transparent')+';color:'+(sel?'var(--accent)':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+o[1]+'</div>';
-  });
-  html+='</div>';
+  // Objective — male path only; it does not enter the female ranking.
+  if(!_fem){
+    html+='<div class="wiz-section" style="margin-bottom:8px;">Primary objective</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
+    _ADV_OBJECTIVES.forEach(function(o){var sel=st.objective===o[0];
+      html+='<div onclick="wizAdviseSetObjective(\''+o[0]+'\')" style="padding:8px 12px;border:1px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'rgba(232,255,60,0.08)':'transparent')+';color:'+(sel?'var(--accent)':'var(--text)')+';border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;">'+o[1]+'</div>';
+    });
+    html+='</div>';
+  }
   // Sensitivity flags
   html+='<div class="wiz-section" style="margin-bottom:8px;">Any of these apply?</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
   _ADV_FLAGS.forEach(function(fl){var sel=!!(st.flags&&st.flags[fl[0]]);
@@ -3125,6 +3573,11 @@ function wizStepAdvise(body,footer){
   html+='<button onclick="wizAdviseFetch()" '+(st.loading?'disabled ':'')+'style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;margin-bottom:14px;'+(st.loading?'opacity:0.6;':'')+'">'+(st.loading?'Getting recommendations…':(st.fetched?'Update recommendations':'Get recommendations'))+'</button>';
   // Results
   if(st.error){html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'+_esc(st.error)+'</div>';}
+  else if(st.result&&_isFemaleAdvice(st.result)){
+    // Female payload: rendered whole by its own function. Nothing from the male path
+    // runs — no base row, no "best addition", no objective-driven ordering.
+    html+=_wizAdviseFemaleHtml(st.result);
+  }
   else if(st.result){
     var res=st.result;
     // Default-select base + best addition once per fresh recommendation.
@@ -3171,7 +3624,16 @@ function wizStepAdvise(body,footer){
     html+=_renderSafetyNote('enhanced');
   }
   body.innerHTML=html;
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizAdviseNext()">Next →</button>';
+  // Doc 07 §9 constraint 5: the pregnancy prompt BLOCKS. Every other warning in this
+  // wizard is passive; this one gates the step, because an absolute contraindication
+  // that a user can scroll past is not a contraindication.
+  var _block=(st.result&&_isFemaleAdvice(st.result))?_femBlockingUnanswered(st.result):[];
+  if(_block.length){
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>'
+      +'<div style="font-size:11px;color:#ef4444;margin-top:8px;line-height:1.5;">Answer the required question above to continue.</div>';
+  }else{
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizAdviseNext()">Next →</button>';
+  }
 }
 function wizStepEnhanced(body,footer){
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
@@ -3240,7 +3702,7 @@ function wizStepEnhanced(body,footer){
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
           html+=_renderEnhCadence(c,selData,'wiz');
         }
-        html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
+        html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
         html+='</div>';
       }
     });
@@ -3271,9 +3733,9 @@ function wizToggleEnhancedCompound(id){
   _wiz.enhanced.enabled=_wiz.enhanced.compounds.length>0;
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
-function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0));}}
+function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
 function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
-function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
+function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
 function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 // Every TRT compound this protocol will actually dose, whichever way the tier was
 // filled in. Reported 2026-08-01: the Validate and Review steps read only the classic
@@ -3569,7 +4031,25 @@ function _genInjBatches(stack,cycleId,fromDate){
         if(c.id!=='nebido'&&c.days&&c.days.length){hit=c.days.includes(d.getDay());}
         else{var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);hit=freqDays>0&&daysSince%freqDays===0;}
         if(!hit)continue;
-        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_tpd.dose||'',unit:_tpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
+        // ── DOSE RAMPS APPLY TO TESTOSTERONE TOO (ester transitions) ──────────
+        // _effectiveDoseAt had exactly one call site — the peptide branch — so a TRT
+        // compound carrying dose_phases generated its FLAT dose and the ramp was
+        // silently ignored. That is the mechanism an ester switch needs: while the old
+        // ester's tail is still decaying the new one runs low, and it steps up as the
+        // tail clears.
+        //
+        // The phase dose goes back through _enhDosePerInjection because a phase may be
+        // written as a RATE ('100 mg/week') just like the flat dose can. Converting the
+        // flat dose but not the ramped one would make the ramp silently mean something
+        // different from the field above it — the same class of error as the 2026-08-19
+        // "100mg every 2 days generated 28mg" report.
+        var _eff=(typeof _effectiveDoseAt==='function')?_effectiveDoseAt(c,stack.cycle_start,d):null;
+        var _dpd=_eff
+          ? ((typeof _enhDosePerInjection==='function')
+              ? _enhDosePerInjection(Object.assign({},c,{dose:_eff.dose,unit:_eff.unit}))
+              : {dose:_eff.dose,unit:_eff.unit})
+          : _tpd;
+        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dpd.dose||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       // Empty batches are pushed too — see the note in the peptide branch above.
       batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
