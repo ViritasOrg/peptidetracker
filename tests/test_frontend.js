@@ -4503,6 +4503,1008 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       !('end_date' in G._editBuf.trt.compounds[0]));
   }
 
+
+  // ── Auto on-ramp solver ───────────────────────────────────────────────────
+  // Generating a transition by hand means inverting a calibrated PK model against a
+  // decaying tail, week by week, then rounding to what a syringe can draw. These pin
+  // the parts that are easy to get subtly wrong and impossible to eyeball.
+  {
+    const mkHist = (n, everyDays, mg, lastDate) => {
+      const out=[], last=new Date(lastDate+'T12:00:00');
+      for(let i=0;i<n;i++){
+        const d=new Date(last.getTime()-i*everyDays*86400000);
+        out.push({compId:'nebido', doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});
+      }
+      return out;
+    };
+
+    // Syringe quantisation. A dose the user cannot draw is not an instruction.
+    check('_tcSolveSnap rounds to whole syringe steps',
+      G._tcSolveSnap(37, 25)===25 && G._tcSolveSnap(38, 25)===50 && G._tcSolveSnap(0, 25)===0);
+    check('  …and falls back to 0.1 mg when no step is given',
+      G._tcSolveSnap(37.44, 0)===37.4);
+
+    // Cadence expansion has to match how _genInjBatches actually schedules: weekday
+    // sets for day-based dosing, fixed intervals otherwise.
+    const wk = G._tcSolveDates({days:[1,4]}, '2026-09-01', 2);
+    check('_tcSolveDates expands a weekday cadence', wk.length===4,
+      'twice weekly over 2 weeks = 4');
+    check('  …on the requested weekdays only', wk.every(d=>d.getDay()===1||d.getDay()===4));
+    const iv = G._tcSolveDates({freqVal:2,freqUnit:'days'}, '2026-09-01', 2);
+    check('  …and an interval cadence steps by its interval',
+      iv.length===7 && (iv[1]-iv[0])===2*86400000);
+
+    // THE CALIBRATION GUARD. TT_base is solved as TT_at_draw * P / total[anchorDay],
+    // so a candidate injection at or before the anchor moves the calibration instead
+    // of the curve and the solve silently converges on nonsense. This is the single
+    // most dangerous way for the feature to be wrong, because it LOOKS like it worked.
+    const hist = mkHist(60, 2, 100, '2026-08-26');
+    check('the solver refuses to start on or before the last logged injection',
+      /start the new ester after it/.test(
+        G._tcSolveAnchorGuard({history:hist, startDate:'2026-08-20'})));
+    check('  …and is quiet when the new ester starts after it',
+      G._tcSolveAnchorGuard({history:hist, startDate:'2026-08-27'})==='');
+    check('  …and says so when there is no history to calibrate against',
+      /nothing to calibrate/.test(G._tcSolveAnchorGuard({history:[], startDate:'2026-08-27'})));
+
+    // A real solve, calibrated the way the app would be.
+    // A real draw, so these run against a valid anchor rather than the day-0 fallback.
+    // Without it the whole block exercises a degenerate calibration, which is not the
+    // regime the app is in for anyone who has logged bloodwork.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const sol = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:100, stepMl:0.1, weeks:12
+    });
+    check('tcSolveTransition returns a schedule', !!(sol && sol.best && sol.dose_phases.length));
+    check('  …choosing a cadence the generator can actually schedule', (function(){
+      const c=sol.best.cadence;
+      // A variable-interval answer carries no single cadence — the interval lives on
+      // each phase as `iv`, which _phasedHitsDay honours. It is schedulable, just not
+      // describable by one freqVal, so it is a third valid shape rather than a failure.
+      if(c.variable) return sol.best.phases.every(p=>p.iv>0);
+      return !!((c.days&&c.days.length) || (c.freqVal>0&&c.freqUnit));
+    })(), sol.best.cadence.label);
+    check('  …with every dose landing on a whole 0.1 ml step', (function(){
+      const step=100*0.1;
+      return sol.best.doses.every(d=>Math.abs(d/step-Math.round(d/step))<1e-6);
+    })());
+    check('  …holding the target it was given', (function(){
+      const tail=sol.best.weekly.slice(-4);
+      return tail.every(w=>Math.abs(w.mean-1300)/1300 < 0.15);
+    })(), 'settled weeks: '+sol.best.weekly.slice(-4).map(w=>Math.round(w.mean)).join(','));
+
+    // The ramp must RISE as the outgoing tail decays — that is the whole mechanism.
+    check('  …ramping up as the outgoing ester clears',
+      sol.dose_phases.length>1 &&
+      parseFloat(sol.dose_phases[sol.dose_phases.length-1].d) > parseFloat(sol.dose_phases[0].d),
+      sol.dose_phases.map(p=>'w'+p.w+':'+p.d).join(' '));
+
+    // Phases are a STEP FUNCTION: one entry per change, never one per week, or the two
+    // or three real steps are buried in a wall of identical rows.
+    check('  …emitting a phase only where the dose changes', (function(){
+      for(let i=1;i<sol.dose_phases.length;i++)
+        if(sol.dose_phases[i].d===sol.dose_phases[i-1].d) return false;
+      return true;
+    })());
+
+    // De-chatter: snapping makes the answer wobble one step where the continuous
+    // solution sits near a boundary. Stepping a dose down and back up for no reason is
+    // how a plan stops being followed.
+    check('  …with no one-step down-and-back-up chatter', (function(){
+      // A DITHERED schedule alternates two adjacent steps ON PURPOSE — that is how the
+      // weekly average lands between them — so the per-injection series is expected to
+      // go 10,10,20,10,20. The invariant that still has to hold there is on the WEEKLY
+      // load, which is what the user reads and what must not wobble.
+      if(sol.best.cadence.dithered){
+        const wk=[];
+        for(let i=0;i<sol.best.doses.length;i+=7)
+          wk.push(sol.best.doses.slice(i,i+7).reduce((a,b)=>a+b,0));
+        for(let i=1;i<wk.length-1;i++) if(wk[i-1]===wk[i+1]&&wk[i]!==wk[i-1]) return false;
+        return true;
+      }
+      const d=sol.best.doses;
+      for(let i=1;i<d.length-1;i++) if(d[i-1]===d[i+1]&&d[i]!==d[i-1]) return false;
+      return true;
+    })(), sol.best.cadence.label);
+
+    // The vial can be the limiting factor, and it is invisible unless stated.
+    // Re-pin the calibration: this assertion depends on how many pmol/L one syringe
+    // step is worth, and an earlier test mutating _tcp shifts that. It first went in
+    // at 250 mg/ml, where the value landed at 99 against a 104 threshold — passing on
+    // a 5% margin, which is not a test. 400 mg/ml puts it clearly on one side.
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    // Pinned on a FIXED cadence: that is the situation the note describes. A dithered
+    // daily schedule spreads one step over a single day of the week, so its effective
+    // weekly resolution is seven times finer and the warning would be wrong advice.
+    const coarse = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:400, stepMl:0.1, weeks:12, cadenceKey:'e2d'
+    });
+    check('a coarse syringe step is reported as the limit, not hidden',
+      (coarse.notes||[]).some(n=>/moves your level by about/.test(n)),
+      'one step = '+Math.round(coarse.best.stepPmol)+' pmol/L, threshold '+Math.round(1300*0.08));
+    // THE LEVER IS THE DRAW VOLUME, NOT THE VIAL. This originally advised a thinner
+    // concentration, which is both unhelpful (250 mg/ml is the standard vial, and not
+    // usually the user's to choose) and wrong: at a fixed 250 mg/ml, going 0.1 -> 0.05
+    // -> 0.01 ml takes the same solve from 13% drift to 10% to 4%.
+    check('  …and points at the draw volume, which is what the user controls',
+      (coarse.notes||[]).some(n=>/ml instead/.test(n)));
+    check('  …not at buying a different vial',
+      !(coarse.notes||[]).some(n=>/mg\/ml vial/.test(n)));
+
+    // The measurement behind that claim, run as a test so the ordering cannot silently
+    // invert: at ONE concentration, a finer step must hold the target more tightly.
+    const byStep=[0.1,0.05,0.01].map(function(stepMl){
+      G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+      // ⚠️ PIN THE CADENCE. This measures what the STEP SIZE is worth, so the three
+      // solves must differ only in the step. Reading the auto-picked winner instead
+      // compared whichever cadence happened to rank first at each step, and once
+      // ranking moved to the settled window a step change could flip the winner —
+      // making this assert something about cadence selection rather than draw volume.
+      const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
+        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d'});
+      return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr, worst:rr.best.worst, cad:rr.best.cadence.key};
+    });
+    // Only the claim the product actually rests on: halving the draw volume at a FIXED
+    // concentration holds the target at least as tightly. Deliberately not asserting
+    // that finer is monotonically better all the way down — it is not. Measured under
+    // one calibration the three steps give 13/10/4%, and under another 20/13/15%,
+    // where 0.01 ml is WORSE than 0.05. The solve is calibration-dependent, and at very
+    // fine granularity the monotone projection and the fixed-point iteration can fight
+    // each other. 0.05 ml beat 0.1 ml under both, which is the change being made here.
+    check('halving the draw volume holds the target at least as tightly',
+      byStep[1].drift<=byStep[0].drift+1e-9,
+      byStep.map(x=>x.stepMl+'ml:'+Math.round(x.drift*100)+'%').join(' '));
+    check('  …and on the metric the ranking actually optimises',
+      byStep[1].worst<=byStep[0].worst+1e-9,
+      byStep.map(x=>x.stepMl+'ml worst '+Math.round(x.worst*100)+'%').join(' '));
+
+    // ── The solver must refuse a degenerate calibration ────────────────────
+    // Adding testosterone cannot lower testosterone. When the model says it does, the
+    // curve is anchored somewhere useless — the known case is the anchor falling back
+    // to day 0, the FIRST logged injection, because today is past _logDays. Left
+    // unchecked the iteration saturated and produced 800 mg WEEKLY landing at
+    // 3638-4268 pmol/L against a 1400 target, presented as an answer.
+    // ── The solver must refuse a degenerate calibration ────────────────────
+    // Adding testosterone cannot lower testosterone. When the model says it does, the
+    // curve is anchored somewhere useless — the known case is the anchor falling back
+    // to day 0, the FIRST logged injection, because today is past _logDays. Left
+    // unchecked the iteration saturated and produced 800 mg WEEKLY landing at
+    // 3638-4268 pmol/L against a 1400 target, and presented it as an answer.
+    //
+    // Driven by stubbing the model response rather than by trying to recreate the
+    // calibration state: whether a given history anchors degenerately is emergent, so
+    // a test that reproduces it through the public API passes or fails on unrelated
+    // state. The guard's own logic is what needs pinning, and this pins it exactly.
+    {
+      // BOTH evaluators, because the fixed-cadence and variable-interval paths use
+      // different ones. Stubbing only the fixed evaluator let the variable path see the
+      // real model, produce a good schedule and win — so the guard looked broken when
+      // it was the test that was half-applied.
+      const realEval=G._tcSolveEvaluate, realPhased=G._tcSolveEvaluatePhased,
+            realDaily=G._tcSolveEvaluateDaily;
+      const fake=function(cx,doses){
+        const W=cx.weeks, out=[];
+        const load=(doses||[]).reduce((a,b)=>a+(b||0),0);
+        for(let i=0;i<W;i++){
+          const m=1400-load*0.5;          // MORE dose -> LOWER level: non-physical
+          out.push({mean:m, peak:m*1.05, trough:m*0.95});
+        }
+        return {weekly:out, events:[], series:null};
+      };
+      G._tcSolveEvaluate=function(cx,cad,dates,doses){ return fake(cx,doses); };
+      G._tcSolveEvaluatePhased=function(cx,sched,mgByWeek){ return fake(cx,mgByWeek); };
+      G._tcSolveEvaluateDaily=function(cx,days,mgByDay){ return fake(cx,mgByDay); };
+      const degen=G.tcSolveTransition({history:[{compId:'nebido',doseMg:'100',date:'2026-08-20'}],
+        incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
+        concMgPerMl:250, stepMl:0.05, weeks:16});
+      G._tcSolveEvaluate=realEval; G._tcSolveEvaluatePhased=realPhased;
+      G._tcSolveEvaluateDaily=realDaily;
+      check('a curve that falls when dose rises is refused, not answered',
+        !!(degen&&degen.degenerate&&!degen.best),
+        degen&&degen.best?('emitted '+Math.round(degen.best.doses[0])+' mg'):'refused');
+      check('  …with a reason that points at the calibration, not the schedule',
+        !!(degen&&(degen.notes||[]).some(n=>/calibrat/i.test(n))));
+    }
+
+    // Above the healthy young-male ceiling the app already has copy for this, and the
+    // solver still computes what was asked. It solves for the SCHEDULE, never the TARGET.
+    G._FT_REF={ceiling_pmol_l:804, above_ceiling_note:'No trial has measured anyone at this level.'};
+    const high = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:100, stepMl:0.1, weeks:8
+    });
+    check('a target above the reference ceiling is flagged, not refused',
+      !!high.best && (high.notes||[]).some(n=>/above the top of the healthy/.test(n)));
+
+    // Applying the answer must write CADENCE AND DOSE — the same mg on a different
+    // interval is a different curve, so a ramp without its cadence is half an answer.
+    G._editBuf={trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'100',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G._trtSolveState={enanthate:{target:'1300',conc:'100',weeks:12,running:false,result:sol,error:''}};
+    G.trtSolveApply('edit','enanthate');
+    const applied=G._editBuf.trt.compounds[0];
+    check('trtSolveApply writes the ramp', !!(applied.dose_phases&&applied.dose_phases.length));
+    check('  …and the cadence alongside it',
+      !!((applied.days&&applied.days.length)||(applied.freqVal>0)));
+    check('  …leaving the flat dose on the maintenance dose, not the old value',
+      applied.dose===sol.dose_phases[sol.dose_phases.length-1].d, applied.dose);
+    check('  …and clearing the result so the panel does not offer a stale apply',
+      G._trtSolveState.enanthate.result===null);
+  }
+
+
+  // ── Schedule pattern is a setting, not a property of the molecule ─────────
+  // TRT used to hardcode `c.id!=='nebido'`: Nebido got the interval, every other
+  // ester got weekdays and no way to express "every 3 days". Both patterns are now
+  // available on every compound. The risk in that change is silently RESCHEDULING
+  // saved protocols, so the legacy readings are pinned as hard as the new ability.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-22',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const dates = comp => {
+      const b = G._genInjBatches(P(comp),'c',null)||[];
+      return ((b[0]&&b[0].entries)||[]).map(e=>e.date);
+    };
+
+    // The ability that was missing.
+    check('a non-Nebido ester can now use an interval schedule',
+      dates({id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+             cadence:'interval',freqVal:3,freqUnit:'days'})
+        .join(' ')==='2026-09-01 2026-09-04 2026-09-07 2026-09-10 2026-09-13 2026-09-16 2026-09-19 2026-09-22');
+    check('  …and Nebido can now use weekdays', (function(){
+      const d=dates({id:'nebido',name:'Nebido',dose:'250',unit:'mg',cadence:'days',days:[1,4]});
+      return d.length===6 && d[0]==='2026-09-03';
+    })());
+
+    // LEGACY. Nothing on disk carries a `cadence` field, so inference has to
+    // reproduce the old behaviour exactly or every saved protocol reschedules on
+    // upgrade.
+    check('legacy: an ester with weekdays and no cadence field is unchanged',
+      dates({id:'enanthate',name:'Test E',dose:'50',unit:'mg',days:[1,4]}).length===6);
+    check('legacy: Nebido with an interval and no cadence field is unchanged',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',freqVal:1,freqUnit:'weeks'})
+        .join(' ')==='2026-09-01 2026-09-08 2026-09-15 2026-09-22');
+    // The old generator ignored days[] on Nebido outright. An anomalous saved row
+    // carrying both must keep injecting on its interval, not jump to weekdays.
+    check('legacy: Nebido carrying stray weekdays still uses its interval',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',days:[1,4],freqVal:1,freqUnit:'weeks'})
+        .join(' ')==='2026-09-01 2026-09-08 2026-09-15 2026-09-22');
+    check('  …and an explicit cadence field overrides that legacy rule',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',cadence:'days',days:[1,4],
+             freqVal:1,freqUnit:'weeks'}).length===6);
+
+    // The Enhanced tier's own legacy default is the OPPOSITE and must also survive:
+    // no cadence field meant weekday scheduling there even with freqVal set, which is
+    // what makes a 350 mg/week entry divide by 7 rather than by the interval.
+    check('legacy: the Enhanced default stays weekday, not interval',
+      G._cadenceOf({id:'x',freqVal:2,freqUnit:'days'},'days')==='days');
+    check('  …while TRT defaults the other way',
+      G._cadenceOf({id:'x',freqVal:2,freqUnit:'days'},'interval')==='interval');
+    check('  …which is what keeps the weekly-rate conversion at 50 mg',
+      G._enhDosePerInjection({dose:'350',unit:'mg/week',freqVal:2,freqUnit:'days'}).dose==='50');
+
+    // Switching mode must not destroy the other mode's settings.
+    const c={id:'enanthate',days:[1,4],freqVal:3,freqUnit:'days'};
+    G._cadenceSetMode(c,'interval');
+    check('switching to interval keeps the weekday selection',
+      c.cadence==='interval' && (c.days||[]).join(',')==='1,4');
+    G._cadenceSetMode(c,'days');
+    check('  …and switching back keeps the interval',
+      c.cadence==='days' && parseInt(c.freqVal,10)===3);
+    const bare={id:'enanthate'};
+    G._cadenceSetMode(bare,'days');
+    check('  …never leaving zero days selected, which would schedule nothing',
+      (bare.days||[]).length>0);
+
+    // Both TRT surfaces render the same control, each calling its own scope.
+    const eh=G._renderTRTCadence('enanthate',{cadence:'interval',freqVal:3,freqUnit:'days'},'edit');
+    const wh=G._renderTRTCadence('enanthate',{cadence:'interval',freqVal:3,freqUnit:'days'},'wiz');
+    check('the TRT schedule control offers both patterns',
+      /Weekly days/.test(eh) && /Every…/.test(eh));
+    check('  …calling the editor scope from the editor',
+      /trtSetCadence\('edit','enanthate','days'\)/.test(eh) && !/'wiz'/.test(eh));
+    check('  …and the wizard scope from the wizard',
+      /trtSetCadence\('wiz','enanthate','days'\)/.test(wh) && !/'edit'/.test(wh));
+    check('  …showing the interval editor in interval mode',
+      /trtSetFreqVal\('edit','enanthate',this.value\)/.test(eh) && !/trtSetDay\(/.test(eh));
+    check('  …and the weekday chips in weekday mode',
+      /trtSetDay\('edit','enanthate',/.test(
+        G._renderTRTCadence('enanthate',{cadence:'days',days:[1,4]},'edit')));
+
+    // Labels.
+    check('the schedule label reads naturally in both modes',
+      G._trtCadenceLabel({id:'enanthate',cadence:'interval',freqVal:3,freqUnit:'days'})==='Every 3 days' &&
+      G._trtCadenceLabel({id:'nebido',freqVal:10,freqUnit:'weeks'})==='Every 10 weeks');
+
+    // The solver writes the MODE, not just the fields — inference would read a solved
+    // weekday answer on a Nebido row as interval and schedule something else.
+    G._editBuf={trt:{enabled:true,compounds:[{id:'nebido',name:'Nebido',dose:'250',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G._trtSolveState={nebido:{result:{best:{cadence:{days:[1,4]}},dose_phases:[{w:0,d:'50',u:'mg'}]}}};
+    G.trtSolveApply('edit','nebido');
+    check('applying a solved weekday cadence sets the mode explicitly',
+      G._editBuf.trt.compounds[0].cadence==='days');
+
+    // ── Peptides get the same choice ──────────────────────────────────────
+    // "All compounds should have a ability to swap between these patterns." An EOD
+    // or E3D peptide never fitted a 7-day grid either.
+    const PP = pep => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-22',
+      peptides:[pep], trt:{}, enhanced:{}});
+    const pdates = pep => {
+      const b = G._genInjBatches(PP(pep),'c',null)||[];
+      return ((b[0]&&b[0].entries)||[]).map(e=>e.date);
+    };
+    const basePep = {id:'cjc-ipa',name:'CJC/Ipa',dose_am:'100',unit_am:'mcg',times:['AM'],active:true};
+    check('a peptide can be scheduled by interval',
+      pdates(Object.assign({},basePep,{cadence:'interval',freqVal:3,freqUnit:'days'}))
+        .join(' ')==='2026-09-01 2026-09-04 2026-09-07 2026-09-10 2026-09-13 2026-09-16 2026-09-19 2026-09-22');
+    check('legacy: a peptide with weekdays is unchanged',
+      pdates(Object.assign({},basePep,{days:[1,4]})).length===6);
+    // The peptide default was "no days[] means EVERY day" — the one legacy rule that
+    // differs again from both other tiers, and the easiest to lose.
+    check('legacy: a peptide with no days still runs every day',
+      pdates(basePep).length===22);
+
+    const pe=G._renderPepCadence(0,{cadence:'interval',freqVal:3,freqUnit:'days'},'edit');
+    check('the peptide schedule control offers both patterns',
+      /Weekly days/.test(pe)&&/Every…/.test(pe));
+    check('  …addressing peptides by index, not id',
+      /pepSetCadence\('edit','0','days'\)/.test(pe));
+    check('  …and the wizard scope from the wizard',
+      /pepSetCadence\('wiz','0','days'\)/.test(
+        G._renderPepCadence(0,{cadence:'interval',freqVal:3,freqUnit:'days'},'wiz')));
+
+    // ONE implementation across all three tiers — the whole point of the change.
+    // A second "when does this inject" is how the tiers drift apart.
+    check('every tier resolves cadence through the same predicate', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      return /function _enhHitsDay\(c,d,cycleStart\)\{ return _cadenceHitsDay/.test(src)
+          && /function _trtHitsDay/.test(src)
+          && (src.match(/function _cadenceHitsMode\(/g)||[]).length===1;
+    })());
+  }
+
+
+  // ── The review summary must describe what will actually be injected ───────
+  // Reported 2026-08-26 from a real protocol: the summary read
+  //   "Testosterone Enanthate  75mg · 1x/week"   (it was solved to every 3 days)
+  //   "HGH (Somatropin)        2IU/day · Every day"  (it was configured 3 AM + 3 PM)
+  // Neither matched the schedule underneath. A summary that contradicts the plan is
+  // worse than no summary — it is the screen the user confirms before saving.
+  {
+    // The cadence label read days[] first and ignored .cadence. _cadenceSetMode keeps
+    // the weekday list ON PURPOSE when switching to interval, so every interval-mode
+    // compound carried weekdays and got labelled by them.
+    const solved={id:'enanthate',name:'Test E',dose:'75',unit:'mg',
+                  cadence:'interval',freqVal:3,freqUnit:'days',days:[1]};
+    check('an interval compound is not labelled by its leftover weekdays',
+      G._trtCadenceLabel(solved)==='Every 3 days', G._trtCadenceLabel(solved));
+    check('  …and the generator agrees with that label', (function(){
+      const b=G._genInjBatches({id:'p',cycle_start:'2026-09-01',end_date:'2026-09-22',
+        peptides:[],trt:{enabled:true,compounds:[solved]},enhanced:{}},'c',null)||[];
+      const d=((b[0]&&b[0].entries)||[]).map(e=>e.date);
+      return d.length===8 && d[1]==='2026-09-04';
+    })(), 'label and schedule must not disagree');
+    check('  …while a genuine weekly compound still reads as weekdays',
+      G._trtCadenceLabel({id:'enanthate',cadence:'days',days:[1]})==='M');
+
+    // A split compound keeps its dose in dose_am/dose_pm; c.dose is whatever the
+    // catalogue seeded and is NOT the configured dose.
+    const hgh={id:'hgh',name:'HGH (Somatropin)',amPm:true,dose:'2',unit:'IU/day',
+               times:['AM','PM'],dose_am:'3',dose_pm:'3',days:[0,1,2,3,4,5,6]};
+    check('a split compound totals its per-slot doses', G._enhSplitTotal(hgh)===6,
+      '3 AM + 3 PM = 6, not the catalogue default of 2');
+    check('  …and c.dose is not the configured dose', parseFloat(hgh.dose)!==G._enhSplitTotal(hgh));
+
+    // Peptides had the same label bug.
+    check('a peptide in interval mode is labelled by its interval',
+      G._cadenceLabel({id:'cjc-ipa',cadence:'interval',freqVal:2,freqUnit:'days',days:[1,4]},'days')
+        ==='Every 2 days');
+
+    // End to end through the row builder the review screen actually calls, with the
+    // exact protocol shape that produced the wrong summary.
+    const _wizSave=G._wiz;
+    G._wiz={stackName:'Protocol 4',goals:['enhanced'],peptides:[],
+      trt:{enabled:true,compounds:[solved]},
+      enhanced:{enabled:true,compounds:[hgh]}};
+    const rows=G._wizTrtSummaryRows();
+    check('the review row reads "Every 3 days", not "1x/week"',
+      rows.length===1 && rows[0].cadence==='Every 3 days',
+      rows.length?(rows[0].dose+' · '+rows[0].cadence):'no rows');
+    check('  …and carries the solved dose', rows.length===1 && rows[0].dose==='75mg',
+      rows.length?rows[0].dose:'no rows');
+    G._wiz=_wizSave;
+  }
+
+  // ── The on-ramp headline must describe the whole plan ─────────────────────
+  // It scored only the last four weeks, so a plan sagging 16% below target in the
+  // middle reported the tail's 5% and the ranking could not see the sag at all.
+  {
+    const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const r=G.tcSolveTransition({history:mk(60,2,100,'2026-08-26'),incomingId:'enanthate',
+      startDate:'2026-08-27',targetPmol:1500,concMgPerMl:100,stepMl:0.1,weeks:16});
+    check('the solver reports the range it actually holds', !!(r&&r.best&&r.best.lowPmol>0&&r.best.highPmol>0));
+    // Scoring starts once the INCOMING ester has loaded — ~4 half-lives — not at week
+    // 1. Before that the tail is in its steepest decay and the new ester has not
+    // accumulated, and no dose choice changes either. Scoring across it let an
+    // unavoidable startup dominate: a schedule holding 1-3% for twelve weeks scored
+    // 29% on the strength of weeks it could not have affected.
+    check('  …spanning every week after the ester has loaded', (function(){
+      const sw=r.best.settleWeeks;
+      const w=r.best.weekly.slice(sw).map(x=>x.mean);
+      return sw>=1 && Math.abs(r.best.lowPmol-Math.min.apply(null,w))<1
+          && Math.abs(r.best.highPmol-Math.max.apply(null,w))<1;
+    })(), 'settleWeeks='+r.best.settleWeeks);
+    check('  …with drift measured over the whole plan, not the settled tail',
+      r.best.drift>=r.best.settledDrift-1e-9,
+      'whole-plan '+Math.round(r.best.drift*100)+'% vs settled '+Math.round(r.best.settledDrift*100)+'%');
+    // Week 0 is excluded on purpose: the incoming ester has not accumulated yet, and
+    // no dose the solver can pick removes that dip.
+    check('  …excluding week 0, which is accumulation rather than a bad schedule',
+      r.best.weekly.length>1);
+  }
+
+
+  // ── The injection interval is not fixed for a whole protocol ──────────────
+  // "Cadence doesn't have to be static for the period. If it makes sense to start with
+  // very small daily injections for 6 days and then e2d up to e7d, that is totally
+  // fine." A single cadence per compound was a limit of this data model, not of the
+  // pharmacology, and it is what forced the weekly load onto multiples of one syringe
+  // step at one interval.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-28',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const gen = comp => (((G._genInjBatches(P(comp),'c',null)||[])[0]||{}).entries||[]);
+
+    const varying = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:2,freqUnit:'days',
+      dose_phases:[{w:0,d:'10',u:'mg',iv:1},{w:1,d:'25',u:'mg',iv:2},{w:3,d:'90',u:'mg',iv:7}]};
+    const es = gen(varying);
+    const on = d => es.some(e=>e.date===d);
+    check('a phase can carry its own injection interval', es.length>0);
+    check('  …daily in week 0', on('2026-09-01')&&on('2026-09-02')&&on('2026-09-03'));
+    check('  …every 2 days in weeks 1-2',
+      on('2026-09-08')&&on('2026-09-10')&&!on('2026-09-09'));
+    check('  …and weekly from week 3', on('2026-09-22')&&!on('2026-09-23'));
+    check('  …with each phase dosed at its own mg', (function(){
+      const at=d=>(es.find(e=>e.date===d)||{}).dose;
+      return at('2026-09-01')==='10' && at('2026-09-08')==='25' && at('2026-09-22')==='90';
+    })());
+
+    // AN INTERVAL NEEDS AN ORIGIN, AND IT IS THE PHASE'S OWN START. Counting from the
+    // cycle start instead would skip or double an injection at a phase boundary
+    // whenever the new interval did not divide the offset — a dose error produced by
+    // arithmetic the user never sees. Week 1 starts on 08 Sep; E2D from there is
+    // 08/10/12, not 09/11/13 (which is what counting from 01 Sep would give).
+    check('  …counted from the phase start, not the cycle start',
+      on('2026-09-08')&&on('2026-09-10')&&on('2026-09-12')&&!on('2026-09-11'));
+
+    // Phases without `iv` still use the compound's own cadence, so nothing saved moves.
+    const noIv = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:2,freqUnit:'days',
+      dose_phases:[{w:0,d:'50',u:'mg'},{w:2,d:'75',u:'mg'}]};
+    check('a phase with no interval falls back to the compound cadence', (function(){
+      const d=gen(noIv).map(e=>e.date);
+      return d.length===14 && d[0]==='2026-09-01' && d[1]==='2026-09-03';
+    })());
+
+    // Tier parity: the same phase interval works on peptides and Enhanced.
+    const pep={id:'cjc-ipa',name:'CJC/Ipa',times:['AM'],dose_am:'100',unit_am:'mcg',active:true,
+               days:[0,1,2,3,4,5,6], dose_phases:[{w:0,d:'100',u:'mcg',iv:3}]};
+    check('per-phase intervals work on the peptide tier too', (function(){
+      const b=G._genInjBatches({id:'p',cycle_start:'2026-09-01',end_date:'2026-09-14',
+        peptides:[pep],trt:{},enhanced:{}},'c',null)||[];
+      const d=((b[0]&&b[0].entries)||[]).map(e=>e.date);
+      return d.length===5 && d[1]==='2026-09-04';
+    })());
+
+    // The solver can propose one, and what it proposes must be schedulable.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const vhist=[]; const vlast=new Date('2026-08-20T12:00:00');
+    for(let i=0;i<60;i++){const d=new Date(vlast.getTime()-i*2*86400000);
+      vhist.push({compId:'nebido',doseMg:'100',
+        date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+    const vr=G._tcSolveVariable({history:vhist,incomingId:'enanthate',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16},{iters:6});
+    check('the solver can produce a variable-interval schedule',
+      !!(vr&&!vr.degenerate&&vr.phases&&vr.phases.length));
+    check('  …with every phase carrying a usable interval',
+      !!(vr&&vr.phases&&vr.phases.every(p=>p.iv>0&&p.mg>=0)),
+      vr&&vr.phases?vr.phases.map(p=>'w'+p.w+':E'+p.iv+'D'):'');
+    check('  …and a weekly load stated per phase',
+      !!(vr&&vr.phases&&vr.phases.every(p=>p.perWeek>0)));
+    // Interval stability matters as much as the numbers: an interval that changes every
+    // week is unusable however well it scores. The first version chattered
+    // 5,5,5,5,5,5,3,3,3,1,4,3,3,2,2,3 and scored WORSE than a plain fixed cadence.
+    check('  …without the interval chattering week to week', (function(){
+      if(!vr||!vr.intervals) return false;
+      let changes=0;
+      for(let i=1;i<vr.intervals.length;i++) if(vr.intervals[i]!==vr.intervals[i-1]) changes++;
+      return changes<=3;
+    })(), vr&&vr.intervals?vr.intervals.join(','):'');
+  }
+
+
+  // ── Daily with the dose varying between days ──────────────────────────────
+  // "Would locking the cadence to every day and only vary the dose between days help?"
+  // It does, and it dissolves a trade-off stated as fact earlier: a shorter interval
+  // gives coarser weekly control ONLY while every injection is the same dose. Alternate
+  // two adjacent syringe steps and daily gives the lowest peak AND the finest weekly
+  // resolution at once.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-21',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const gen = comp => (((G._genInjBatches(P(comp),'c',null)||[])[0]||{}).entries||[]);
+    const pat = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:1,freqUnit:'days',
+      dose_phases:[{w:0,u:'mg',iv:1,pattern:[50,50,62.5,50,50,50,62.5]},
+                   {w:2,u:'mg',iv:1,pattern:[37.5,37.5,50,37.5,37.5,37.5,50]}]};
+    const es = gen(pat);
+    check('a phase can carry a repeating day pattern', es.length===21, es.length+' entries');
+    check('  …dosing each day from the pattern',
+      es.slice(0,7).map(e=>e.dose).join(' ')==='50 50 62.5 50 50 50 62.5');
+    check('  …repeating it in the following week',
+      es.slice(7,14).map(e=>e.dose).join(' ')==='50 50 62.5 50 50 50 62.5');
+    check('  …and switching pattern at the next phase',
+      es.slice(14,21).map(e=>e.dose).join(' ')==='37.5 37.5 50 37.5 37.5 37.5 50');
+    // A phase with no pattern keeps its single dose, so nothing already saved changes.
+    check('a phase with no pattern still uses its single dose',
+      gen({id:'enanthate',name:'Test E',dose:'50',unit:'mg',cadence:'interval',
+           freqVal:1,freqUnit:'days',dose_phases:[{w:0,d:'40',u:'mg',iv:1}]})
+        .every(e=>e.dose==='40'));
+
+    // The solver's dithered mode.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const dh=[]; const dl=new Date('2026-08-20T12:00:00');
+    for(let i=0;i<60;i++){const d=new Date(dl.getTime()-i*2*86400000);
+      dh.push({compId:'nebido',doseMg:'100',
+        date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+    const dd=G._tcSolveDailyDither({history:dh,incomingId:'enanthate',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16},{iters:10});
+    check('the solver can produce a dithered daily schedule',
+      !!(dd&&!dd.degenerate&&dd.phases&&dd.phases.length));
+    check('  …with every phase a full week of doses',
+      !!(dd&&dd.phases.every(p=>p.pattern&&p.pattern.length===7)));
+    check('  …using at most two adjacent syringe steps in a week', (function(){
+      if(!dd) return false;
+      return dd.phases.every(p=>{
+        const u=[...new Set(p.pattern)].sort((a,b)=>a-b);
+        return u.length<=2 && (u.length<2 || Math.abs((u[1]-u[0])-dd.stepMg)<0.01);
+      });
+    })(), dd?dd.phases.map(p=>[...new Set(p.pattern)].join('/')).join(' '):'');
+    // ONE CANONICAL PATTERN PER WEEKLY LOAD. Running the error diffusion across week
+    // boundaries let the carry rotate the pattern without changing the weekly total —
+    // two weeks both at 238 mg/wk came out as different day arrangements and split into
+    // two phases that read as a change when nothing had changed.
+    check('  …with the same weekly load always giving the same pattern', (function(){
+      if(!dd) return false;
+      const byLoad={};
+      for(const p of dd.phases){
+        const k=p.perWeek;
+        const sig=p.pattern.join(',');
+        if(byLoad[k]&&byLoad[k]!==sig) return false;
+        byLoad[k]=sig;
+      }
+      return true;
+    })());
+    check('  …and a weekly load that rises as the outgoing ester clears',
+      !!(dd&&dd.phases[dd.phases.length-1].perWeek>dd.phases[0].perWeek),
+      dd?dd.phases.map(p=>p.perWeek).join(' -> '):'');
+
+    // Scoring starts after the incoming ester has loaded, so an unavoidable startup
+    // cannot dominate. Before this a schedule holding 1-3% for twelve weeks scored 29%.
+    check('  …scored only after the ester has loaded',
+      !!(dd&&dd.settleWeeks>=1&&dd.settleWeeks<16), dd?('settleWeeks='+dd.settleWeeks):'');
+
+    // ⚠️ AND IT MUST NOT RECOMMEND DAILY FOR A LONG ESTER. Ripple is interval ÷
+    // half-life, so undecanoate is flat at every interval from daily to fortnightly —
+    // a tie-break on smoothness alone would pick 56 injections over 4.
+    const longEster=G.tcSolveTransition({history:dh,incomingId:'nebido',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
+    check('a long ester is not scheduled daily just because it is smooth', (function(){
+      if(!longEster||!longEster.best) return true;   // refused is also acceptable
+      return !longEster.best.cadence.dithered;
+    })(), longEster&&longEster.best?longEster.best.cadence.label:'refused');
+  }
+
+
+  // ── Typing must not tear out the field being typed into ───────────────────
+  // Reported 2026-08-27: "entering a target level hides the keyboard for each
+  // character entered". trtSolveSet re-rendered the whole panel from the input's
+  // oninput handler, which destroys the <input> and takes focus — and therefore the
+  // iOS keyboard — with it. wizSetDose already carries this exact lesson.
+  {
+    const realRerender=G._trtRerender;
+    let rendered=0; G._trtRerender=function(){ rendered++; };
+    G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',
+                                 running:false,result:null,error:''}};
+    '1400'.split('').forEach((ch,i)=>G.trtSolveSet('edit','enanthate','target','1400'.slice(0,i+1)));
+    check('typing a target does not re-render the panel', rendered===0, rendered+' re-renders');
+    check('  …and still stores what was typed', G._trtSolveState.enanthate.target==='1400');
+    G.trtSolveSet('edit','enanthate','weeks','12');
+    check('  …nor does typing a week count', rendered===0, rendered+' re-renders');
+
+    // The selects DO re-render — they change the "= N mg per step" line, and a select
+    // has already dismissed the keyboard by the time it fires.
+    G.trtSolveSet('edit','enanthate','conc','100');
+    check('a select still re-renders, to update the mg-per-step line', rendered===1, rendered);
+    G.trtSolveSet('edit','enanthate','step','0.025');
+    check('  …and so does the draw-volume select', rendered===2, rendered);
+    G._trtRerender=realRerender;
+
+    // A stale result is dropped through its own container, so the input survives.
+    const withRes={target:'1400',conc:'250',weeks:16,step:'0.05',running:false,error:'',
+      result:{target:1400,notes:[],alternatives:[],
+        best:{cadence:{label:'Every 2 days'},phases:[],weekly:[],ripple:0,drift:0,worst:0,
+              lowPmol:1300,highPmol:1500,stepPmol:0,stepMg:12.5}}};
+    G._trtSolveState={enanthate:withRes};
+    const html=G._renderTRTSolve({id:'enanthate'},{},'edit');
+    check('the result lives in a container that can be emptied in place',
+      /id="trt-solve-res-enanthate"/.test(html));
+    check('  …and the markup stays balanced with a result present', (function(){
+      const o=(html.match(/<div/g)||[]).length, c=(html.match(/<\/div>/g)||[]).length;
+      return o===c;
+    })());
+    check('  …and without one', (function(){
+      G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''}};
+      const h2=G._renderTRTSolve({id:'enanthate'},{},'edit');
+      const o=(h2.match(/<div/g)||[]).length, c=(h2.match(/<\/div>/g)||[]).length;
+      return o===c && /id="trt-solve-res-enanthate"/.test(h2);
+    })());
+
+    // The step size is a control now, so the blurb must not name one.
+    check('the blurb does not hardcode a step size', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      const m=src.match(/Name the free-T level you want[\s\S]{0,300}/);
+      return m && !/0\.1 ml steps/.test(m[0]);
+    })());
+    // ⚠️ NAMING. "On-ramp" implies a temporary run-up to something else, which is one
+    // case this covers rather than what it is: building a TRT/Test schedule from a
+    // target free-T level. An outgoing ester still clearing is an input, not the point.
+    check('  …and the feature is not called an on-ramp in the UI', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      // strings the user can actually read — comments may still discuss the history
+      return !/>[^<']*[Oo]n-ramp[^<']*</.test(src)
+          && !/'[^']*Generate on-ramp[^']*'/.test(src);
+    })());
+  }
+
+  // ── THE OUTGOING ESTER'S STILL-SCHEDULED DOSES ARE PART OF THE PROBLEM ─────
+  // Reported from the field: an on-ramp to a 1400 pmol/L target produced a plasma curve
+  // that ran to 2463 pmol/L and then fell away. The solver modelled the outgoing ester
+  // as a tail decaying from the LOGGED history alone, so it never saw that the protocol
+  // still had Nebido booked in every two days. It sized Test E for a gap that never
+  // opened; the curve — which does read the scheduled rows — stacked both.
+  // Measured before the fix: plotted weekly means 1231-2315, exposure peak 2326.
+  {
+    const mk=(n,every,mg,last,id)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:id||'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    const fwd=(n,every,mg,first,id)=>{const o=[],F=new Date(first+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(F.getTime()+i*every*86400000);
+        o.push({compId:id||'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    // Calibrate off a real draw, as the reporting profile is. Without a bloodwork anchor
+    // the curve falls back to a day-0 anchor and the solve is poorly conditioned for
+    // reasons that have nothing to do with the scheduled doses under test here.
+    const _bwSave=G._tcBwEntries;
+    G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
+    const hist=mk(33,2,100,'2026-08-26');
+    const opts={incomingId:'enanthate',startDate:'2026-08-28',targetPmol:1400,
+                concMgPerMl:250,stepMl:0.05,weeks:16};
+    const bare  = G.tcSolveTransition(Object.assign({history:hist},opts));
+    const withSched = G.tcSolveTransition(Object.assign(
+      {history:hist, scheduled:fwd(35,2,100,'2026-08-28')},opts));
+
+    check('a solve with the outgoing ester still scheduled still returns a plan',
+      !!(withSched && withSched.best && withSched.dose_phases.length));
+    // The whole point: knowing more drug is coming, it asks for LESS.
+    const mgOf=r=>r.best.phases.reduce((a,p)=>a+p.perWeek,0)/r.best.phases.length;
+    check('  …and it asks for less new ester than when it assumes the old one stopped',
+      mgOf(withSched) < mgOf(bare),
+      'withSched='+Math.round(mgOf(withSched))+' bare='+Math.round(mgOf(bare)));
+    // And the level it predicts actually holds the target, rather than stacking on top.
+    // Measured: once the incoming ester has loaded, every week sits inside ±5% of 1400.
+    // Before the fix the same inputs plotted 1231-2315 with a 2326 peak.
+    check('  …holding the target instead of stacking on top of the scheduled doses',
+      (function(){
+        const w=withSched.best.weekly.slice(withSched.best.settleWeeks).map(x=>x.mean);
+        return Math.max.apply(null,w) < 1400*1.05 && Math.min.apply(null,w) > 1400*0.95;
+      })(), withSched.best.weekly.map(x=>Math.round(x.mean)).join(' '));
+    // Scheduled rows are FUTURE-dated. Merging them into `history` would push the last
+    // history date past the start date and the anchor guard would refuse every solve.
+    check('  …and future scheduled rows do not trip the anchor guard',
+      !(withSched.notes||[]).some(n=>/starts on or before the last logged injection/.test(n)));
+    // Absent the field, nothing changes for everyone who has genuinely stopped.
+    check('  …while a solve with no scheduled doses is unchanged',
+      JSON.stringify(bare.dose_phases)===JSON.stringify(
+        G.tcSolveTransition(Object.assign({history:hist,scheduled:[]},opts)).dose_phases));
+
+    // ── AN OVERSHOOT INSIDE THE SETTLING WINDOW IS STILL THE SCHEDULE'S FAULT ──
+    // The settling weeks were skipped entirely, which also excused every overshoot in
+    // them. Undershoot there is unavoidable — the incoming ester has not accumulated.
+    // Overshoot never is: dosing less is always available. The reported plan peaked
+    // ~13% over target in week 1 and reported `worst` 6%.
+    check('the headline counts an overshoot during the settling weeks', (function(){
+      const b=withSched.best, sw=b.settleWeeks;
+      if(!(sw>=1)) return false;
+      let over=0;
+      for(let i=0;i<sw;i++){const d=b.weekly[i].peak-1400; if(d>over)over=d;}
+      return over<=0 || b.worst >= (over/1400)-1e-6;
+    })(), 'worst='+Math.round(withSched.best.worst*100)+'% settleWeeks='+withSched.best.settleWeeks);
+    // …but it must NOT count the unavoidable undershoot there, or the settling-window
+    // change would undo the thing it was introduced for.
+    check('  …but not the unavoidable undershoot in those same weeks', (function(){
+      const b=bare.best, sw=b.settleWeeks;
+      let under=0;
+      for(let i=0;i<sw;i++){const d=1400-b.weekly[i].trough; if(d>under)under=d;}
+      return under<=0 || b.worst < (under/1400)-1e-6;
+    })(), 'worst='+Math.round(bare.best.worst*100)+'%');
+    G._tcBwEntries=_bwSave;
+  }
+
+  // The on-ramp must read the scheduled doses from the same place the curve does, and
+  // must exclude the compound it is solving for — those rows are the plan it replaces.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    const m=src.match(/async function trtSolveRun[\s\S]*?\n\}/);
+    check('trtSolveRun feeds the solver the protocol’s scheduled injections',
+      !!(m && /_tcProtocolInjections\(\)/.test(m[0]) && /scheduled:sched/.test(m[0])));
+    check('  …skipping the compound being solved for',
+      !!(m && /if\(eid===_inc\)return;/.test(m[0])));
+  }
+
+  // ── THE SOLVED RAMP MUST LAND IN THE PROTOCOL'S WEEK NUMBERING ────────────
+  // dose_phases are read by the generator as weeks from the PROTOCOL's cycle_start —
+  // the established contract, and what the ramp editor's copy tells the user. The
+  // solver numbers its phases from the ESTER's own start date. For a compound added
+  // partway through a running protocol those differ, and the ramp landed at the wrong
+  // offset: measured on a nine-week gap it was spent in five weeks and then pinned at
+  // its maximum, so it opened above target and had nothing left to rise with when the
+  // outgoing ester cleared. That is the "still decaying instead of holding" report.
+  {
+    const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const _bwSave=G._tcBwEntries;
+    G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
+    // ⚠️ DO NOT PIN A FIXED CADENCE HERE. Pinning e2d to save solve time broke the
+    // premise: a fixed interval anchors its injection days to the protocol's own start,
+    // so two different cycle starts legitimately hit different days and the schedules
+    // are not comparable. The auto-picked winner is the daily dithered plan, where every
+    // day is a hit and the comparison means what it says.
+    const sol=G.tcSolveTransition({history:mk(33,2,100,'2026-08-26'),incomingId:'enanthate',
+      startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
+
+    const weeklyFor=(cycleStart)=>{
+      const stack={cycle_start:cycleStart,cycle_length:40,trt:{enabled:true,compounds:[
+        {id:'enanthate',name:'Test E',dose:'100',unit:'mg',cadence:'days',days:[1],
+         active:true,start_date:'2026-08-28'}]}};
+      const comp=stack.trt.compounds[0];
+      const _eb=G._editBuf, _tc=G._trtComp, _rr=G._trtRerender;
+      G._editBuf=stack; G._trtComp=()=>comp; G._trtRerender=()=>{};
+      G._trtSolveSt('enanthate').result=sol;
+      G.trtSolveApply('edit','enanthate','best');
+      G._editBuf=_eb; G._trtComp=_tc; G._trtRerender=_rr;
+      const rows=[].concat.apply([],(G._genInjBatches(stack,'c',new Date('2026-08-28T12:00:00'))||[])
+        .map(b=>b.entries)).filter(e=>parseFloat(e.dose)>0);
+      const wk={};
+      rows.forEach(e=>{const d=new Date(e.date+'T12:00:00');
+        const w=Math.floor((d-new Date('2026-08-28T12:00:00'))/86400000/7);
+        if(w>=0&&w<16) wk[w]=(wk[w]||0)+parseFloat(e.dose);});
+      const out=[]; for(let w=0;w<16;w++) out.push(Math.round(wk[w]||0));
+      return out;
+    };
+    const aligned=weeklyFor('2026-08-28');     // protocol starts with the ester
+    const offset =weeklyFor('2026-06-26');     // protocol already nine weeks old
+
+    check('a solved ramp generates the same schedule whatever week the protocol started',
+      aligned.join(' ')===offset.join(' '),
+      'aligned='+aligned.join(' ')+'  offset='+offset.join(' '));
+    // The specific failure: spent early and then flat. The last week must still be the
+    // ramp's top, and the first week must not already be near it.
+    check('  …so the ramp still rises across the plan rather than pinning at its top',
+      offset[15]>offset[0] && offset[0]<offset[15]*0.9,
+      offset.join(' '));
+    G._tcBwEntries=_bwSave;
+  }
+
+  // ── T-Calc debug dump, staging only ───────────────────────────────────────
+  // Henrik, 2026-08-27: "Should t-calc have a debug output window in stage? Then I can
+  // give you data instead of screenshots?" Every bug fixed that day was found by
+  // reconstructing the stack from a screenshot and guessing at the inputs.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+    // THE GATE. This file promotes to prod unchanged, so the card must be behind
+    // IS_STAGING or it ships to production.
+    check('the debug card is gated on IS_STAGING', (function(){
+      // The whole card, from its banner to the closing of the guard — not a fixed
+      // window, which was shorter than the markup and failed on a correct gate.
+      const i=src.indexOf('// ── Debug dump — STAGING ONLY');
+      if(i<0) return false;
+      const j=src.indexOf("el.innerHTML = html;", i);
+      if(j<0) return false;
+      const seg=src.slice(i,j);
+      // The guard has to OPEN before any of the markup is appended.
+      const g=seg.indexOf('IS_STAGING'), o=seg.indexOf('tc-debug-out');
+      return g>=0 && o>g;
+    })());
+    check('  …and the dump is the only thing behind that gate in this file',
+      (src.match(/id="tc-debug-out"/g)||[]).length===1);
+
+    // NOTHING AUTHENTICATION-SHAPED. The dump is pasted into a chat.
+    // ⚠️ MATCH IDENTIFIERS, NOT ENGLISH.
+    // The first version banned the substring "session" and failed on the sentence
+    // "none run this session" — prose, not a credential. A word list that cries wolf
+    // on English gets loosened until it protects nothing. These are the actual things
+    // that must never reach a pasted dump.
+    check('the dump reads nothing authentication-shaped', (function(){
+      const m=src.match(/function _tcDebugDump\(\)[\s\S]*?\n\}/);
+      if(!m) return false;
+      return !/(session_token|google_token|google_email|api[_-]?secret|authHeaders|AGENT_URL|\bfetch\s*\(|localStorage)/i.test(m[0]);
+    })());
+    check('  …and neither does the copy handler',
+      (function(){
+        const m=src.match(/function _tcCopyDebugDump\(\)[\s\S]*?\n\}/);
+        return !!m && !/(session_token|google_token|api[_-]?secret|authHeaders|AGENT_URL|\bfetch\s*\()/i.test(m[0]);
+      })());
+
+    // The sections that actually settle a report.
+    const G2=G;
+    const dump=(typeof G2._tcDebugDump==='function')?G2._tcDebugDump():'';
+    check('the dump builds without throwing', !!dump && !/DUMP FAILED/.test(dump), dump.slice(0,200));
+    ['T-CALC DEBUG','PROTOCOL','SCHEDULED AHEAD','LOGGED HISTORY','CALIBRATION',
+     'PLOTTED CURVE','LAST SOLVE'].forEach(function(sec){
+      check('  …and carries the '+sec+' section', dump.indexOf(sec)>=0);
+    });
+
+    // ⚠️ THE PROTOCOL FRAME IS THE POINT — it must never be dropped.
+    // The first version printed "PROTOCOL none selected" and then omitted cycle_start
+    // and every dose_phases block, which is exactly the pairing the ramp-offset bug
+    // turned on. An unresolved target now dumps every stack instead.
+    check('an unresolved target still reports the protocol frame rather than omitting it',
+      /target unresolved|no stacks loaded/.test(dump) || /cycle_start/.test(dump), dump.slice(0,240));
+    check('  …and the source dumps all stacks when the target does not resolve',
+      /var toDump=stk\?\[stk\]:all;/.test(src));
+    // dose_phases are printed with their `w`, because the week ORIGIN was the bug and
+    // is invisible from every other surface.
+    check('  …and labels dose_phases with the origin their w is measured from',
+      /w = weeks from cycle_start/.test(src));
+  }
+
+  // ── Henrik, 2026-08-28: "Fix everything" ──────────────────────────────────
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+    // `from` was read one line before its own declaration, so var-hoisting left it
+    // undefined, the loop never ran and stepPmol was always 0 — the coarse-step warning
+    // could not fire in the one mode where the step size is the whole argument.
+    check('the dither solver declares `from` before it reads it', (function(){
+      const m=src.match(/function _tcSolveDailyDither[\s\S]*?\n\}/);
+      if(!m) return false;
+      const d=m[0].indexOf('var from='), u=m[0].indexOf('for(var sq=from;');
+      return d>=0 && u>d;
+    })());
+
+    // The solve horizon must follow the protocol. 16 hardcoded against a wizard default
+    // of 12 dropped the steepest phases for anyone taking both defaults.
+    check('the solve horizon defaults to the protocol length', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:12};
+      G._trtSolveState={};
+      const st=G._trtSolveSt('enanthate','edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return st.weeks===12;
+    })());
+    check('  …and falls back to 16 for an open-ended protocol', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:0};
+      G._trtSolveState={};
+      const st=G._trtSolveSt('enanthate','edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return st.weeks===16;
+    })());
+    check('  …and the panel warns when the horizon outruns the protocol', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:12};
+      G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''}};
+      const h=G._renderTRTSolve({id:'enanthate'},{},'edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return /will not be scheduled/.test(h);
+    })());
+
+    // A weak anchor still solves, and every number then looks equally confident.
+    check('a single pre-plan draw is reported as weak calibration', (function(){
+      const _bw=G._tcBwEntries;
+      G._tcBwEntries=[{date:'2026-06-26',free_t:'217',total_t:'17',shbg:'45',unit:'pmol/L'}];
+      G._tcp.birthYear='1972'; G._tcp.shbg='45';
+      const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+        for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+          o.push({compId:'nebido',doseMg:String(mg),
+            date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+        return o;};
+      const r=G.tcSolveTransition({history:mk(20,2,100,'2026-08-26'),incomingId:'enanthate',
+        startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:12,cadenceKey:'e2d'});
+      G._tcBwEntries=_bw;
+      return !!(r&&(r.notes||[]).some(n=>/one draw|days before this plan starts/.test(n)));
+    })());
+
+    // The loading peak is an ester property shared by every candidate; ranking on it
+    // let a near-constant choose, picking a plan 3-6% high over one holding target.
+    check('ranking uses the settled window, not the loading peak',
+      /var aw=\(a\.worstSettled==null\)\?a\.worst:a\.worstSettled;/.test(src));
+    check('  …and every scorer reports it', (src.match(/worstSettled:/g)||[]).length>=3);
+  }
+
+  // ── A testosterone arrives with NO dose ───────────────────────────────────
+  // Henrik, 2026-08-28: "Why Dafuk would there be a default dose to start with?"
+  // It was quick-add convenience, and for a dosing app that is the wrong trade: the
+  // dose IS the clinical decision, and a pre-filled one is indistinguishable from a
+  // chosen one. It scheduled real injections and drove the plasma curve — a user who
+  // asked only for a 1400 pmol/L target had 125 mg every Monday scheduled for them.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('adding a testosterone does not invent a dose', (function(){
+      // every TRT add path, wizard and editor
+      const adds=stk.match(/_(wiz|editBuf)\.trt\.compounds\.push\(\{[^}]*\}/g)||[];
+      return adds.length>=3 && adds.every(a=>/dose:''/.test(a));
+    })(), (stk.match(/_(wiz|editBuf)\.trt\.compounds\.push\(\{[^}]*\}/g)||[]).length+' add paths');
+    // The CADENCE default stays — a schedule shape is visible and changeable; a
+    // milligram figure the app invented is a decision made for the user.
+    check('  …but it keeps a cadence to start from',
+      /_wiz\.trt\.compounds\.push\(\{[^}]*freqUnit:/.test(stk));
+
+    check('a testosterone with no dose schedules nothing', (function(){
+      const mk=(dose)=>({cycle_start:'2026-08-28',cycle_length:12,trt:{enabled:true,compounds:[
+        {id:'enanthate',name:'Testosterone Enanthate',dose:dose,unit:'mg',
+         freqVal:1,freqUnit:'weeks',days:[1],active:true}]}});
+      const rows=(st)=>[].concat.apply([],(G._genInjBatches(st,'c',new Date('2026-08-28T12:00:00'))||[])
+        .map(b=>b.entries));
+      return rows(mk('')).length===0 && rows(mk('125')).length>0;
+    })());
+    // The peptide branch always guarded this; the TRT branch pushed regardless, which
+    // stayed invisible only while every testosterone arrived pre-filled.
+    check('  …and the guard is in the generator, not just the add path',
+      /if\(!\(parseDec\(_dpd\.dose\)>0\)\)continue;/.test(stk));
+  }
+
+  // ── Orphaned scheduled doses must be visible ──────────────────────────────
+  // There is an open bug in which testosterone doses survive a delete that should reach
+  // them; the delete keys on (cycle_id, compound_id) and neither is visible from the UI.
+  // Henrik tests by deleting and recreating a protocol every time, so rows left behind
+  // would silently drive every subsequent curve.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+    check('scheduled rows carry the protocol that made them',
+      /cycleId: e\.cycle_id \|\| ''/.test(src));
+    check('  …and the dump flags rows no live protocol owns',
+      /NO SUCH PROTOCOL/.test(src) && /belong to no existing protocol/.test(src));
+    check('  …grouping by protocol as well as compound',
+      /var k=\(e\.compId\|\|'\?'\)\+'\\u0000'\+\(e\.cycleId\|\|''\);/.test(src));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -6362,11 +7364,25 @@ console.log('\n── Source-code structural assertions ────────
 
   // _refreshTRTGuide: TRT guide highlight updates when frequency changes
   check('source: _refreshTRTGuide function defined', tsJs.includes('function _refreshTRTGuide('));
-  check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  // Window widened 2026-08-20: _renderEditTRT now opens with the tier-1 locked branch,
-  // which pushed the handler past the old 4000-char slice.
-  check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  // The per-tier day/frequency handlers the shared control replaced. Verified dead
+  // before removal — no dynamic dispatch anywhere in the app, and none of the 16
+  // rendered schedule surfaces emitted them. Pinned so they cannot come back as
+  // orphans if someone reintroduces a per-tier picker without wiring it up.
+  ['editToggleDay','wizToggleDay','editSetTRTDays','wizSetTRTDays','wizSetTRTFreq','wizSetTRTFreqUnit']
+    .forEach(function(fn){
+      check('  …'+fn+' is gone, not orphaned', !tsJs.includes('function '+fn+'('));
+    });
+  // wizSetTRTFreq / wizSetTRTFreqUnit were removed once the shared schedule control
+  // replaced the per-tier handlers (2026-08-26). Both surfaces now go through
+  // trtSetFreqVal / trtSetFreqUnit, asserted below — trtSetFreqVal refreshes the guide
+  // in place (it must not re-render, or the input being typed into loses its caret),
+  // while trtSetFreqUnit re-renders the whole panel and the guide comes with it.
+  check('source: trtSetFreqUnit re-renders rather than refreshing in place',
+    (function(){var m=tsJs.match(/function trtSetFreqUnit\([\s\S]{0,300}/);return m&&m[0].includes('_trtRerender');})());
+  // The editor's inline freqVal handler moved into trtSetFreqVal when the schedule
+  // control was shared across tiers (2026-08-26), so the guide refresh is asserted
+  // where it now lives rather than by scanning _renderEditTRT's source window.
+  check('source: trtSetFreqVal calls _refreshTRTGuide', (function(){var m=tsJs.match(/function trtSetFreqVal\([\s\S]{0,300}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,5200}/);return m&&m[0].includes("id=\"trt-guide-");})());
   check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('trt-guide-');})());
 
@@ -11376,8 +12392,9 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every text dose input declares inputmode="decimal"', _textDose.length===0,
     _textDose.length+' dose input(s) missing inputmode');
   const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
-  // 10 since the TRT dose-ramp phase input (ester transitions) was added.
-  check('all 10 dose inputs are covered', _withMode.length===10, 'found '+_withMode.length);
+  // 11: +1 for the TRT dose-ramp phase input and +1 for the auto on-ramp target
+  // field, both added with ester transitions.
+  check('all 11 dose inputs are covered', _withMode.length===11, 'found '+_withMode.length);
 
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.

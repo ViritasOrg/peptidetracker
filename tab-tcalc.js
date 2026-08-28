@@ -1305,7 +1305,8 @@ function _tcProtocolInjections(){
       if (unit !== 'mg') return;
       var mg = parseDec(e.dose);
       if (!(mg > 0)) return;
-      out.push({ compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date, source: 'protocol' });
+      out.push({ compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date,
+                 source: 'protocol', cycleId: e.cycle_id || '' });
     });
   });
   return out;
@@ -2449,6 +2450,1116 @@ function _tcFreeTSeries(sorted, hooks) {
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
 
+// ── ESTER TRANSITION SOLVER ──────────────────────────────────────────────────
+// Given the tail of an outgoing ester and a target free-T level, work out the
+// cadence and the per-injection dose of the incoming ester — as a week-by-week
+// ramp — that holds free T at the target while the tail decays.
+//
+// ⚠️ THIS INVERTS THE MODEL, IT DOES NOT INVENT ONE. Every candidate schedule is
+// scored by _tcFreeTSeries — the same function that draws the curve, calibrated
+// from the user's own bloodwork. There is no separate pharmacology here and there
+// must never be: a solver that disagreed with the plotted curve would be telling
+// the user two different things about the same protocol.
+//
+// It solves for the SCHEDULE, never for the TARGET. The user chooses the level;
+// above the healthy-young-male ceiling the app says that is unmeasured territory
+// (FREE_T_REFERENCE.above_ceiling_note) and still computes what was asked.
+//
+// Doses are quantised to whole syringe steps (default 0.1 ml) because that is what
+// can actually be drawn. Quantising CHANGES the result, so every phase is re-scored
+// after snapping and the returned levels are the snapped ones — never the
+// continuous solution the bisection found.
+
+// What a 1 ml syringe can actually be drawn to. 0.05 ml is five units on a 100-unit
+// barrel — comfortably readable — and it matters far more than it looks: at 250 mg/ml
+// the difference between 0.1 and 0.05 ml steps is the difference between a dose that
+// sits flat for six weeks while the outgoing tail decays under it, and one that
+// tracks the decay. Measured on the same solve: 0.1 ml holds 1367-1557 with four
+// consecutive falling weeks, 0.05 ml holds 1398-1553, and 0.01 ml holds 1487-1553
+// with no meaningful sag at all. The vial concentration never changed.
+var _TC_SOLVE_STEP_ML   = 0.05;
+var _TC_SOLVE_MAX_ITER  = 40;    // bisection depth; ~1e-6 mg on a 0–2000 bracket
+var _TC_SOLVE_HI_MG     = 2000;  // upper bracket per injection
+var _TC_SOLVE_DAMPING   = 0.5;   // see the note in the iteration loop  // upper bracket per injection
+
+// Candidate cadences, in the shape _genInjBatches actually schedules.
+// days[] for weekday-based dosing, freqVal/freqUnit for interval-based.
+var _TC_CADENCES = [
+  {key:'e2d',  label:'Every 2 days',            freqVal:2, freqUnit:'days', perWeek:3.5},
+  {key:'e3d',  label:'Every 3 days',            freqVal:3, freqUnit:'days', perWeek:7/3},
+  {key:'2xwk', label:'Twice weekly (Mon/Thu)',  days:[1,4],                 perWeek:2},
+  {key:'1xwk', label:'Once weekly (Mon)',       days:[1],                   perWeek:1}
+];
+
+function _tcSolveDayKey(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+// Injection dates for one cadence over [start, start+weeks), as Date objects.
+function _tcSolveDates(cad, startDate, weeks){
+  var out=[], start=new Date(startDate+'T12:00:00');
+  var end=new Date(start.getTime()+weeks*7*86400000);
+  if(cad.days&&cad.days.length){
+    for(var d=new Date(start); d<end; d.setDate(d.getDate()+1))
+      if(cad.days.indexOf(d.getDay())>=0) out.push(new Date(d));
+  }else{
+    var step=cad.freqUnit==='weeks'?cad.freqVal*7:cad.freqVal;
+    for(var t=new Date(start); t<end; t.setDate(t.getDate()+step)) out.push(new Date(t));
+  }
+  return out;
+}
+// Free-T series (pmol/L per day) for a set of injection events.
+function _tcSolveSeries(events){
+  var sorted=events.slice().sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  if(!sorted.length) return null;
+  var r=_tcFreeTSeries(sorted,{});
+  if(!r) return null;
+  var out=new Float64Array(r.totalDays+1);
+  for(var t=0;t<=r.totalDays;t++) out[t]=r.total[t]*(r.calFT_arr?r.calFT_arr[t]:r.scale);
+  return {ft:out, firstMs:r.firstDate.getTime(), totalDays:r.totalDays, tier:r.tier};
+}
+function _tcSolveDayIndex(ser,dateMs){
+  return Math.max(0, Math.min(ser.totalDays, Math.round((dateMs-ser.firstMs)/86400000)));
+}
+// Mean / peak / trough of the free-T curve over a window.
+function _tcSolveWindowStats(ser,fromMs,toMs){
+  var a=_tcSolveDayIndex(ser,fromMs), b=_tcSolveDayIndex(ser,toMs);
+  if(b<=a)b=a+1;
+  var sum=0,n=0,pk=0,tr=Infinity;
+  for(var t=a;t<=b&&t<=ser.totalDays;t++){
+    var v=ser.ft[t]; sum+=v; n++;
+    if(v>pk)pk=v; if(v<tr)tr=v;
+  }
+  return {mean:n?sum/n:0, peak:pk, trough:isFinite(tr)?tr:0};
+}
+
+// Snap a dose to whole syringe steps — what can actually be drawn up.
+function _tcSolveSnap(mg, stepMg){
+  if(!(stepMg>0)) return Math.round(mg*10)/10;
+  return Math.round(mg/stepMg)*stepMg;
+}
+// ── HOW THE SOLVE WORKS, AND WHY IT IS NOT A BISECTION ─────────────────────
+// Bisecting each week against the model costs ~40 model rebuilds per week per
+// cadence — 2,500+ rebuilds at ~85 ms each, which is four minutes on a phone. It
+// also throws away the one thing that makes this tractable.
+//
+// total[] is EXACTLY linear in the candidate doses: each injection contributes
+// ke*PkConc(dose*bioav*frac, ...), proportional to dose. Free T is then a smooth
+// monotone function of total[]. So two probe runs give a per-week sensitivity
+// (pmol/L per mg per injection) that is accurate enough to drive a fixed-point
+// iteration, and 4-5 further rebuilds converge it. ~7 model calls per cadence
+// instead of 640, and every value still comes from _tcFreeTSeries — the same
+// function that draws the curve.
+//
+// ⚠️ THE CALIBRATION MUST BE PINNED BY HISTORY THAT PRE-DATES THE ANCHOR.
+// TT_base is solved as TT_at_draw * P / total[anchorDay]. If a candidate injection
+// lands on or before the anchor day it moves total[anchorDay], TT_base moves
+// inversely, and the two cancel — the curve comes back pinned to the measurement no
+// matter what dose was proposed, and the solver silently converges on nonsense.
+// Candidates must start strictly AFTER the anchor. _tcSolveAnchorGuard checks it.
+
+// ── WHY THE DOSE SEQUENCE IS CONSTRAINED, NOT JUST FITTED ───────────────────
+// Hitting the target in every week independently is an UNDERSPECIFIED objective. A
+// dose in week 0 is still largely on board in week 1, so "280 mg then 0 mg" hits the
+// target in both weeks and is a perfectly good solution to the arithmetic — and a
+// nonsensical instruction to give a person. The first working version produced
+// exactly that.
+//
+// The physics says more: the outgoing ester's tail rises to a peak and then decays
+// monotonically, so the top-up needed to hold a fixed level FALLS until that peak and
+// RISES from then on. Imposing that shape is not smoothing for looks — it is the
+// missing half of the problem statement.
+//
+// Pool-adjacent-violators gives the least-squares projection onto that shape, so the
+// constraint costs the smallest change to the fitted doses that makes them monotone.
+function _tcPava(v){
+  var val=[], wt=[];
+  for(var i=0;i<v.length;i++){
+    var cv=v[i], cw=1;
+    while(val.length&&val[val.length-1]>cv){
+      var pv=val.pop(), pw=wt.pop();
+      cv=(cv*cw+pv*pw)/(cw+pw); cw+=pw;
+    }
+    val.push(cv); wt.push(cw);
+  }
+  var out=[], k=0;
+  for(var j=0;j<val.length;j++) for(var m=0;m<wt[j];m++) out[k++]=val[j];
+  return out;
+}
+// Project onto "non-increasing up to the tail peak, non-decreasing after it".
+function _tcMonotoneShape(doses, peakWeek){
+  var W=doses.length;
+  var p=Math.max(0,Math.min(W-1,peakWeek|0));
+  var head=doses.slice(0,p+1).reverse();          // reversed => non-decreasing
+  head=_tcPava(head).reverse();
+  var tail=_tcPava(doses.slice(p));
+  var out=head.slice(0,p).concat(tail);
+  return out.map(function(d){return d>0?d:0;});
+}
+
+// Everything already on board or already committed, before this candidate ramp adds
+// anything: the logged past plus whatever the protocol still has scheduled for the
+// OTHER testosterone compounds. Every evaluator starts from this, so all three model
+// the same world.
+function _tcSolveBaseEvents(ctx){
+  return (ctx.scheduled && ctx.scheduled.length)
+    ? ctx.history.concat(ctx.scheduled)
+    : ctx.history;
+}
+
+// Per-week mean free T for a candidate ramp. `doses[w]` is mg per injection in week w.
+function _tcSolveEvaluate(ctx, cad, dates, doses){
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var evts=_tcSolveBaseEvents(ctx).slice();
+  dates.forEach(function(d){
+    var w=Math.floor((d.getTime()-startMs)/(7*86400000));
+    var mg=doses[w]||0;
+    if(mg>0) evts.push({compId:ctx.incomingId, doseMg:String(mg), date:_tcSolveDayKey(d)});
+  });
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var weekly=[];
+  for(var w2=0; w2<ctx.weeks; w2++){
+    var f=startMs+w2*7*86400000;
+    weekly.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return {weekly:weekly, events:evts, series:ser};
+}
+
+// ── CHOOSING THE INTERVAL, PER PHASE ────────────────────────────────────────
+// The interval is the other half of the dosing decision, and it does not have to be
+// constant across a transition. Weekly load = dose ÷ interval, so for a given weekly
+// requirement:
+//
+//   too LONG  and the per-injection dose is large -> a high peak, and peaks are what
+//             drive side effects
+//   too SHORT and the per-injection dose falls below one syringe step, so it cannot be
+//             drawn at all, or lands on a step so coarse the weekly load is wrong
+//
+// Both bite hardest at the two ends of an ester transition: the first weeks need a
+// tiny top-up (the outgoing tail is still high) and the last weeks need a full
+// replacement dose. A single interval cannot serve both, which is why the level sagged
+// between dose steps.
+//
+// The rule: take the SHORTEST interval that still puts the per-injection dose at or
+// above the resolution floor. Shortest keeps the peak lowest, which is the stated
+// priority; the floor is what stops it asking for an undrawable dose. Ties go to the
+// interval whose quantised dose lands closest to the weekly requirement.
+var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
+// A dose below this many syringe steps cannot be set accurately enough to be worth
+// scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
+var _TC_IV_MIN_STEPS = 2;
+
+// TWO PRESSURES PULL THE INTERVAL IN OPPOSITE DIRECTIONS, and neither wins outright:
+//
+//   shorter -> lower peak (peaks drive sides), but COARSER weekly resolution, because
+//              one syringe step is spread over more injections. At 12.5 mg steps, daily
+//              dosing moves the weekly load 87.5 mg at a time.
+//   longer  -> finer weekly resolution and a drawable dose when the requirement is
+//              small, but a higher peak.
+//
+// The first attempt at this picked, per week, whichever interval hit the weekly load
+// most accurately. That let accuracy outrank everything and the interval chattered
+// — 5,5,5,5,5,5,3,3,3,1,4,3,3,2,2,3 — which is both unusable and worse on the metric
+// (31% worst against 11% for a plain fixed E2D).
+//
+// So the interval is not chosen by a formula. A few coherent STRATEGIES are generated,
+// each keeping the per-injection dose inside a band of syringe steps with hysteresis so
+// it changes only when it has to, and each is scored by the same model as everything
+// else. Whichever actually holds the target best wins. That is the same principle the
+// rest of this solver runs on: propose, measure, rank — never assert.
+function _tcIvForLoad(weeklyMg, stepMg, maxIv, curIv, loSteps, hiSteps){
+  if(!(weeklyMg>0)||!(stepMg>0)) return curIv||maxIv;
+  var stepsAt=function(iv){ return Math.round((weeklyMg*iv/7)/stepMg); };
+  // Keep the current interval while it still lands inside the band — that is the
+  // hysteresis, and it is what stops one-week wobbles rewriting the schedule.
+  if(curIv){
+    var st=stepsAt(curIv);
+    if(st>=loSteps&&st<=hiSteps&&curIv<=maxIv) return curIv;
+  }
+  // Otherwise take the SHORTEST interval that reaches the floor — shortest keeps the
+  // peak down, which is the stated priority — and only lengthen when nothing else does.
+  for(var i=0;i<_TC_IV_CANDIDATES.length;i++){
+    var iv=_TC_IV_CANDIDATES[i];
+    if(maxIv&&iv>maxIv) continue;
+    var st2=stepsAt(iv);
+    if(st2>=loSteps&&st2<=hiSteps) return iv;
+  }
+  for(var j=0;j<_TC_IV_CANDIDATES.length;j++){
+    var iv2=_TC_IV_CANDIDATES[j];
+    if(maxIv&&iv2>maxIv) continue;
+    if(stepsAt(iv2)>=loSteps) return iv2;
+  }
+  return maxIv||_TC_IV_CANDIDATES[_TC_IV_CANDIDATES.length-1];
+}
+// Build a whole interval schedule for one band, walking forward so hysteresis applies.
+function _tcIvSchedule(loadWk, stepMg, maxIv, loSteps, hiSteps){
+  var out=[], cur=null;
+  for(var w=0;w<loadWk.length;w++){
+    cur=_tcIvForLoad(loadWk[w], stepMg, maxIv, cur, loSteps, hiSteps);
+    out.push(cur);
+  }
+  return out;
+}
+// The bands tried. Narrow-and-low favours short intervals and low peaks; wide-and-high
+// favours fewer, larger injections and finer weekly control.
+var _TC_IV_BANDS = [[2,4],[2,6],[3,8],[4,12],[6,20]];
+
+// ── VARIABLE-CADENCE SOLVE ──────────────────────────────────────────────────
+// Solves the weekly LOAD first, then expresses each week as (interval, dose). The
+// fixed-interval path solves per-injection mg directly, which silently fixes the
+// weekly load to a multiple of stepMg×7/interval — the granularity that made the level
+// sag between steps. Working in weekly mg removes that: the interval is free to change
+// so the load can land where it needs to.
+//
+// Scored by the same _tcSolveEvaluate as everything else, on a schedule built from the
+// per-week intervals, so the number reported is the number the model produces.
+function _tcSolveDatesPhased(startDate, weeks, ivByWeek){
+  var out=[], start=new Date(startDate+'T12:00:00');
+  var w=0;
+  while(w<weeks){
+    var iv=ivByWeek[w]||1;
+    // Run this interval until the week it changes, counting from THIS phase's start —
+    // the same origin the generator uses, or the preview would not match the schedule.
+    var wEnd=w; while(wEnd<weeks && (ivByWeek[wEnd]||1)===iv) wEnd++;
+    var segStart=new Date(start.getTime()+w*7*86400000);
+    var segEnd=new Date(start.getTime()+wEnd*7*86400000);
+    for(var t=new Date(segStart); t<segEnd; t.setDate(t.getDate()+iv)) out.push({d:new Date(t), w:w, iv:iv});
+    w=wEnd;
+  }
+  return out;
+}
+function _tcSolveEvaluatePhased(ctx, sched, mgByWeek){
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var evts=_tcSolveBaseEvents(ctx).slice();
+  sched.forEach(function(s){
+    var wk=Math.floor((s.d.getTime()-startMs)/(7*86400000));
+    var mg=mgByWeek[wk]||0;
+    if(mg>0) evts.push({compId:ctx.incomingId, doseMg:String(mg), date:_tcSolveDayKey(s.d)});
+  });
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var weekly=[];
+  for(var w2=0; w2<ctx.weeks; w2++){
+    var f=startMs+w2*7*86400000;
+    weekly.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return {weekly:weekly, events:evts};
+}
+function _tcSolveVariable(ctx, opts){
+  opts=opts||{};
+  var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  var W=ctx.weeks;
+  var cd=_tcCompInfo(ctx.incomingId);
+  // Cap the interval at roughly the ester's half-life. Beyond that the peak-to-trough
+  // swing climbs fast, and the user's priority is explicitly to hold peaks down.
+  var maxIv=Math.max(1, Math.round((cd.halfLifeDays||3)));
+
+  // Reference pass at a fixed short interval, purely to learn the weekly LOAD needed.
+  var refIv=Math.max(1,Math.min(2,maxIv));
+  var refSched=_tcSolveDatesPhased(ctx.startDate,W,new Array(W).fill(refIv));
+  var base=_tcSolveEvaluatePhased(ctx, refSched, new Array(W).fill(0));
+  var probeMg=Math.max(stepMg,50);
+  var probe=_tcSolveEvaluatePhased(ctx, refSched, new Array(W).fill(probeMg));
+  if(!base||!probe) return null;
+  var sens=[], neg=0;
+  for(var w=0;w<W;w++){
+    var dz=(probe.weekly[w].mean-base.weekly[w].mean)/probeMg;
+    if(dz<-1e-9)neg++;
+    sens.push(dz>1e-9?dz:0);
+  }
+  if(neg>0) return {degenerate:true, negWeeks:neg};
+  var firstSens=sens.find(function(v){return v>0;})||0;
+
+  // Weekly mg per reference injection -> weekly load.
+  var perWkRef=7/refIv;
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _vl=_tcCompInfo(ctx.incomingId);
+  var _loadWv=Math.min(W-1,Math.max(1,Math.ceil(4*(_vl.halfLifeDays||3)/7)));
+  var sensRefV=0,_srv=0;
+  for(var _sv2=_loadWv;_sv2<W;_sv2++){ if(sens[_sv2]>0){sensRefV+=sens[_sv2];_srv++;} }
+  sensRefV=_srv?sensRefV/_srv:0;
+  var loadWk=[];
+  for(var s0=0;s0<W;s0++){
+    var k=sens[s0]>0?sens[s0]:firstSens;
+    if(s0<_loadWv&&sensRefV>k)k=sensRefV;
+    var perInj=k>0?Math.max(0,(ctx.targetPmol-base.weekly[s0].mean)/k):0;
+    loadWk.push(perInj*perWkRef);
+  }
+  // Same shape constraint and damping as the fixed path — the tail decays monotonically
+  // once past its peak, so the required LOAD does too.
+  var peakWeek=0,peakVal=-Infinity;
+  for(var pw=0;pw<W;pw++){ if(base.weekly[pw].mean>peakVal){peakVal=base.weekly[pw].mean;peakWeek=pw;} }
+  loadWk=_tcMonotoneShape(loadWk,peakWeek);
+
+  var ivWk=[], mgWk=[], evalRes=null;
+  for(var it=0; it<(opts.iters||6); it++){
+    // Try every band on the current load profile and keep the one the MODEL says
+    // holds the target best, rather than trusting any single heuristic.
+    var bestBand=null;
+    for(var bi=0; bi<_TC_IV_BANDS.length; bi++){
+      var iv2=_tcIvSchedule(loadWk, stepMg, maxIv, _TC_IV_BANDS[bi][0], _TC_IV_BANDS[bi][1]);
+      var mg2=[];
+      for(var q2=0;q2<W;q2++){
+        var per=loadWk[q2]*iv2[q2]/7;
+        mg2.push(loadWk[q2]>0?Math.max(0,Math.round(per/stepMg)*stepMg):0);
+      }
+      var sc=_tcSolveEvaluatePhased(ctx,_tcSolveDatesPhased(ctx.startDate,W,iv2),mg2);
+      if(!sc) continue;
+      var wst=0;
+      for(var z2=(W>1?1:0);z2<sc.weekly.length;z2++){
+        var a1=Math.abs(sc.weekly[z2].peak-ctx.targetPmol), a2=Math.abs(sc.weekly[z2].trough-ctx.targetPmol);
+        if((a1>a2?a1:a2)>wst)wst=(a1>a2?a1:a2);
+      }
+      if(!bestBand||wst<bestBand.wst) bestBand={iv:iv2, mg:mg2, sc:sc, wst:wst};
+    }
+    if(!bestBand) return null;
+    ivWk=bestBand.iv; mgWk=bestBand.mg; evalRes=bestBand.sc;
+    var moved=0;
+    for(var w2=0;w2<W;w2++){
+      var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(w2<_loadWv&&sensRefV>k2)k2=sensRefV;
+      if(!(k2>0)) continue;
+      var deltaPerInj=_TC_SOLVE_DAMPING*(ctx.targetPmol-evalRes.weekly[w2].mean)/k2;
+      var next=Math.max(0, loadWk[w2]+deltaPerInj*perWkRef);
+      moved=Math.max(moved,Math.abs(next-loadWk[w2]));
+      loadWk[w2]=next;
+    }
+    loadWk=_tcMonotoneShape(loadWk,peakWeek);
+    if(moved<stepMg*0.1) break;
+  }
+  var finalSched=_tcSolveDatesPhased(ctx.startDate,W,ivWk);
+  var fin=_tcSolveEvaluatePhased(ctx, finalSched, mgWk);
+  if(!fin) return null;
+
+  // Phases: a new one wherever the interval OR the dose changes.
+  var phases=[], prevIv=null, prevMg=null;
+  for(var pz=0;pz<W;pz++){
+    if(prevIv===null||ivWk[pz]!==prevIv||Math.abs(mgWk[pz]-prevMg)>=stepMg*0.5){
+      phases.push({w:pz, mg:mgWk[pz], iv:ivWk[pz],
+                   ml:Math.round((mgWk[pz]/ctx.concMgPerMl)*100)/100,
+                   perWeek:Math.round(mgWk[pz]*7/ivWk[pz])});
+      prevIv=ivWk[pz]; prevMg=mgWk[pz];
+    }
+  }
+  var weekly=fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,
+                                                 mg:mgWk[i], iv:ivWk[i]};});
+  // ⚠️ ALL THREE SOLVERS MUST SCORE ON THE SAME WINDOW.
+  // This skipped week 0 only, while the fixed and daily paths skip a settling window
+  // derived from the incoming ester (three weeks for enanthate). `worst` was therefore
+  // measured over a different span for each solver — and the three are ranked directly
+  // against each other on it, so the variable path was carrying two extra of the
+  // hardest weeks and losing for it. The window is a property of the ester, not of
+  // which solver happened to produce the plan.
+  var _vi=_tcCompInfo(ctx.incomingId);
+  var settleWeeks=Math.min(W-1, Math.max(1, Math.ceil(4*(_vi.halfLifeDays||3)/7)));
+  var from=(W>1)?settleWeeks:0, rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
+  for(var z=from;z<weekly.length;z++){
+    if(weekly[z].mean>0){ rp+=(weekly[z].peak-weekly[z].trough)/weekly[z].mean; rn++; }
+    err+=Math.abs(weekly[z].mean-ctx.targetPmol); en++;
+    if(weekly[z].mean<wLo)wLo=weekly[z].mean;
+    if(weekly[z].mean>wHi)wHi=weekly[z].mean;
+    var dh=weekly[z].peak-ctx.targetPmol, dl=ctx.targetPmol-weekly[z].trough;
+    var dv=(dh>dl?dh:dl);
+    if(dv>worst)worst=dv;
+  }
+  // …and, as in the other two, an overshoot inside the settling window is scored even
+  // though the undershoot there is not.
+  for(var zv=0;zv<from&&zv<weekly.length;zv++){
+    var ov=weekly[zv].peak-ctx.targetPmol;
+    if(ov>worst)worst=ov;
+  }
+  var worstSettledV=0;
+  for(var wsv=from; wsv<weekly.length; wsv++){
+    var vHi=weekly[wsv].peak-ctx.targetPmol, vLo=ctx.targetPmol-weekly[wsv].trough;
+    var vd=(vHi>vLo?vHi:vLo);
+    if(vd>worstSettledV)worstSettledV=vd;
+  }
+  worstSettledV=ctx.targetPmol>0?worstSettledV/ctx.targetPmol:Infinity;
+  return {worstSettled:worstSettledV,
+          cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
+          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
+          ripple:rn?rp/rn:Infinity,
+          drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
+          worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
+          meanErr:en?err/en:Infinity,
+          lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
+          settledDrift:0, settledErr:0, stepPmol:0, stepMg:stepMg,
+          events:fin.events, baseWeekly:base.weekly};
+}
+
+// Daily evaluator. Module-level, like the other two, so tests can stub every path the
+// solver can take — a closure here meant the degenerate-calibration guard could be
+// stubbed for the fixed and phased paths but not this one, and the daily path then saw
+// the real model and won, making the guard look broken.
+function _tcSolveEvaluateDaily(ctx, days, mgByDay){
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var evts=_tcSolveBaseEvents(ctx).slice();
+  for(var k=0;k<days.length;k++){
+    if(mgByDay[k]>0) evts.push({compId:ctx.incomingId, doseMg:String(mgByDay[k]), date:_tcSolveDayKey(days[k])});
+  }
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var weekly=[];
+  for(var w=0;w<ctx.weeks;w++){ var f=startMs+w*7*86400000;
+    weekly.push(_tcSolveWindowStats(ser,f,f+7*86400000)); }
+  return {weekly:weekly, events:evts};
+}
+
+// ── DAILY, WITH THE DOSE VARYING BETWEEN DAYS ───────────────────────────────
+// The best schedule for coming off a long ester, and the one that dissolves the
+// interval trade-off entirely. Daily injections give the lowest possible peak; letting
+// the dose differ between days gives the finest possible control of the weekly load,
+// because alternating two adjacent syringe steps puts the weekly average anywhere
+// between them. A fixed interval with a uniform dose can have one or the other.
+//
+// The dose sequence is error diffusion: each day take the step nearest the running
+// requirement and carry the rounding error into the next day. Over a week that lands
+// the average on the requirement while only ever using two adjacent, drawable doses —
+// e.g. 50 50 62.5 50 50 50 62.5.
+//
+// Measured against a Nebido tail at 250 mg/ml and 0.05 ml steps, target 1400: holds
+// 1-3% off target from week 4 onward with 8% within-week ripple, where a fixed
+// every-2-days wanders up to 8% off and is still drifting down at week 15 at 14%.
+function _tcSolveDailyDither(ctx, opts){
+  opts=opts||{};
+  var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  var W=ctx.weeks, D=W*7;
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var days=[]; for(var i=0;i<D;i++) days.push(new Date(startMs+i*86400000));
+
+  var evalDaily=function(mgByDay){ return _tcSolveEvaluateDaily(ctx,days,mgByDay); };
+  var zero=evalDaily(new Array(D).fill(0));
+  var probeMg=Math.max(stepMg*2,25);
+  var probe=evalDaily(new Array(D).fill(probeMg));
+  if(!zero||!probe) return null;
+  var sens=[], neg=0;
+  for(var w2=0;w2<W;w2++){
+    var dz=(probe.weekly[w2].mean-zero.weekly[w2].mean)/probeMg;
+    if(dz<-1e-9)neg++;
+    sens.push(dz>1e-9?dz:0);
+  }
+  if(neg>0) return {degenerate:true, negWeeks:neg};
+  var firstS=sens.find(function(v){return v>0;})||0;
+
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _dl=_tcCompInfo(ctx.incomingId);
+  var _loadW=Math.min(W-1,Math.max(1,Math.ceil(4*(_dl.halfLifeDays||3)/7)));
+  var sensRef=0,_srn=0;
+  for(var _sr=_loadW;_sr<W;_sr++){ if(sens[_sr]>0){sensRef+=sens[_sr];_srn++;} }
+  sensRef=_srn?sensRef/_srn:0;
+  var needW=[];
+  for(var s0=0;s0<W;s0++){
+    var k0=sens[s0]>0?sens[s0]:firstS;
+    if(s0<_loadW&&sensRef>k0)k0=sensRef;
+    needW.push(k0>0?Math.max(0,(ctx.targetPmol-zero.weekly[s0].mean)/k0):0);
+  }
+  var peakWeek=0,pv=-Infinity;
+  for(var pw=0;pw<W;pw++){ if(zero.weekly[pw].mean>pv){pv=zero.weekly[pw].mean;peakWeek=pw;} }
+  needW=_tcMonotoneShape(needW,peakWeek);
+
+  // ONE CANONICAL PATTERN PER WEEKLY LOAD. Running the error diffusion continuously
+  // across week boundaries let the carry rotate the pattern from week to week without
+  // changing the weekly total — weeks 4 and 5 both came out at 238 mg/wk but as
+  // "25 37.5 37.5 37.5 25 37.5 37.5" and "37.5 25 37.5 37.5 25 37.5 37.5". Those are
+  // the same instruction written two ways, and they split into two phases the user has
+  // to read as if something changed.
+  //
+  // Instead the week's total is quantised to whole steps and those steps are spread as
+  // evenly as possible across the seven days. The same weekly load always yields the
+  // same pattern, so consecutive equal weeks collapse into one phase.
+  function weekPattern(perDayMg){
+    var totalSteps=Math.max(0,Math.round(perDayMg*7/stepMg));
+    var base=Math.floor(totalSteps/7), extra=totalSteps%7;
+    var pat=[];
+    for(var i2=0;i2<7;i2++) pat.push(base*stepMg);
+    // Spread the leftover steps evenly rather than clumping them at the start, so the
+    // within-week peaks stay as flat as the dose resolution allows.
+    for(var e2=0;e2<extra;e2++) pat[Math.round(e2*7/extra)%7]+=stepMg;
+    return pat;
+  }
+  function dither(nw){
+    var out=[];
+    for(var w4=0;w4<W;w4++){
+      var pat=weekPattern(nw[w4]);
+      for(var d4=0;d4<7;d4++) out.push(pat[d4]);
+    }
+    return out;
+  }
+  var mg=dither(needW), res=null;
+  for(var it=0; it<(opts.iters||10); it++){
+    res=evalDaily(mg);
+    if(!res) return null;
+    var moved=0;
+    for(var w3=0;w3<W;w3++){
+      var k3=sens[w3]>0?sens[w3]:firstS;
+      if(w3<_loadW&&sensRef>k3)k3=sensRef;   // the correction repeats the seed's inversion
+      if(!(k3>0)) continue;
+      var nx=Math.max(0, needW[w3]+_TC_SOLVE_DAMPING*(ctx.targetPmol-res.weekly[w3].mean)/k3);
+      moved=Math.max(moved,Math.abs(nx-needW[w3]));
+      needW[w3]=nx;
+    }
+    needW=_tcMonotoneShape(needW,peakWeek);
+    mg=dither(needW);
+    if(moved<stepMg*0.05) break;
+  }
+  var fin=evalDaily(mg);
+  if(!fin) return null;
+
+  // A phase per WEEK-PATTERN change: the seven doses of that week, repeating.
+  var phases=[], prevKey=null;
+  for(var pz=0;pz<W;pz++){
+    var pat=mg.slice(pz*7,pz*7+7);
+    var pkey=pat.map(function(x){return Math.round(x*10)/10;}).join(',');
+    if(pkey!==prevKey){
+      var avg=pat.reduce(function(a,b){return a+b;},0);
+      phases.push({w:pz, iv:1, pattern:pat.map(function(x){return Math.round(x*10)/10;}),
+                   mg:avg/7, ml:Math.round((avg/7/ctx.concMgPerMl)*100)/100,
+                   perWeek:Math.round(avg)});
+      prevKey=pkey;
+    }
+  }
+  var _di=_tcCompInfo(ctx.incomingId);
+  var settleWeeks=Math.min(W-1,Math.max(1,Math.ceil(4*(_di.halfLifeDays||3)/7)));
+  // What the SMALLEST possible schedule change is worth. Dithering makes that one extra
+  // step on ONE day of the week, so the effective weekly resolution is seven times finer
+  // than a fixed daily dose — which is the whole reason this mode exists, and why the
+  // coarse-step warning usually should not fire for it.
+  // ⚠️ DECLARED BEFORE IT IS READ. `from` was declared on the line AFTER this loop,
+  // so var-hoisting made it undefined here: `sq=undefined; sq<W` is false, the loop
+  // never ran, sensAvg stayed 0 and stepPmol was always 0 — the coarse-step warning
+  // could never fire in dithered mode, which is the one mode where the step size is
+  // the whole argument.
+  var from=(W>1)?settleWeeks:0;
+  var sensAvg=0,sn=0;
+  for(var sq=from;sq<W;sq++){ if(sens[sq]>0){sensAvg+=sens[sq];sn++;} }
+  sensAvg=sn?sensAvg/sn:0;
+  var stepPmolDaily=sensAvg*stepMg/7;
+  var rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
+  for(var z=from;z<fin.weekly.length;z++){
+    var x=fin.weekly[z];
+    if(x.mean>0){ rp+=(x.peak-x.trough)/x.mean; rn++; }
+    err+=Math.abs(x.mean-ctx.targetPmol); en++;
+    if(x.mean<wLo)wLo=x.mean; if(x.mean>wHi)wHi=x.mean;
+    var dh=x.peak-ctx.targetPmol, dl=ctx.targetPmol-x.trough;
+    var dd=(dh>dl?dh:dl);
+    if(dd>worst)worst=dd;
+  }
+  // Same rule as the fixed scorer: an overshoot inside the settling window is a real
+  // defect of the schedule, so it is scored even though the weeks below target are not.
+  for(var zo=0;zo<from&&zo<fin.weekly.length;zo++){
+    var over=fin.weekly[zo].peak-ctx.targetPmol;
+    if(over>worst)worst=over;
+  }
+  var worstSettledD=0;
+  for(var wsd=from; wsd<fin.weekly.length; wsd++){
+    var dHi2=fin.weekly[wsd].peak-ctx.targetPmol, dLo2=ctx.targetPmol-fin.weekly[wsd].trough;
+    var dd2=(dHi2>dLo2?dHi2:dLo2);
+    if(dd2>worstSettledD)worstSettledD=dd2;
+  }
+  worstSettledD=ctx.targetPmol>0?worstSettledD/ctx.targetPmol:Infinity;
+  return {worstSettled:worstSettledD,
+          cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
+          phases:phases, weekly:fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,mg:mg[i*7]};}),
+          doses:mg, ripple:rn?rp/rn:Infinity,
+          drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
+          worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
+          meanErr:en?err/en:Infinity, lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
+          settleWeeks:settleWeeks, settledDrift:0, settledErr:0, stepPmol:stepPmolDaily, stepMg:stepMg,
+          events:fin.events, baseWeekly:zero.weekly};
+}
+
+// Solve a whole transition for ONE cadence.
+function _tcSolveForCadence(ctx, cad, opts){
+  opts=opts||{};
+  var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks);
+  if(!dates.length) return null;
+  var W=ctx.weeks;
+
+  // 1. The tail alone — no new ester at all.
+  var zero=new Array(W).fill(0);
+  var base=_tcSolveEvaluate(ctx, cad, dates, zero);
+  if(!base) return null;
+
+  // 2. One probe at a reference dose, to measure how much a mg is worth each week.
+  var probeMg=Math.max(stepMg, 100);
+  var probe=_tcSolveEvaluate(ctx, cad, dates, new Array(W).fill(probeMg));
+  if(!probe) return null;
+
+  var sens=[], negSens=0;
+  for(var w=0; w<W; w++){
+    var dz=(probe.weekly[w].mean-base.weekly[w].mean)/probeMg;
+    if(dz<-1e-9)negSens++;
+    sens.push(dz>1e-9?dz:0);       // 0 = this week is unreachable by dosing
+  }
+  // ⚠️ NON-PHYSICAL SENSITIVITY MEANS THE CALIBRATION IS DEGENERATE, NOT THAT THE
+  // SCHEDULE IS HARD. Adding testosterone cannot lower testosterone. When it appears
+  // to, the anchor the curve is calibrated against is sitting somewhere useless — the
+  // known case is _tcFreeTSeries falling back to day 0 (the FIRST logged injection,
+  // possibly months back) because "today" is past _logDays, which happens as soon as
+  // the last logged injection is older than the plotted log window.
+  //
+  // Left unchecked the iteration chases an impossible target and saturates: a real run
+  // produced 800 mg WEEKLY landing at 3638-4268 pmol/L against a 1400 target, and
+  // presented it as an answer. Refusing is the only honest response — a schedule
+  // derived from a curve that does not respond to dose is not a schedule.
+  if(negSens>0) return {degenerate:true, cadence:cad, negWeeks:negSens};
+  // A week before the first injection has no sensitivity of its own; borrow the first
+  // week that does, so the seed is a number rather than a divide-by-zero.
+  var firstSens=sens.find(function(v){return v>0;})||0;
+
+  // 3. Seed, then iterate. Diagonally dominant — this week's dose dominates this
+  //    week's level — so a handful of passes converges.
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _fl=_tcCompInfo(ctx.incomingId);
+  var _loadWf=Math.min(W-1,Math.max(1,Math.ceil(4*(_fl.halfLifeDays||3)/7)));
+  var sensRefF=0,_srf=0;
+  for(var _sf=_loadWf;_sf<W;_sf++){ if(sens[_sf]>0){sensRefF+=sens[_sf];_srf++;} }
+  sensRefF=_srf?sensRefF/_srf:0;
+  var doses=[];
+  for(var s0=0; s0<W; s0++){
+    var need=ctx.targetPmol-base.weekly[s0].mean;
+    var k=sens[s0]>0?sens[s0]:firstSens;
+    if(s0<_loadWf&&sensRefF>k)k=sensRefF;
+    doses.push(k>0?Math.max(0,need/k):0);
+  }
+  // Where the outgoing ester's own contribution peaks — the pivot of the shape above.
+  var peakWeek=0, peakVal=-Infinity;
+  for(var pw=0; pw<W; pw++){ if(base.weekly[pw].mean>peakVal){peakVal=base.weekly[pw].mean; peakWeek=pw;} }
+  doses=_tcMonotoneShape(doses, peakWeek);
+
+  var evalRes=null;
+  for(var it=0; it<(opts.iters||6); it++){
+    evalRes=_tcSolveEvaluate(ctx, cad, dates, doses);
+    if(!evalRes) return null;
+    var moved=0;
+    for(var w2=0; w2<W; w2++){
+      var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(w2<_loadWf&&sensRefF>k2)k2=sensRefF;
+      if(!(k2>0)) continue;
+      // DAMPED. The per-week sensitivity treats each week as independent, but with a
+      // 4.5-day ester roughly a third of a dose is still on board the following week.
+      // Correcting each week by the full error therefore overshoots, the next pass
+      // overshoots back, and the ramp oscillates instead of converging — the first
+      // run of this produced 280 / 0 / 200 / 120 mg in consecutive weeks. Applying
+      // half the correction per pass converges smoothly on the same answer.
+      var delta=_TC_SOLVE_DAMPING*(ctx.targetPmol-evalRes.weekly[w2].mean)/k2;
+      var next=Math.max(0, doses[w2]+delta);
+      if(next>_TC_SOLVE_HI_MG) next=_TC_SOLVE_HI_MG;
+      moved=Math.max(moved, Math.abs(next-doses[w2]));
+      doses[w2]=next;
+    }
+    // Project back onto the physically admissible shape after every pass, so the
+    // iteration searches inside the constraint set instead of wandering out of it
+    // and being snapped back only at the end.
+    doses=_tcMonotoneShape(doses, peakWeek);
+    if(moved<stepMg*0.25) break;   // finer than a syringe step — stop
+  }
+
+  // 4. SNAP, then re-score. Quantising changes the answer, so the numbers reported
+  //    are the snapped schedule's, never the continuous solution's.
+  var snapped=doses.map(function(d){ return Math.max(0,_tcSolveSnap(d, stepMg)); });
+  // DE-CHATTER. Snapping to syringe steps makes the solution wobble by one step where
+  // the continuous answer sits near a boundary — 0.4 / 0.3 / 0.4 ml in consecutive
+  // weeks. That is quantisation noise, not a dose instruction, and asking someone to
+  // step a dose down and back up for no reason is how a plan stops being followed.
+  // A dip or spike of one step between two EQUAL neighbours is flattened; genuine
+  // shape (two consecutive different values) is left alone.
+  for(var pass=0; pass<2; pass++){
+    for(var ci=1; ci<snapped.length-1; ci++){
+      if(snapped[ci-1]===snapped[ci+1]&&snapped[ci]!==snapped[ci-1]) snapped[ci]=snapped[ci-1];
+    }
+  }
+  var fin=_tcSolveEvaluate(ctx, cad, dates, snapped);
+  if(!fin) return null;
+
+  // 5. Phases: only where the dose CHANGES. dose_phases is a step function, and
+  //    emitting an identical phase every week would bury the two or three real steps.
+  var phases=[], prev=null;
+  for(var p=0;p<W;p++){
+    if(prev===null||Math.abs(snapped[p]-prev)>=stepMg*0.5){
+      phases.push({w:p, mg:snapped[p], ml:Math.round((snapped[p]/ctx.concMgPerMl)*100)/100,
+                   overshoot:(snapped[p]===0&&base.weekly[p].mean>=ctx.targetPmol),
+                   unreachable:(sens[p]===0&&snapped[p]===0&&base.weekly[p].mean<ctx.targetPmol)});
+      prev=snapped[p];
+    }
+  }
+  var weekly=fin.weekly.map(function(s,i){return {week:i, mean:s.mean, peak:s.peak, trough:s.trough, mg:snapped[i]};});
+
+  // Score on the SETTLED tail — the ramp weeks are supposed to move, so scoring
+  // those would punish the ramp for doing its job.
+  // ── SCORE THE WHOLE PLAN, NOT JUST ITS TAIL ────────────────────────────────
+  // This scored only the last four weeks, on the reasoning that "the ramp weeks are
+  // supposed to move, so scoring those would punish the ramp for doing its job".
+  // That reasoning was wrong, and it hid a real defect: it is the DOSE that moves
+  // during a ramp. The LEVEL is the thing being held, and it is supposed to sit on
+  // target throughout. Scoring only the tail meant a plan that sagged 16% below
+  // target in the middle scored identically to one that never moved — the ranking
+  // could not see it, and the headline the user reads reported the tail's 5% while
+  // the plan actually spanned 26% of target.
+  //
+  // ── EXCLUDE THE SETTLING PERIOD, NOT JUST WEEK 0 ──────────────────────────
+  // Two things move fast at the start and neither is the schedule's doing: the
+  // incoming ester has not accumulated yet (it needs ~4 half-lives), and the outgoing
+  // ester's tail is in its steepest decay. Measured on a real transition, the first
+  // three weeks swing from a 876 trough to an 1812 peak while every week from the
+  // fourth onward sits within 3% of target.
+  //
+  // Scoring across that transient let it dominate: a schedule holding 1-3% for twelve
+  // weeks scored 29% "worst" on the strength of weeks it could not have changed, and
+  // was ranked below one that wandered 8% throughout. The settling window is derived
+  // from the incoming ester rather than fixed, because it IS the incoming ester's
+  // loading time.
+  var _si=_tcCompInfo(ctx.incomingId);
+  var settleWeeks=Math.min(W-1, Math.max(1, Math.ceil(4*(_si.halfLifeDays||3)/7)));
+  var from=(W>1)?settleWeeks:0, rp=0,rn=0,err=0,en=0, wLo=Infinity, wHi=0;
+  for(var q=from;q<weekly.length;q++){
+    if(weekly[q].mean>0){ rp+=(weekly[q].peak-weekly[q].trough)/weekly[q].mean; rn++; }
+    err+=Math.abs(weekly[q].mean-ctx.targetPmol); en++;
+    if(weekly[q].mean<wLo) wLo=weekly[q].mean;
+    if(weekly[q].mean>wHi) wHi=weekly[q].mean;
+  }
+  //   ripple — peak-to-trough WITHIN a week. A property of the ester's half-life at
+  //            this interval; shorter intervals flatten it.
+  //   drift  — how far the weekly MEANS wander across the plan. Mostly quantisation:
+  //            when one syringe step is a large fraction of the weekly requirement,
+  //            the dose can only straddle the target and the level sags and overshoots.
+  var drift=(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity;
+  // THE QUESTION IS "does it hold the target", and neither ripple nor drift answers it
+  // alone: ripple is within-week, drift is between-week, and a plan can look fine on
+  // both while sitting steadily off-target. worst is the furthest the level EVER gets
+  // from target, peaks and troughs included, as a fraction of target. Ranking on it
+  // stops the sum of two partial metrics from picking a cadence that is smooth in each
+  // half and wrong overall.
+  // ⚠️ THE SETTLING WINDOW FORGIVES UNDERSHOOT ONLY.
+  // Excluding the settling weeks outright also excluded every OVERSHOOT in them, and
+  // those are not the same kind of event. An undershoot at the start is unavoidable —
+  // the incoming ester has not accumulated yet, and no schedule can conjure a level it
+  // has not built. An overshoot never is: dosing less is always available. Forgiving
+  // both is what let the ramp sit ~11%% above a 1400 target for its first three weeks
+  // and still score as a good fit, which is the "overshoots target badly" report.
+  // Above target during the settling window therefore counts in full; below it does not.
+  var worst=0;
+  for(var wq=0; wq<weekly.length; wq++){
+    var dHi=weekly[wq].peak-ctx.targetPmol;      // >0 when above target
+    var dLo=ctx.targetPmol-weekly[wq].trough;    // >0 when below target
+    var d=(wq<from)?dHi:(dHi>dLo?dHi:dLo);
+    if(d>worst)worst=d;
+  }
+  worst=ctx.targetPmol>0?(worst/ctx.targetPmol):Infinity;
+  // ⚠️ RANK ON THE SETTLED PERIOD; REPORT THE LOADING PEAK SEPARATELY.
+  // The loading overshoot is a property of the ESTER, not of the schedule — every
+  // candidate here lands within 1494-1550 on the same transition. Folding it into the
+  // ranking key adds a near-constant to all of them, which compresses the real
+  // differences until noise decides. It picked a plan sitting 3-6% high for six weeks
+  // over one holding 1387-1447, because the loser's loading peak was 40 pmol/L higher.
+  // Scoring it stays honest (that is what #1081 fixed); it just must not be the thing
+  // that chooses between schedules.
+  var worstSettled=0;
+  for(var ws=from; ws<weekly.length; ws++){
+    var sHi=weekly[ws].peak-ctx.targetPmol, sLo=ctx.targetPmol-weekly[ws].trough;
+    var sd=(sHi>sLo?sHi:sLo);
+    if(sd>worstSettled)worstSettled=sd;
+  }
+  worstSettled=ctx.targetPmol>0?(worstSettled/ctx.targetPmol):Infinity;
+  // Reported separately so the settled figure is still available, but never as the
+  // headline on its own.
+  var sFrom=Math.max(from,W-4), sLo=Infinity, sHi=0, sErr=0, sN=0;
+  for(var sq2=sFrom;sq2<weekly.length;sq2++){
+    if(weekly[sq2].mean<sLo)sLo=weekly[sq2].mean;
+    if(weekly[sq2].mean>sHi)sHi=weekly[sq2].mean;
+    sErr+=Math.abs(weekly[sq2].mean-ctx.targetPmol); sN++;
+  }
+  // What one syringe step is worth in pmol/L, at the settled end of the plan.
+  var sensTail=0, stn=0;
+  for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
+  sensTail=stn?sensTail/stn:0;
+  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
+          ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, worstSettled:worstSettled,
+          meanErr:en?err/en:Infinity,
+          settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
+          settledErr:sN?sErr/sN:Infinity,
+          lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi, settleWeeks:settleWeeks,
+          stepPmol:sensTail*stepMg,
+          events:fin.events, stepMg:stepMg, baseWeekly:base.weekly};
+}
+
+// The candidate schedule must start after the calibration anchor, or the solve is
+// self-cancelling (see the note above). Returns a warning string, or ''.
+function _tcSolveAnchorGuard(ctx){
+  var hist=ctx.history||[];
+  if(!hist.length) return 'No injection history was supplied, so there is nothing to calibrate the curve against or to model the outgoing ester\'s tail from.';
+  var lastHist=hist.map(function(e){return e.date;}).sort().pop();
+  if(ctx.startDate<=lastHist)
+    return 'The new ester starts on or before the last logged injection ('+lastHist+'). '
+      +'The curve is calibrated at your most recent measurement, and doses at or before that '
+      +'point move the calibration instead of the curve — start the new ester after it.';
+  return '';
+}
+
+// The entry point. Tries every cadence and returns the best, with the rest kept so
+// the user can see WHY it won rather than being handed a number to trust.
+//
+// opts = {history:[{compId,doseMg,date}], incomingId, startDate:'YYYY-MM-DD',
+//         targetPmol, concMgPerMl, stepMl, weeks, cadenceKey?}
+function tcSolveTransition(opts){
+  opts=opts||{};
+  var ctx={
+    history:     (opts.history||[]).slice(),
+    // ── WHAT IS STILL SCHEDULED OF THE OUTGOING ESTER IS PART OF THE PROBLEM ──
+    // `history` is the LOGGED past, and it is right that a plan cannot masquerade as a
+    // record there. But the solve is about the FUTURE, and for the future a scheduled
+    // dose is the only information there is. Modelling the outgoing ester as a tail
+    // that decays to nothing, while the protocol goes on injecting it, solves against a
+    // fiction: the ramp is sized for a gap that never opens.
+    //
+    // Measured on the reported case — Nebido 100 mg E2D still scheduled, Test E ramped
+    // to a 1400 pmol/L target — the plotted curve ran 1662-2315 against a solve that
+    // predicted 1400, peaking at 2326, then fell away when the scheduled Nebido ran
+    // out. That is exactly the "overshoots badly and then still drops" shape.
+    //
+    // Kept SEPARATE from history rather than merged into it, because _tcSolveAnchorGuard
+    // reads the last history date to check the new ester starts after the calibration
+    // anchor. Merging future rows in would move that date into the future and refuse
+    // every solve.
+    scheduled:   (opts.scheduled||[]).slice(),
+    incomingId:  opts.incomingId,
+    startDate:   opts.startDate,
+    targetPmol:  parseDec(opts.targetPmol)||0,
+    concMgPerMl: parseDec(opts.concMgPerMl)||250,
+    stepMl:      parseDec(opts.stepMl)||_TC_SOLVE_STEP_ML,
+    weeks:       parseInt(opts.weeks,10)||12
+  };
+  if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
+
+  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; });
+  // Two passes: a cheap one to rank the cadences, then a proper solve for the winner
+  // only. Refining all four to convergence costs four times as long for three answers
+  // that get thrown away.
+  var results=[];
+  cands.forEach(function(c){
+    try{ var r=_tcSolveForCadence(ctx,c,{iters:4}); if(r) results.push(r); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveTransition',e); }
+  });
+  if(!results.length) return null;
+
+  // RANK ON RIPPLE, NOT ON RESIDUAL ERROR.
+  // Peak-to-trough variation at a given interval is a property of the ESTER and the
+  // cadence — it is the thing the user is choosing between, and it is what "steady
+  // state" actually means. Residual error is mostly a solver artifact: every cadence
+  // can be driven to the target mean, and the cheap ranking pass gives each one only
+  // two iterations, so a slower-converging cadence would be punished for the solver's
+  // budget rather than for anything the user would feel.
+  //
+  // Quantisation is the one way a cadence genuinely cannot hit the target — a weekly
+  // dose needing 12 mg when the syringe step is 25 mg — so the refined residual is
+  // still checked below, and the next-smoothest cadence is tried if it is too far off.
+  // The variable-interval solve competes on the same footing as the fixed ones. It
+  // usually wins on `worst` because it can move the weekly load without being limited
+  // to multiples of one syringe step at a fixed interval — but not always, and a fixed
+  // interval is simpler to follow, so it is ranked rather than preferred.
+  if(!opts.cadenceKey){
+    // Same refinement budget as the fixed path gets, or the comparison is decided by
+    // iteration count rather than by which schedule is actually better.
+    try{ var vr=_tcSolveVariable(ctx,{iters:12}); if(vr) results.push(vr); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveVariable',e); }
+    try{ var dd=_tcSolveDailyDither(ctx,{iters:10}); if(dd) results.push(dd); }
+    catch(e2){ if(typeof _logErr==='function')_logErr('tcSolveDailyDither',e2); }
+  }
+  var degenerate=results.filter(function(r){return r.degenerate;});
+  results=results.filter(function(r){return !r.degenerate;});
+  if(!results.length){
+    return {best:null, alternatives:[], target:ctx.targetPmol, degenerate:true,
+            notes:['The free-T curve does not respond to dose for this history, so no '
+              +'schedule can be solved from it. That points at the calibration rather than '
+              +'the plan: the curve is anchored to a point where essentially no drug was on '
+              +'board. Adding a recent bloodwork draw, or logging a more recent injection, '
+              +'gives the model something to calibrate against.']};
+  }
+  // RANK ON HOW WELL IT HOLDS THE TARGET, THEN ON HOW MUCH IT FLUCTUATES.
+  // `worst` alone cannot separate a slow drift from a fast oscillation that reaches the
+  // same extreme, and those are not equivalent: "minimise unnecessary fluctuations in
+  // free T (since high peaks drives sides)". A daily schedule holding 12% worst with 4%
+  // within-week swing is plainly better than a two-day one holding 11% with 15% swing,
+  // and ranking on `worst` alone put the second first by a single point.
+  //
+  // So: closeness decides when the gap is real, and below that the steadier schedule
+  // wins. The tolerance is deliberately small — this breaks near-ties, it does not let
+  // a smooth schedule win at the wrong level.
+  var _TIE=0.03;
+  // ⚠️ AND WHEN SMOOTHNESS TIES TOO, TAKE THE FEWER INJECTIONS.
+  // Ripple is governed by interval ÷ half-life, which is an ester property: measured on
+  // this model, every-2-days gives 82% ripple on propionate (t½ 0.8 d), 14% on enanthate
+  // (4.5 d), 8% on cypionate (8 d) and 4% on undecanoate (56 d). For a long ester the
+  // ripple is flat at EVERY interval from daily to fortnightly — so a tie-break on
+  // ripple alone would happily recommend daily Nebido injections, which is 56 jabs to
+  // achieve what 4 achieve. Fewer injections is the third key, and it only ever applies
+  // once the first two are indistinguishable.
+  var perWeekOf=function(r){
+    var c=r.cadence||{};
+    if(c.dithered) return 7;
+    if(c.perWeek) return c.perWeek;
+    if(c.days&&c.days.length) return c.days.length;
+    if(c.freqVal>0) return 7/(c.freqUnit==='weeks'?c.freqVal*7:c.freqVal);
+    if(r.intervals&&r.intervals.length) return 7/(r.intervals.reduce(function(a,b){return a+b;},0)/r.intervals.length);
+    return 3.5;
+  };
+  results.sort(function(a,b){
+    // worstSettled, not worst — see the note in the scorer. The loading peak is an
+    // ester property common to every candidate; ranking on it lets a near-constant
+    // decide. Falls back to worst for any result that predates the field.
+    var aw=(a.worstSettled==null)?a.worst:a.worstSettled;
+    var bw=(b.worstSettled==null)?b.worst:b.worstSettled;
+    var d=aw-bw;
+    if(Math.abs(d)>_TIE) return d;
+    var rp=a.ripple-b.ripple;
+    if(Math.abs(rp)>_TIE) return rp;
+    return perWeekOf(a)-perWeekOf(b);
+  });
+  var tol=ctx.targetPmol*0.10;
+  var best=null, fallback=null;
+  for(var ri=0; ri<results.length; ri++){
+    var refined;
+    if(results[ri].cadence&&(results[ri].cadence.variable||results[ri].cadence.dithered)){ 
+      // Already solved at full iteration count; the fixed-cadence refiner cannot
+      // express it and would silently collapse it back to one interval.
+      if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
+      if(results[ri].meanErr<=tol){ best=results[ri]; break; }
+      continue;
+    }
+    try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveRefine',e); continue; }
+    // A refine pass can come back degenerate even when the cheap pass did not — keep
+    // the cheap result rather than promoting an unusable one into the rankings.
+    if(!refined||refined.degenerate) continue;
+    results[ri]=refined;
+    if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
+    if(refined.meanErr<=tol){ best=refined; break; }
+  }
+  if(!best) best=fallback||results[0];
+  if(!best||best.degenerate) return {best:null, alternatives:[], target:ctx.targetPmol,
+    degenerate:true, notes:['No cadence produced a usable schedule for this history.']};
+  // Report the others as they were ranked, with the winner removed.
+  results=results.filter(function(r){ return r!==best; });
+
+  var notes=[];
+  var guard=_tcSolveAnchorGuard(ctx);
+  if(guard) notes.push(guard);
+  // ── HOW WELL IS THIS CURVE ACTUALLY CALIBRATED? ────────────────────────────
+  // The guards above catch a curve that cannot be solved at all. They say nothing
+  // about one that solves fine but rests on a weak anchor, and those numbers come out
+  // looking exactly as confident as any other. The common case is a single draw taken
+  // before the protocol started: the curve is then pinned at a point where almost no
+  // drug was on board, and every level downstream is scaled off it.
+  (function(){
+    var bw=(typeof _tcBwEntries!=='undefined'&&_tcBwEntries)?_tcBwEntries:[];
+    if(!bw.length){
+      notes.push('No bloodwork on file, so the curve is scaled from a population '
+        +'estimate for your age rather than from a measurement. Levels are indicative; '
+        +'add a draw and the whole plan re-scales to it.');
+      return;
+    }
+    var latest=bw.slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;}).pop();
+    if(!latest||!latest.date) return;
+    var ageD=Math.round((new Date(ctx.startDate+'T12:00:00')-new Date(latest.date+'T12:00:00'))/86400000);
+    var msgs=[];
+    if(bw.length===1) msgs.push('one draw');
+    if(ageD>=56) msgs.push('taken '+ageD+' days before this plan starts');
+    if(msgs.length)
+      notes.push('Calibrated on '+msgs.join(', ')+'. The whole curve is scaled off that '
+        +'single point, so treat the absolute levels as approximate — the SHAPE of the '
+        +'ramp is far more reliable than the numbers on it. A more recent draw tightens '
+        +'every figure here.');
+  })();
+  if(best.phases.some(function(p){return p.overshoot;})){
+    notes.push('The outgoing ester alone already puts you at or above '+Math.round(ctx.targetPmol)
+      +' pmol/L in the early weeks, so the ramp starts at zero — no dose of the new ester can '
+      +'bring a level DOWN. Those weeks are the old ester clearing, not a gap in the plan.');
+  }
+  if(best.phases.some(function(p){return p.unreachable;})){
+    notes.push('Some weeks could not reach the target even at the maximum the solver will '
+      +'consider ('+_TC_SOLVE_HI_MG+' mg per injection). Check the concentration and the target.');
+  }
+  // The app's own ceiling copy, not a new opinion. Above the healthy young-male range is
+  // UNMEASURED — not proven harmful, not endorsed — and the solver still computes it.
+  var ceil=(typeof _FT_REF!=='undefined')?_FT_REF:null;
+  if(ceil&&ceil.ceiling_pmol_l&&ctx.targetPmol>ceil.ceiling_pmol_l){
+    notes.push('Target '+Math.round(ctx.targetPmol)+' pmol/L is above the top of the healthy '
+      +'young-male range ('+Math.round(ceil.ceiling_pmol_l)+' pmol/L). '
+      +(ceil.above_ceiling_note||''));
+  }
+  notes.push('Doses are snapped to '+ctx.stepMl+' ml at '+ctx.concMgPerMl
+    +' mg/ml, so each step is '+Math.round(best.stepMg*10)/10+' mg. The levels shown are the '
+    +'SNAPPED schedule, not the exact solution.');
+  // THE CONCENTRATION CAN BE THE LIMITING FACTOR, and it is invisible unless said.
+  // One 0.1 ml step at 250 mg/ml is 25 mg — at every-2-days that is 87 mg/week of
+  // granularity, so the dose can only land above or below the requirement and the
+  // weekly level sawtooths. A thinner vial is a finer dial.
+  // THE LEVER IS THE SYRINGE STEP, NOT THE VIAL.
+  // This used to say "that is the vial, not the schedule" and suggest a thinner
+  // concentration. That was wrong, and measurably so: at a fixed 250 mg/ml, going
+  // from 0.1 to 0.05 to 0.01 ml steps takes the same solve from 13% drift to 10% to
+  // 4%. The concentration is usually not the user's to choose — 250 mg/ml is the
+  // standard vial — while the volume they draw is.
+  if(best.stepPmol>ctx.targetPmol*0.08){
+    var finer=(ctx.stepMl>0.025)?(ctx.stepMl/2):null;
+    var msg='One '+ctx.stepMl+' ml step ('+Math.round(best.stepMg*10)/10+' mg) moves your level '
+      +'by about '+Math.round(best.stepPmol)+' pmol/L, '
+      +Math.round(100*best.stepPmol/ctx.targetPmol)+'% of target. That is what makes the level '
+      +'sag between dose steps: the dose can only be held flat while the outgoing ester '
+      +'keeps decaying under it.';
+    if(finer) msg+=' Drawing to '+finer+' ml instead ('+Math.round(ctx.concMgPerMl*finer*10)/10
+      +' mg per step at this concentration) roughly halves that.';
+    notes.push(msg);
+  }
+
+  return {
+    // results already has `best` removed above — slicing again silently dropped the
+    // next-ranked option, which is how the variable-interval solve came 2nd and was
+    // never shown.
+    best: best, alternatives: results, target: ctx.targetPmol,
+    concMgPerMl: ctx.concMgPerMl, stepMl: ctx.stepMl, weeks: ctx.weeks,
+    incomingId: ctx.incomingId, startDate: ctx.startDate, notes: notes,
+    // dose_phases, in the shape the generator and the ramp editor already consume.
+    dose_phases: best.phases.map(function(p){
+      var e={w:p.w, d:String(Math.round(p.mg*10)/10), u:'mg'};
+      if(p.iv>0)e.iv=p.iv;    // per-phase interval; absent means "use the compound's cadence"
+      if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();
+      return e;
+    })
+  };
+}
+
 // ── Free-T history: the single, explicit writer ──────────────────────────────
 // Persists /plasma-history EXACTLY as the plasma curve is currently displayed
 // (from _tcDrawnFT). This is the ONLY thing in the app that writes free-T history,
@@ -3445,6 +4556,365 @@ function _tcBoundStack(){
 
 
 
+// ── T-CALC DEBUG DUMP (staging only) ─────────────────────────────────────────
+// Henrik, 2026-08-27: "Should t-calc have a debug output window in stage? Then I
+// can give you data instead of screenshots?"
+//
+// Yes, and every bug fixed today argues for it. Each was found by RECONSTRUCTING the
+// stack from a screenshot and guessing at the inputs:
+//   #1081  the solver was blind to the outgoing ester's still-scheduled doses. Only
+//          knowable from a remark made weeks earlier, not from anything on screen.
+//   #1083  the solved ramp was written in the ester's week numbering and read in the
+//          protocol's. Needed cycle_start AND the compound's start_date together —
+//          neither is displayed anywhere.
+// The pairing that actually settles these is PREDICTED vs PLOTTED weekly means in one
+// block. A screenshot can never show that; it is the first thing this prints.
+//
+// Staging only, via IS_STAGING — the same gate TAB_LABELS uses for the Storage tab.
+// The file promotes to prod unchanged and the path test simply fails there.
+//
+// Read-only: no fetches, no writes, nothing cached. And nothing authentication-shaped
+// goes in — no token, no session, no email. It is a description of the curve's inputs.
+function _tcDebugDump(){
+  var L=[], p=function(s){L.push(s==null?'':String(s));};
+  var pad=function(s,n){s=String(s==null?'':s);while(s.length<n)s+=' ';return s;};
+  var dnum=function(v,d){var n=parseDec(v);return isFinite(n)?(d==null?n:Math.round(n*Math.pow(10,d))/Math.pow(10,d)):v;};
+  try{
+    p('=== T-CALC DEBUG · v'+(typeof VERSION!=='undefined'?VERSION:'?')
+      +' · '+new Date().toISOString().replace(/\.\d{3}Z$/,'Z')+' ===');
+
+    // ── the protocol frame: cycle_start against each compound's own start_date ──
+    var tid=(typeof _tcTargetCycleId==='function')?_tcTargetCycleId():'';
+    var all=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks.slice():[];
+    var stk=all.find(function(s){return s&&s.id===tid;})||null;
+    // ⚠️ NEVER DROP THIS SECTION ON A FAILED LOOKUP.
+    // The first run printed "PROTOCOL none selected" and then omitted cycle_start and
+    // every dose_phases block — which is precisely the pairing that the ramp-offset bug
+    // (#1083) turned on, and the one thing no other surface shows. If the target cannot
+    // be resolved, dump every stack instead and mark which one T-Calc is pointing at.
+    // An unresolved target is itself worth seeing.
+    p('');
+    var toDump=stk?[stk]:all;
+    if(!toDump.length){ p('PROTOCOL  no stacks loaded (targetStackId '+(tid||'—')+')'); }
+    if(!stk&&all.length) p('PROTOCOL  target unresolved (targetStackId '+(tid||'—')+') — dumping all '+all.length);
+    toDump.forEach(function(stk){
+      // ⚠️ EXACTLY ONE PROTOCOL IS ACTIVE AT A TIME, and only the active one generates
+      // injections. A compound sitting on an inactive protocol schedules nothing and is
+      // therefore invisible to both the curve and the solve — which reads, from the
+      // outside, exactly like a compound that was silently dropped.
+      var _ix=all.indexOf(stk);
+      var _act=(typeof _isActiveStack==='function'&&_ix>=0)?_isActiveStack(_ix):null;
+      p('PROTOCOL  '+(stk.name||'(unnamed)')+'  [id '+stk.id+']'
+        +(_act===true?'   ACTIVE — generates':_act===false?'   inactive — schedules nothing':'')
+        +(stk.id===tid?'   ← T-Calc target':''));
+      p('  cycle_start '+(stk.cycle_start||'—')
+        +'   end_date '+(stk.end_date||'—')
+        +'   cycle_length '+(stk.cycle_length==null?'—':stk.cycle_length));
+      var groups=[['trt',stk.trt],['enhanced',stk.enhanced]];
+      groups.forEach(function(g){
+        var tier=g[0], box=g[1];
+        if(!box||!box.compounds||!box.compounds.length)return;   // an empty tier is noise
+        p('  '+tier+(box.enabled===false?' (disabled)':''));
+        (box.compounds||[]).forEach(function(c){
+          if(!c)return;
+          p('    '+pad(c.id,14)+' "'+(c.name||'')+'"'+(c.active===false?'  INACTIVE':''));
+          p('      start_date '+(c.start_date||'—')+'   end_date '+(c.end_date||'—'));
+          p('      cadence '+(c.cadence||'(inferred)')
+            +'  freq '+(c.freqVal==null?'—':c.freqVal)+' '+(c.freqUnit||'')
+            +'  days '+(c.days?JSON.stringify(c.days):'—')
+            +'  dose '+(c.dose==null?'—':c.dose)+' '+(c.unit||''));
+          // The ramp exactly as stored — `w` included, because the week ORIGIN is the
+          // thing that was wrong and it is invisible from every other surface.
+          if(c.dose_phases&&c.dose_phases.length){
+            p('      dose_phases (w = weeks from cycle_start):');
+            c.dose_phases.forEach(function(ph){
+              p('        w'+pad(ph.w,4)+dnum(ph.d,1)+' '+(ph.u||'mg')
+                +(ph.iv?'  iv'+ph.iv:'')
+                +(ph.pattern&&ph.pattern.length?'  pat['+ph.pattern.map(function(x){return dnum(x,1);}).join(',')+']':''));
+            });
+          } else p('      dose_phases —');
+        });
+      });
+    });
+
+    // ── what is already committed ahead: the half the solver used to be blind to ──
+    p('');
+    p('SCHEDULED AHEAD  (future rows the curve reads)');
+    var sched=(typeof _tcProtocolInjections==='function')?(_tcProtocolInjections()||[]):[];
+    if(!sched.length) p('  none');
+    else{
+      // ⚠️ GROUPED BY PROTOCOL, NOT JUST BY COMPOUND.
+      // There is an open bug in which testosterone doses survive a delete that should
+      // reach them — the delete keys on (cycle_id, compound_id) and neither is visible
+      // from the UI. Grouping only by compound hides exactly that: rows left behind by a
+      // deleted protocol look identical to the live ones, and go on driving the curve.
+      // Anyone deleting and recreating a protocol to test would be reading a curve half
+      // built from the protocols they thought they had removed.
+      var live={};
+      all.forEach(function(sx){ if(sx&&sx.id)live[sx.id]=sx.name||sx.id; });
+      var byC={};
+      sched.forEach(function(e){
+        var k=(e.compId||'?')+'\u0000'+(e.cycleId||'');
+        (byC[k]=byC[k]||[]).push(e);
+      });
+      var orphans=0;
+      Object.keys(byC).sort().forEach(function(k){
+        var parts=k.split('\u0000'), cid=parts[1];
+        var rows=byC[k].slice().sort(function(a,b){return a.date<b.date?-1:1;});
+        var mgs=rows.map(function(r){return parseDec(r.doseMg)||0;});
+        var tot=mgs.reduce(function(a,b){return a+b;},0);
+        var lo=Math.min.apply(null,mgs), hi=Math.max.apply(null,mgs);
+        var known=cid&&Object.prototype.hasOwnProperty.call(live,cid);
+        if(!known)orphans++;
+        p('  '+pad(parts[0],14)+pad(rows.length+' rows',11)
+          +rows[0].date+' → '+rows[rows.length-1].date
+          +'   '+(lo===hi?dnum(lo,1)+' mg':dnum(lo,1)+'–'+dnum(hi,1)+' mg')
+          +'   total '+Math.round(tot)+' mg');
+        p('                  from '+(cid||'(no cycle id)')
+          +(known?'  ['+live[cid]+']':'  ⚠ NO SUCH PROTOCOL — orphaned rows still driving the curve'));
+      });
+      if(orphans)
+        p('  ⚠ '+orphans+' group(s) belong to no existing protocol. Deleting a protocol is '
+          +'known not to always remove its doses; these are still being injected into the model.');
+    }
+
+    // ── the logged past, and how stale it is ──
+    p('');
+    p('LOGGED HISTORY  (the tail the solve is built from)');
+    var hist=(typeof _tcLoggedHistory==='function')?(_tcLoggedHistory()||[]):[];
+    if(!hist.length) p('  none');
+    else{
+      var hs=hist.slice().sort(function(a,b){return a.date<b.date?-1:1;});
+      var byH={};
+      hs.forEach(function(e){var k=e.compId||'?';byH[k]=byH[k]||{n:0,mg:0};byH[k].n++;byH[k].mg+=parseDec(e.doseMg)||0;});
+      p('  '+hs.length+' rows  '+hs[0].date+' → '+hs[hs.length-1].date);
+      Object.keys(byH).sort().forEach(function(k){
+        p('  '+pad(k,14)+byH[k].n+' doses, '+Math.round(byH[k].mg)+' mg total');
+      });
+      var lastMs=parseLocalDate(hs[hs.length-1].date);
+      var ageD=lastMs?Math.round((NOW-lastMs)/86400000):null;
+      p('  last logged '+hs[hs.length-1].date+(ageD==null?'':'  ('+ageD+' d ago)'));
+    }
+    // Doses scheduled in the PAST and never ticked. These are the gap between what the
+    // model thinks was taken and what was: they under-model the tail, and the on-ramp
+    // then over-doses to compensate.
+    var untick=0, untickLast=[];
+    if(typeof _injectionsCache!=='undefined'&&_injectionsCache){
+      var tk=dateKey(NOW);
+      Object.keys(_injectionsCache).forEach(function(dk){
+        (_injectionsCache[dk]||[]).forEach(function(e){
+          if(!e||e.logged||e.active===false)return;
+          if((e.date||'')>=tk)return;
+          if(typeof _tcIsTestoRow==='function'&&!_tcIsTestoRow(e.tier,e.compound_id))return;
+          untick++; untickLast.push(e.date+' '+(e.compound_id||'')+' '+(e.dose||'')+(e.unit||''));
+        });
+      });
+    }
+    p('  unticked past scheduled: '+untick
+      +(untick?'  ← under-models the tail':''));
+    untickLast.sort().slice(-5).forEach(function(s){p('    '+s);});
+
+    // ── calibration: recomputed from the same call the chart makes ──
+    p('');
+    p('CALIBRATION');
+    var bw=(typeof _tcBwEntries!=='undefined'&&_tcBwEntries)?_tcBwEntries:[];
+    if(!bw.length) p('  no bloodwork — curve falls back to the population default');
+    else bw.slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;}).slice(-3).forEach(function(b){
+      p('  draw '+(b.date||'?')+'  free_t '+(b.free_t||'—')+' '+(b.unit||'')
+        +'  total_t '+(b.total_t||'—')+'  shbg '+(b.shbg||'—'));
+    });
+    var curveLog=(typeof _tcCurveLog==='function')?_tcCurveLog():[];
+    var S=null;
+    try{ S=(typeof _tcFreeTSeries==='function')
+      ? _tcFreeTSeries(curveLog.slice().sort(function(a,b){return a.date<b.date?-1:1;}),{}) : null; }catch(e){}
+    if(S){
+      p('  calFT '+dnum(S.calFT,4)+'   logDays '+S.logDays+'   totalDays '+S.totalDays
+        +'   unit '+(S.unitLabel||'?'));
+      p('  curve built from '+curveLog.length+' rows (logged + scheduled, deduped)');
+    } else p('  series unavailable');
+    p('  profile: birthYear '+((_tcp&&_tcp.birthYear)||'—')
+      +'  shbg '+((_tcp&&_tcp.shbg)||'—')
+      +'  measuredFT '+((_tcp&&_tcp.measuredFT)||'—')
+      +'  currentDoseMgWk '+((_tcp&&_tcp.currentDoseMgWk)||'—'));
+
+    // ── PLOTTED vs PREDICTED — the comparison a screenshot cannot show ──
+    p('');
+    p('PLOTTED CURVE  (exactly what the chart drew)');
+    if(typeof _tcSsPeakPmol!=='undefined'&&_tcSsPeakPmol)
+      p('  exposure peak '+Math.round(_tcSsPeakPmol)+' pmol/L');
+    var applied=null, appliedId=null;
+    if(typeof _trtSolveState!=='undefined'&&_trtSolveState){
+      Object.keys(_trtSolveState).forEach(function(k){
+        var st=_trtSolveState[k];
+        if(st&&(st._applied||st.result)){applied=st;appliedId=k;}
+      });
+    }
+    // Weekly means from the incoming ester's start, so the two lists line up row for row.
+    var startKey=null;
+    if(appliedId){
+      var ac=null;
+      (stk?[stk]:all).forEach(function(sx){
+        [sx.trt,sx.enhanced].forEach(function(b){
+          if(b&&b.compounds)b.compounds.forEach(function(c){if(c&&c.id===appliedId)ac=c;});
+        });
+      });
+      if(ac&&ac.start_date)startKey=ac.start_date;
+    }
+    // Without a start date the weekly rows would not line up with the predicted ones,
+    // but the curve is still worth printing — anchor it at today and say so.
+    var anchorKey=startKey||dateKey(NOW);
+    // ⚠️ NOT FROM _tcDrawnFT. That array stops at the last PAST injection by
+    // construction — it exists to persist free-T HISTORY. Reading the forward plan out
+    // of it yielded exactly one week and defeated the whole point of this block, which
+    // is to sit the plotted weeks next to the predicted ones. The series below is the
+    // same expression the chart plots (total × calFT), over the full horizon.
+    if(S&&S.total&&S.totalDays>0){
+      var s0=parseLocalDate(anchorKey);
+      var off=Math.round((s0-S.firstDate.getTime())/86400000);
+      var wk=[];
+      for(var w=0;w<16;w++){
+        var sum=0,n=0;
+        for(var d=off+w*7;d<off+(w+1)*7;d++){
+          if(d<0||d>S.totalDays)continue;
+          var v=S.total[d]*(S.calFT_arr?S.calFT_arr[d]:S.scale);
+          if(isFinite(v)){sum+=v;n++;}
+        }
+        if(n)wk.push(Math.round(sum/n));
+      }
+      p('  weekly means from '+anchorKey+(startKey?'  (incoming ester start)':'  (today — no ester start_date found)')+':');
+      p('    '+wk.join(' '));
+    } else p('  series unavailable');
+
+    p('');
+    p('LAST SOLVE');
+    // Fall back to the persisted record when nothing was solved in THIS session, so a
+    // dump taken after reopening the app still carries the predicted weekly means.
+    var _persist={};
+    if(typeof _trtLastSolveRecords==='function'){try{_persist=_trtLastSolveRecords()||{};}catch(e){}}
+    if(!applied){
+      var _ks=Object.keys(_persist);
+      if(!_ks.length) p('  none run this session, and none saved');
+      else _ks.forEach(function(k){
+        var r=_persist[k];
+        p('  compound '+k+'  (saved '+(r.at||'?')+')'
+          +'  target '+(r.target||'—')+' pmol/L  conc '+(r.conc||'default')
+          +'  step '+(r.step||'—')+' ml  weeks '+(r.weeks||'—'));
+        p('  winner "'+(r.label||'?')+'"'
+          +'  worst '+Math.round((r.worst||0)*100)+'%'
+          +(r.worstSettled==null?'':'  settled '+Math.round(r.worstSettled*100)+'%')
+          +'  ripple '+Math.round((r.ripple||0)*100)+'%'
+          +'  drift '+Math.round((r.drift||0)*100)+'%'
+          +'  settleWeeks '+(r.settleWeeks==null?'—':r.settleWeeks));
+        if(r.phases&&r.phases.length)
+          p('  ramp  '+r.phases.map(function(x){return 'w'+x.w+'='+x.perWeek+'mg/wk';}).join('  '));
+        if(r.weekly&&r.weekly.length){
+          p('  predicted weekly means:');
+          p('    '+r.weekly.join(' '));
+        }
+      });
+    }
+    else{
+      var pick=applied._applied||(applied.result&&applied.result.best);
+      // The field is blank when the default was taken, so print what the solve really
+      // used — a dump that reports "conc —" for a solve done at 250 mg/ml is misleading
+      // about the one number the syringe steps are derived from.
+      var _effConc=parseDec(applied.conc)
+        ||((typeof _trtDefaultConc==='function')?_trtDefaultConc(appliedId):null);
+      p('  compound '+appliedId
+        +'  target '+(applied.target||'—')+' pmol/L'
+        +'  conc '+(_effConc||'—')+' mg/ml'+(applied.conc?'':' (default)')
+        +'  step '+(applied.step||'—')+' ml'
+        +'  weeks '+(applied.weeks||'—'));
+      if(!pick) p('  no plan (refused or degenerate)');
+      else{
+        // ⚠️ SOLVED IS NOT APPLIED, AND THE DUMP MUST NOT BLUR THEM.
+        // This printed a winner, its ramp and its predicted weekly means under a heading
+        // that reads as "the plan" — whether or not Apply was ever pressed. A solve left
+        // unapplied then looks identical to one that is live, while the compound quietly
+        // carries something else entirely. That is what turned an unapplied solve into a
+        // report of an insane regression: the numbers here were a proposal, the schedule
+        // being plotted was a flat default, and nothing said so.
+        var _isApplied=!!applied._applied;
+        p('  status: '+(_isApplied
+            ? 'APPLIED — written to the compound'
+            : 'SOLVED but NOT APPLIED — this is a proposal; the compound below is what is actually scheduled'));
+        // And check it rather than trust it: an applied plan whose ramp is not on the
+        // compound means the write did not survive, which is a real fault worth shouting.
+        var _acp=(ac&&ac.dose_phases)?ac.dose_phases:[];
+        var _want=(pick.phases||[]).length;
+        if(_isApplied&&_want&&!_acp.length)
+          p('  ⚠ MISMATCH: applied, but the compound carries no dose_phases at all.');
+        else if(_want&&_acp.length&&_acp.length!==_want)
+          p('  ⚠ MISMATCH: '+_want+' solved phases vs '+_acp.length+' on the compound.');
+        else if(!_isApplied&&!_acp.length)
+          p('  the compound has no ramp — it is running its flat dose, not this plan.');
+        p('  winner "'+((pick.cadence&&pick.cadence.label)||'?')+'"'
+          +'  worst '+Math.round((pick.worst||0)*100)+'%'
+          +'  ripple '+Math.round((pick.ripple||0)*100)+'%'
+          +'  drift '+Math.round((pick.drift||0)*100)+'%'
+          +'  settleWeeks '+(pick.settleWeeks==null?'—':pick.settleWeeks));
+        if(pick.phases&&pick.phases.length)
+          p('  ramp  '+pick.phases.map(function(x){return 'w'+x.w+'='+x.perWeek+'mg/wk';}).join('  '));
+        // A solve horizon longer than the protocol's own length means the tail of the
+        // ramp never generates: the last steps are simply dropped, and the level falls
+        // short exactly where the ramp was supposed to be climbing.
+        var _hostStk=null;
+        (stk?[stk]:all).forEach(function(sx){
+          [sx.trt,sx.enhanced].forEach(function(b){
+            if(b&&b.compounds&&b.compounds.some(function(c){return c&&c.id===appliedId;}))_hostStk=sx;
+          });
+        });
+        if(_hostStk&&_hostStk.cycle_length>0&&pick.phases&&pick.phases.length){
+          var lastW=pick.phases[pick.phases.length-1].w||0;
+          if(lastW>=_hostStk.cycle_length)
+            p('  ⚠ ramp runs to w'+lastW+' but "'+(_hostStk.name||_hostStk.id)
+              +'" is only '+_hostStk.cycle_length+' weeks — phases from w'
+              +_hostStk.cycle_length+' never generate');
+        }
+        if(pick.weekly&&pick.weekly.length){
+          p('  predicted weekly means:');
+          p('    '+pick.weekly.map(function(x){return Math.round(x.mean);}).join(' '));
+        }
+      }
+      if(applied.result&&applied.result.notes&&applied.result.notes.length)
+        applied.result.notes.forEach(function(n){p('  note: '+n);});
+    }
+  }catch(e){
+    p('');
+    p('DUMP FAILED: '+(e&&e.message||e));
+    if(e&&e.stack)p(String(e.stack).split('\n').slice(0,4).join('\n'));
+  }
+  return L.join('\n');
+}
+function _tcRunDebugDump(){
+  var out=document.getElementById('tc-debug-out');
+  if(out)out.textContent=_tcDebugDump();
+}
+// Selecting text inside a standalone iOS PWA is fiddly, so the copy is a button.
+// Falls back to selecting the block when the clipboard API is unavailable.
+function _tcCopyDebugDump(){
+  var out=document.getElementById('tc-debug-out');
+  var btn=document.getElementById('tc-debug-copy');
+  if(!out)return;
+  if(!out.textContent||out.textContent==='Tap Build.')out.textContent=_tcDebugDump();
+  var done=function(ok){
+    if(!btn)return;
+    var t=btn.textContent; btn.textContent=ok?'✓ Copied':'Select it manually';
+    setTimeout(function(){btn.textContent=t;},1800);
+  };
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(out.textContent).then(function(){done(true);},function(){done(false);});
+      return;
+    }
+  }catch(e){}
+  try{
+    var r=document.createRange(); r.selectNodeContents(out);
+    var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    done(false);
+  }catch(e2){ done(false); }
+}
+
 // ── Main build ────────────────────────────────────────────────────────────────
 
 function buildTCalc() {
@@ -3694,6 +5164,26 @@ function buildTCalc() {
     html += '</div>'; // close padding
   }
   html += '</div>'; // close card
+
+  // ── Debug dump — STAGING ONLY ──────────────────────────────────────────────
+  // Same gate TAB_LABELS uses for the Storage tab. This file promotes to prod
+  // unchanged and the path test simply fails there, so the card cannot appear.
+  if (typeof IS_STAGING !== 'undefined' && IS_STAGING) {
+    html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:12px">'
+      + '<div style="padding:14px 16px 0"><div style="font-size:10px;font-weight:700;letter-spacing:1.8px;color:#666">DEBUG DUMP · STAGING ONLY</div></div>'
+      + '<div style="padding:10px 16px 14px">'
+      + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
+      + 'The curve\u2019s inputs as text: the protocol frame, what is scheduled ahead, the '
+      + 'logged tail, the calibration, and the last solve \u2014 with its predicted weekly '
+      + 'means next to the ones actually plotted. Read-only, and it carries nothing to do '
+      + 'with your login.</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<button onclick="_tcRunDebugDump()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Build</button>'
+      + '<button id="tc-debug-copy" onclick="_tcCopyDebugDump()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Copy</button>'
+      + '</div>'
+      + '<pre id="tc-debug-out" style="white-space:pre;overflow-x:auto;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:10px;line-height:1.45;color:#ccc;max-height:420px;margin:0">Tap Build.</pre>'
+      + '</div></div>';
+  }
 
   el.innerHTML = html;
 
