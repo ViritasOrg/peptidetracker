@@ -67,12 +67,21 @@ function _wizFlow(){
   // the ester, dose and cadence — pushing 'base' as well would ask for testosterone
   // twice in one run and let the two answers disagree. It stays for the path that has
   // enhanced without TRT, which is how an older draft can still arrive here.
-  if(hasEnhanced){
+  // ⚠️ THE GUIDANCE STEP IS REACHED, THEN ASKS.
+  // Henrik, 2026-08-29: "In load of this screen I want an overlay asking if user wants
+  // to add advanced compounds to the protocol or not... Clicking No takes user past
+  // this part of the wizard."
+  //
+  // So a TRT run reaches 'advise' even without the enhanced goal ticked, and the
+  // overlay there decides. Answering No sets advSkipped, which drops these steps again
+  // — the flow is derived, so removing them is how "past this part" is expressed.
+  var wantsAdv=hasEnhanced||(hasTRT&&!(_wiz&&_wiz.advSkipped));
+  if(wantsAdv){
     if(!hasTRT)steps.push('base');
     steps.push('advise');steps.push('enhanced');
   }
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
-  var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
+  var tierCount=[hasPeps,hasTRT,wantsAdv].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
   steps.push('nutrition');
   steps.push('review');
@@ -135,7 +144,9 @@ var _WIZ_LOADING_HTML='<div class="today-spinner"><div class="today-spinner-dot"
 async function wizSave(){
   var btn=document.querySelector('.wiz-footer .btn.btn-primary');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
+  // The target-free-T step asks for a first injection; that is the protocol's start.
+  if(_wiz.trtPlan&&_wiz.trtPlan.startDate&&!_wiz.cycle_start)_wiz.cycle_start=_wiz.trtPlan.startDate;
+  var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,cycle_start:_wiz.cycle_start||undefined,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
   // Preserve the stable id when editing (proto is rebuilt from the wizard state);
   // assign one for a brand-new stack. Keeps this stack's injections linked.
   if(_wiz.stackIndex>=0&&_wiz.stackIndex<_userStacks.length&&_userStacks[_wiz.stackIndex]&&_userStacks[_wiz.stackIndex].id)proto.id=_userStacks[_wiz.stackIndex].id;
@@ -145,7 +156,17 @@ async function wizSave(){
   } else {
     _userStacks.push(proto);
     _wiz.stackIndex=_userStacks.length-1; // prevent double-push on retry
-    if(_userStacks.length===1){_activeStackIndices=[0];if(typeof _ensureCycleStart==='function')_ensureCycleStart(0);}
+    // ⚠️ EVERY NEW PROTOCOL NEEDS A START DATE, NOT JUST THE FIRST ONE.
+    // generateAndPushInjections below is gated on _savedStack.cycle_start, and this only
+    // set one when the protocol was the user's FIRST. With any existing protocol the new
+    // one saved with no start date, generated no injections, and rendered no curve —
+    // "the wizard still never copy the injections to the saved protocol".
+    // _nextFreeStartDate puts it the day after the current protocol ends.
+    if(typeof _ensureCycleStart==='function')_ensureCycleStart(_wiz.stackIndex);
+    // Activate it only when nothing else is running. Switching a live protocol off
+    // because a new one was drafted is not something the user asked for — and the new
+    // one usually starts after the current one ends, so it would leave a gap.
+    if(!(_activeStackIndices&&_activeStackIndices.length))_activeStackIndices=[_wiz.stackIndex];
   }
   _userStacks=_userStacks.slice(0,4);
   // ── THE WIZARD'S TESTOSTERONE STEP WRITES INTO THE PROTOCOL ───────────────
@@ -727,8 +748,16 @@ function _scopeCycleStart(scope){
 // first or an in-progress dose edit is lost by the redraw.
 function _trtRerender(scope){
   if(scope==='wiz'){
-    if(typeof wizStepTRT==='function')
-      wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+    // ⚠️ THE HANDOFF, NOT THE CLASSIC STEP.
+    // This called wizStepTRT — the multi-compound step — so any re-render from the
+    // wizard replaced the planner's body AND footer with the classic view, taking the
+    // button that triggered it with it. Written when the classic step was the only
+    // wizard TRT step; reachable the moment the planner started running a solve, where
+    // it read as "clicking Generate does nothing". wizStepTRTHandoff renders whichever
+    // step is actually current, and still honours _wizTrtClassic.
+    var _fn=(typeof wizStepTRTHandoff==='function')?wizStepTRTHandoff
+           :((typeof wizStepTRT==='function')?wizStepTRT:null);
+    if(_fn)_fn(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
     return;
   }
   if(typeof _collectEditInputs==='function')_collectEditInputs();
@@ -1127,7 +1156,14 @@ function _trtLastSolveRecords(){
   if(typeof localStorage==='undefined')return {};
   try{return JSON.parse(localStorage.getItem(_TRT_SOLVE_LOG_KEY)||'{}')||{};}catch(e){return {};}
 }
-function _renderTRTSolve(c,selData,scope){
+// ⚠️ IN THE WIZARD, "NEXT" GENERATES.
+// Henrik, 2026-08-28: "Clicking Next after picking free T target should just generate
+// doses, the generate button is a unnecessary step and its also hidden."
+//
+// Both true: it sat below the inputs, where the footer's own Next button already lives —
+// so the primary action was duplicated and the copy that mattered was the one you could
+// not see. hideRun drops it wherever the footer drives the solve instead.
+function _renderTRTSolve(c,selData,scope,hideRun){
   var id=c.id, st=_trtSolveSt(id,scope);
   var conc=st.conc||String(_trtDefaultConc(id));
   var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(x){return x.id===id;}):null;
@@ -1174,6 +1210,7 @@ function _renderTRTSolve(c,selData,scope){
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';
+  if(hideRun)h=h.replace(/<button onclick="trtSolveRun\([^"]*"[^>]*>[^<]*<\/button>/,'');
   if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
   // Everything the solve produces lives in one node, so a keystroke can drop a stale
   // result without redrawing the input the user is typing into.
@@ -1197,6 +1234,11 @@ function _renderTRTSolve(c,selData,scope){
     h+=(function(){
           var cur=_trtCurrentScheduleLabel(c);
           if(!cur)return '';
+          if(st._applied){
+            return '<div style="background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.4);'
+              +'border-radius:8px;padding:8px 10px;font-size:11px;color:#5ad1b0;line-height:1.5;margin-bottom:8px">'
+              +'Applied. This protocol now schedules <b>'+_esc(cur)+'</b>.</div>';
+          }
           var body=(cur==='NONE')
             ? 'Not applied yet. This compound has no dose set, so <b>nothing is being '
               +'scheduled</b>. Apply to use this plan.'
@@ -2972,8 +3014,12 @@ function _renderTRTGuide(cId,weeklyDoseMg){
   var femHtml='';
   try{
     if(typeof _femaleGuardHtml==='function'){
-      var _fc=(typeof TRT_CAT!=='undefined'&&TRT_CAT)?TRT_CAT.find(function(x){return x&&x.id===id;}):null;
-      femHtml=_femaleGuardHtml(_fc||{id:id,unit:'mg/week'},weeklyDoseMg,'mg/week');
+      // ⚠️ cId, NOT id. The parameter is cId; `id` is undefined here, so this threw on
+      // every render and the catch below swallowed it — leaving the female dosing guard
+      // silently absent from the whole TRT tier, which is exactly what the note above
+      // says must not happen. Found 2026-08-29 via a stray [pep:trtFemaleGuard] log.
+      var _fc=(typeof TRT_CAT!=='undefined'&&TRT_CAT)?TRT_CAT.find(function(x){return x&&x.id===cId;}):null;
+      femHtml=_femaleGuardHtml(_fc||{id:cId,unit:'mg/week'},weeklyDoseMg,'mg/week');
     }
   }catch(e){if(typeof _logErr==='function')_logErr('trtFemaleGuard',e);}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
@@ -3074,7 +3120,11 @@ function _wizEnsureTrtPlan(){
         : (c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal);
     }
   }
-  if(!seed.startDate) seed.startDate = _wiz.cycle_start || (typeof dateKey==='function' ? dateKey(NOW) : '');
+  // The first injection follows the protocol's own start, which now defaults to the day
+  // after the last one ends rather than to today.
+  if(!seed.startDate) seed.startDate = _wiz.cycle_start
+    || (typeof _nextFreeStartDate==='function' ? _nextFreeStartDate()
+        : (typeof dateKey==='function' ? dateKey(NOW) : ''));
   _wiz.trtPlan=seed;
   return _wiz.trtPlan;
 }
@@ -3106,13 +3156,88 @@ function _wizTrtPlanComplete(){
   return !!(p.compId && parseDec(p.doseMg)>0 && parseDec(p.cadenceDays)>0 && p.startDate);
 }
 
+// ⚠️ THE SOLVER NEEDS A COMPOUND, NOT A PLAN.
+// Reported: "The free T generator fails with unknown ester?" — "Compound not found."
+// with an ester plainly selected.
+//
+// In target mode the ester lives only in _wiz.trtPlan.compId. It does not become an
+// entry in _wiz.trt.compounds until save, when _wizFoldTrtPlanIntoProto runs. But
+// trtSolveRun resolves the compound through _trtComp, which reads that array — so it
+// had nothing to attach to and refused. trtSolveApply reads the same array, so applying
+// would have failed identically a moment later.
+//
+// Materialise it from the plan before solving. Dose stays EMPTY: a testosterone never
+// arrives with an invented dose, and Apply is what writes the ramp.
+function _wizEnsureTrtCompound(p){
+  if(!p||!p.compId)return null;
+  if(typeof _wiz==='undefined'||!_wiz)return null;
+  if(!_wiz.trt)_wiz.trt={enabled:true,compounds:[]};
+  if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+  _wiz.trt.enabled=true;                 // or wizSave drops the block entirely
+  var c=_wiz.trt.compounds.find(function(x){return x&&x.id===p.compId;});
+  if(!c){
+    var meta=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+      ? TRT_CAT.find(function(t){return t.id===p.compId;}) : null;
+    c={id:p.compId, name:(meta&&meta.name)||p.compId, dose:'', unit:'mg',
+       cadence:'interval', freqVal:1, freqUnit:'days',
+       dot:(meta&&meta.dot)||'#b84a4a', active:true};
+    _wiz.trt.compounds.push(c);
+  }
+  if(p.startDate)c.start_date=p.startDate;
+  return c;
+}
+async function wizTrtGenerate(){
+  var p=_wizEnsureTrtPlan();
+  if(!p.compId)return;
+  var st=_trtSolveSt(p.compId,'wiz');
+  // ⚠️ NOTHING HERE MAY REJECT SILENTLY.
+  // This is an onclick handler returning a promise: an unhandled rejection anywhere
+  // leaves the button looking dead, with no error and no state change. trtSolveRun
+  // re-renders OUTSIDE its own try/catch, so a render fault propagated straight out.
+  try{
+    _wizEnsureTrtCompound(p);
+    st.target=String(p.targetPmol||'');
+    await trtSolveRun('wiz',p.compId);
+  }catch(e){
+    st.running=false;
+    st.error='Could not generate a schedule: '+String((e&&e.message)||e);
+    if(typeof _logErr==='function')_logErr('wizTrtGenerate',e);
+  }
+  // ⚠️ GENERATE AND APPLY ARE ONE ACTION HERE.
+  // "The 'generate and next' need to do this in one step." In the wizard nothing is
+  // saved until the end, so applying is not a commitment — and leaving it unapplied is
+  // how a protocol reached the review step carrying no dose at all. The separate Apply
+  // button stays in the protocol editor, where a plan REPLACES a schedule already
+  // running and the choice is real.
+  if(st.result&&st.result.best&&typeof trtSolveApply==='function'){
+    var _res=st.result;
+    try{ trtSolveApply('wiz',p.compId,'best'); }
+    catch(e){ if(typeof _logErr==='function')_logErr('wizTrtAutoApply',e); }
+    // Apply clears the result. In the wizard the plan is the thing the user is being
+    // shown, so put it back — otherwise the step blanks out the schedule it just made.
+    st.result=_res;
+  }
+  try{ wizRender(); }
+  catch(e){ if(typeof _logErr==='function')_logErr('wizTrtGenerateRender',e); }
+}
 function wizStepTRTHandoff(body,footer){
   if(_wizTrtClassic) return wizStepTRT(body,footer);
   // The footer goes in FIRST and the body build is wrapped: this step reads helpers
   // that live in tab-tcalc.js, which loads after this file. If any of them is missing
   // or throws, the user must still get a usable step — a blank pane with nothing but
   // a Next button gives no way to tell a broken step from an empty one.
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+  // Next is the only forward action on this step, so in target mode it runs the solve
+  // first and stays put to show the result; pressing it again moves on.
+  var _tp=(typeof _wizEnsureTrtPlan==='function')?_wizEnsureTrtPlan():null;
+  // ⚠️ APPLIED COUNTS AS SOLVED. trtSolveApply clears st.result, so testing result
+  // alone flipped the footer back to "Generate" the instant the plan was applied —
+  // an endless loop with no way forward.
+  var _needSolve=!!(_tp&&_tp.mode==='target'&&_tp.compId&&parseDec(_tp.targetPmol)>0
+                    &&(function(){var q=_trtSolveSt(_tp.compId,'wiz');
+                        return !q.result&&!q.running&&!q._applied;})());
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="'
+    +(_needSolve?'wizTrtGenerate()':'wizNext()')+'">'
+    +(_needSolve?'Generate &amp; continue →':'Next →')+'</button>';
   try{
     _wizRenderTrtPlanner(body);
   }catch(err){
@@ -3185,9 +3310,15 @@ function _wizRenderTrtPlanner(body){
     html+='<input type="text" inputmode="decimal" value="'+_esc(String(p.targetPmol||''))+'" placeholder="e.g. 600" onchange="wizSetTrtPlan(\'targetPmol\',this.value)" style="'+iSty+';margin-bottom:14px">';
     html+='<label style="'+lSty+'">3 · First injection</label>';
     html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';
-    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">'
-      +'The schedule itself — how often, and how much to draw each time — is worked out on the next screen, '
-      +'where you can see what it holds before applying it.</div>';
+    var _sst=(typeof _trtSolveSt==='function'&&p.compId)?_trtSolveSt(p.compId,'wiz'):null;
+    if(p.compId&&_sst&&(_sst.result||_sst.running||_sst.error)){
+      html+=(typeof _renderTRTSolve==='function')
+        ? _renderTRTSolve({id:p.compId,name:nameOf(p.compId)},{},'wiz',true) : '';
+    }else{
+      html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">'
+        +'Press Next and the app works out the schedule — how often, and how much to draw each '
+        +'time — so you can see what it holds before applying it.</div>';
+    }
     html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
     body.innerHTML=html;
     return;
@@ -4213,6 +4344,49 @@ function _wizAdviseFemaleHtml(res){
   return h;
 }
 
+// Yes dismisses and the wizard carries on. No drops the enhanced steps from the flow
+// and lands on whatever comes next, which is what "past this part" means.
+function wizAdvAnswer(yes){
+  _wiz.advAsked=true;
+  if(yes){
+    if(!_wiz.goals)_wiz.goals=[];
+    if(_wiz.goals.indexOf('enhanced')<0)_wiz.goals.push('enhanced');
+    if(!_wiz.enhanced)_wiz.enhanced={enabled:true,compounds:[]};
+    _wiz.enhanced.enabled=true;
+    _wiz.advSkipped=false;
+    wizRender();
+    return;
+  }
+  _wiz.advSkipped=true;
+  var g=_wiz.goals||[]; var i=g.indexOf('enhanced'); if(i>=0)g.splice(i,1);
+  if(_wiz.enhanced)_wiz.enhanced.enabled=false;
+  var flow=_wizFlow();
+  var idx=flow.indexOf('nutrition');
+  if(idx<0)idx=flow.indexOf('review');
+  _wiz.step=(idx>=0)?idx:Math.max(0,flow.length-1);
+  wizRender();
+}
+function _wizAdvOverlayHtml(){
+  var b='background:var(--surface2);border:1px solid var(--border);border-radius:10px;'
+    +'padding:14px;font-size:14px;font-weight:700;color:var(--text);cursor:pointer;'
+    +'font-family:inherit;width:100%;text-align:left';
+  return '<div style="position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.92);'
+    +'display:flex;align-items:center;justify-content:center;padding:24px">'
+    +'<div style="max-width:420px;width:100%">'
+    +'<div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px">'
+    +'Add advanced compounds?</div>'
+    +'<div style="font-size:12.5px;color:var(--muted2);line-height:1.55;margin-bottom:18px">'
+    +'Your testosterone is set. Do you want to add anything on top of it — an oral, a '
+    +'second injectable, or a GH-axis compound?</div>'
+    +'<div style="display:flex;flex-direction:column;gap:10px">'
+    +'<button onclick="wizAdvAnswer(true)" style="'+b+'">Yes, add compounds'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'Continues to guidance and the compound list.</div></button>'
+    +'<button onclick="wizAdvAnswer(false)" style="'+b+'">No, testosterone only'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'Skips the rest of this section. You can still add compounds later from the protocol.</div></button>'
+    +'</div></div></div>';
+}
 function wizStepAdvise(body,footer){
   var st=_wizAdviseState();
   var inp=_wizAdviseInputs();
@@ -4302,7 +4476,9 @@ function wizStepAdvise(body,footer){
     html+='<div style="font-size:11px;color:var(--muted2);margin-top:8px;line-height:1.5;">You can fine-tune doses and add anything else on the next step.</div>';
     html+=_renderSafetyNote('enhanced');
   }
-  body.innerHTML=html;
+  // The overlay rides on top of the fully-rendered step, so answering Yes just drops it
+  // and the guidance behind it is already there — no second render, no flicker.
+  body.innerHTML=html+((!_wiz.advAsked&&!_wiz.advSkipped)?_wizAdvOverlayHtml():'');
   // Doc 07 §9 constraint 5: the pregnancy prompt BLOCKS. Every other warning in this
   // wizard is passive; this one gates the step, because an absolute contraindication
   // that a user can scroll past is not a contraindication.
