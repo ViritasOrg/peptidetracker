@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.299</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -1369,12 +1369,40 @@ function _scanAndShowStartupConflicts(){
 // stack whose id is not yet frozen would MOVE its cycle id and orphan every
 // injection already stored against 'name_nostart'. Freeze the id first — that is
 // exactly what _ensureStackId is for — then set the date.
+// ⚠️ A NEW PROTOCOL STARTS WHERE THE LAST ONE ENDS.
+// Henrik, 2026-08-28: "I have a active protocol ending September 13, the default start
+// date when I create a new Protocol should be last date of current protocol (if one
+// exists) +1 day. So here it should default to 14 September"
+//
+// Defaulting to today put the new protocol on top of one still running, which is not a
+// thing anyone means to do: two protocols overlapping schedule two sets of injections
+// into the same days, and only one of them can be the active one driving the curve.
+//
+// Every protocol is considered, not only the active one, because at the moment of
+// creation the flags are in flux — the new protocol may already be active and the old
+// one just deactivated. The clamp below makes that safe: a protocol that has already
+// ended yields today, so only a genuinely current one moves the date.
+function _nextFreeStartDate(){
+  var today=dateKey(NOW), latest='';
+  (_userStacks||[]).forEach(function(st){
+    if(!st)return;
+    // A protocol with no cycle_start has no end either — that is the one being created.
+    var end=(typeof _cycleEndDateStr==='function')?_cycleEndDateStr(st):(st.end_date||'');
+    if(end&&end>latest)latest=end;
+  });
+  if(!latest)return today;
+  var d=parseLocalDate(latest);
+  if(!d||isNaN(d.getTime()))return today;
+  d.setDate(d.getDate()+1);
+  var nxt=dateKey(d);
+  return nxt>today?nxt:today;      // never default into the past
+}
 function _ensureCycleStart(idx){
   var st=_userStacks[idx];
   if(!st)return false;
   if(typeof _ensureStackId==='function')_ensureStackId(st);
   if(st.cycle_start)return false;
-  st.cycle_start=dateKey(NOW);
+  st.cycle_start=_nextFreeStartDate();
   return true;
 }
 // ── EVERYTHING THAT MUST HAPPEN WHEN THE ACTIVE PROTOCOL CHANGES ────────────
@@ -2447,20 +2475,20 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="inj-writer.js?v=1.298"></script>
-<script src="tab-cycles.js?v=1.298"></script>
-<script src="tab-macros.js?v=1.298"></script>
-<script src="tab-stack.js?v=1.298"></script>
-<script src="tab-today.js?v=1.298"></script>
-<script src="tab-schedule.js?v=1.298"></script>
-<script src="tab-timeline.js?v=1.298"></script>
-<script src="tab-body.js?v=1.298"></script>
-<script src="tab-recon.js?v=1.298"></script>
-<script src="tab-blood.js?v=1.298"></script>
-<script src="tab-labs.js?v=1.298"></script>
-<script src="tab-tcalc.js?v=1.298"></script>
-<script src="tab-thist.js?v=1.298"></script>
-<script src="tab-supplements.js?v=1.298"></script>
+<script src="inj-writer.js?v=1.299"></script>
+<script src="tab-cycles.js?v=1.299"></script>
+<script src="tab-macros.js?v=1.299"></script>
+<script src="tab-stack.js?v=1.299"></script>
+<script src="tab-today.js?v=1.299"></script>
+<script src="tab-schedule.js?v=1.299"></script>
+<script src="tab-timeline.js?v=1.299"></script>
+<script src="tab-body.js?v=1.299"></script>
+<script src="tab-recon.js?v=1.299"></script>
+<script src="tab-blood.js?v=1.299"></script>
+<script src="tab-labs.js?v=1.299"></script>
+<script src="tab-tcalc.js?v=1.299"></script>
+<script src="tab-thist.js?v=1.299"></script>
+<script src="tab-supplements.js?v=1.299"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}

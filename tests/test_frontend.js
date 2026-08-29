@@ -397,12 +397,29 @@ check('_wizFlow: peps-only has no validate',!t1flow.includes('validate'));
 // _wizFlow: TRT-only (T2, trt enabled, no pep goals)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 var trtOnlyFlow=G._wizFlow();
-check('_wizFlow: TRT-only has 5 steps', trtOnlyFlow.length===5, 'got '+trtOnlyFlow.length);
-check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,nutrition,review'));
+// "Anything else on top?" is no longer a step of its own — since 2026-08-29 it is an
+// overlay drawn on top of the fully-built 'advise' step, so the guidance is already
+// on screen behind the question. The advanced steps are therefore in the flow by
+// default and only leave it once the user answers No (_wiz.advSkipped).
+check('_wizFlow: TRT-only has 8 steps', trtOnlyFlow.length===8, 'got '+trtOnlyFlow.length);
+check('_wizFlow: TRT-only steps',
+  trtOnlyFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'),
+  trtOnlyFlow.join(','));
+check('_wizFlow: TRT-only reaches the advise step that carries the overlay',
+  trtOnlyFlow.includes('advise'));
+// Answering No drops the advanced steps entirely.
+G._wiz.advSkipped=true;
+var trtSkipFlow=G._wizFlow();
+G._wiz.advSkipped=false;
+check('_wizFlow: TRT-only after No has 5 steps', trtSkipFlow.length===5, 'got '+trtSkipFlow.length);
+check('_wizFlow: TRT-only after No steps',
+  trtSkipFlow.join(',')===('cycle,goals,trt,nutrition,review'), trtSkipFlow.join(','));
+check('_wizFlow: TRT-only after No has no enhanced', !trtSkipFlow.includes('enhanced'));
+check('_wizFlow: TRT-only after No has no validate', !trtSkipFlow.includes('validate'));
 // _wizFlow: Peps + TRT (T2, trt enabled, pep goal selected)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 var pepTrtFlow=G._wizFlow();
-check('_wizFlow: peps+TRT has 9 steps', pepTrtFlow.length===9, 'got '+pepTrtFlow.length);
+check('_wizFlow: peps+TRT has 11 steps', pepTrtFlow.length===11, 'got '+pepTrtFlow.length);
 check('_wizFlow: peps+TRT has validate', pepTrtFlow.includes('validate'));
 check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='review');
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
@@ -478,12 +495,14 @@ G._wiz.step=2;G.wizBack();check('wizBack: 2→1', G._wiz.step===1);
 // peps-only: wizNext from last step stays clamped
 G._userTier=1;G.initWizard();G._wiz.step=6;G.wizNext();
 check('wizNext: peps-only does not exceed step 6', G._wiz.step===6);
-// TRT-only: step through all 5 steps (cycle,goals,trt,nutrition,review)
+// TRT-only: cycle,goals,trt,advise,enhanced,validate,nutrition,review — the advanced
+// steps are in the flow until the overlay on 'advise' is answered No.
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
-G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
+check('wizNext: TRT-only after 4 calls = step 4 (enhanced)', G._wiz.step===4);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT-only does not exceed step 7 (review)', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT-only 7→6 (nutrition)', G._wiz.step===6);
 // TRT+Enhanced (no peps): cycle,goals,trt,advise,enhanced,validate,nutrition,review.
 // 'base' is gone from this path as of 2026-08-20 — the single Compounds toggle sets
 // both flags, so the 'trt' step already asked for the testosterone an enhanced cycle
@@ -1333,7 +1352,12 @@ console.log(`\n${'─'.repeat(59)}`);
     !/if\(st&&st\.cycle_start\)set\.add\(_stackCycleId\(st\)\)/.test(rawScript));
 
   check('activation backfills the start date', /function _ensureCycleStart\(idx\)\{/.test(rawScript));
-  check('  …to today', /st\.cycle_start=dateKey\(NOW\);/.test(rawScript));
+  // ⚠️ NO LONGER "TODAY". Henrik, 2026-08-28: a new protocol should start the day after
+  // the current one ends, so activation backfills _nextFreeStartDate() — which clamps to
+  // today when nothing is still running, preserving the behaviour this test was written
+  // for while fixing the overlap it caused.
+  check('  …to the day after the last protocol ends, or today',
+    /st\.cycle_start=_nextFreeStartDate\(\);/.test(rawScript));
   check('  …and never overwrites one already set', /if\(st\.cycle_start\)return false;/.test(rawScript));
 
   // _deriveStackCycleId includes the start date. Setting one before the id is
@@ -1344,8 +1368,15 @@ console.log(`\n${'─'.repeat(59)}`);
   check('toggling a protocol on starts it', /_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/.test(rawScript));
   check('useStack starts it too',
     (rawScript.match(/_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/g) || []).length === 2);
-  check('a first protocol from the wizard starts it',
-    /if\(_userStacks\.length===1\)\{_activeStackIndices=\[0\];if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(0\);\}/.test(stackJs));
+  // ⚠️ NOT JUST THE FIRST ONE. cycle_start was set only when the new protocol was the
+  // user's first, and generateAndPushInjections is gated on it — so with any existing
+  // protocol the wizard saved a protocol that generated no injections and drew no curve.
+  check('every new protocol from the wizard gets a start date',
+    /if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_wiz\.stackIndex\);/.test(stackJs));
+  // Activated only when nothing else is running: the new protocol usually starts after
+  // the current one ends, so switching that off would leave a gap nobody asked for.
+  check('  …and is activated only when nothing else is',
+    /if\(!\(_activeStackIndices&&_activeStackIndices\.length\)\)_activeStackIndices=\[_wiz\.stackIndex\];/.test(stackJs));
   check('starting from a template starts it',
     /_activeStackIndices=\[_idx\];\s*if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_idx\);/.test(stackJs));
 }
@@ -5505,6 +5536,237 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /var k=\(e\.compId\|\|'\?'\)\+'\\u0000'\+\(e\.cycleId\|\|''\);/.test(src));
   }
 
+  // ── A new protocol starts where the last one ends ─────────────────────────
+  // Henrik, 2026-08-28: "I have a active protocol ending September 13, the default
+  // start date when I create a new Protocol should be last date of current protocol
+  // (if one exists) +1 day. So here it should default to 14 September"
+  //
+  // Defaulting to today put a new protocol on top of one still running: two protocols
+  // overlapping schedule two sets of injections into the same days.
+  {
+    // _userStacks is a let binding, so the array is mutated rather than rebound —
+    // exactly how the app itself reaches it.
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const setStacks=(arr)=>{ sandbox.__stk=arr;
+      ev('_userStacks.length=0;__stk.forEach(function(x){_userStacks.push(x);});'); };
+    const today=ev('dateKey(NOW)');
+    const nextStart=()=>ev('_nextFreeStartDate()');
+    const save=ev('_userStacks.slice()');
+
+    setStacks([]);
+    check('with no protocols the default is today', nextStart()===today, nextStart());
+    // The reported case.
+    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'}]);
+    check('  …a protocol ending 13 Sep defaults the next one to 14 Sep',
+      nextStart()==='2026-09-14', nextStart());
+    // An end derived from cycle_length counts too, not just an explicit end_date.
+    setStacks([{id:'p1',cycle_start:'2026-08-28',cycle_length:12}]);
+    check('  …a length-derived end counts the same as an explicit one',
+      nextStart()==='2026-11-21', nextStart());
+    // ⚠️ NEVER INTO THE PAST. A finished protocol must not drag the default backwards.
+    setStacks([{id:'p1',cycle_start:'2026-01-01',end_date:'2026-03-01'}]);
+    check('  …but a protocol that already ended yields today', nextStart()===today, nextStart());
+    // The protocol being created has no cycle_start, so it contributes no end date and
+    // cannot push its own default forward.
+    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'},{id:'new'}]);
+    check('  …and the protocol being created does not count itself',
+      nextStart()==='2026-09-14', nextStart());
+
+    setStacks(save);
+    check('  …and the wizard first-injection follows the same default',
+      /_nextFreeStartDate==='function' \? _nextFreeStartDate\(\)/
+        .test(require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8')));
+  }
+
+  // ── Deactivating a protocol drops it from the curve at once ───────────────
+  // Henrik, 2026-08-28: "Deactivate a protocol doesn't directly remove it from t-calc
+  // curve render, it requires restarting."
+  //
+  // _tcProtocolInjections read _injectionsCache and trusted it. The cache IS filtered by
+  // active cycle id, but only when refreshInjectionsCache rebuilds it — so between the
+  // toggle and that round trip the curve went on plotting a protocol just switched off.
+  {
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const svCache=G._injectionsCache, svStacks=ev('_userStacks.slice()'), svAct=ev('_activeStackIndices.slice()');
+    sandbox.__s=[{id:'p4',name:'Protocol 4',cycle_start:'2026-08-28',cycle_length:12,
+      trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'125',unit:'mg',
+        freqVal:1,freqUnit:'weeks',days:[1],active:true}]},enhanced:{}}];
+    ev('_userStacks.length=0;__s.forEach(function(x){_userStacks.push(x);});');
+    const cid=ev('_stackCycleId(_userStacks[0])');
+    const cache={};
+    ['2026-08-31','2026-09-07','2026-09-14'].forEach(d=>{ cache[d]=[{cycle_id:cid,date:d,
+      compound_id:'enanthate',tier:'trt',dose:'125',unit:'mg',active:true,logged:false}]; });
+    G._injectionsCache=cache;
+
+    ev('_activeStackIndices=[0];');
+    check('an active protocol feeds the curve', G._tcProtocolInjections().length===3,
+      String(G._tcProtocolInjections().length));
+    ev('_activeStackIndices=[];');
+    check('  …and deactivating drops it immediately, with no cache rebuild',
+      G._tcProtocolInjections().length===0, String(G._tcProtocolInjections().length));
+    check('  …the dropped rows are still reported for diagnosis',
+      G._tcInjExcluded && G._tcInjExcluded.count===3, JSON.stringify(G._tcInjExcluded||{}));
+
+    // ⚠️ An empty stack list means NOT LOADED, not "nothing active" — filtering on it
+    // would blank the curve during boot, which is worse than the bug being fixed.
+    ev('_userStacks.length=0;');
+    check('  …but an unloaded stack list does not blank the curve',
+      G._tcProtocolInjections().length===3, String(G._tcProtocolInjections().length));
+
+    G._injectionsCache=svCache;
+    sandbox.__s=svStacks; ev('_userStacks.length=0;__s.forEach(function(x){_userStacks.push(x);});');
+    sandbox.__a=svAct; ev('_activeStackIndices=__a;');
+  }
+
+  // Next generates in the wizard — the Generate button duplicated the footer's job,
+  // and the copy that mattered was the one below the fold.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('the wizard footer runs the solve when a target is set but unsolved',
+      /_needSolve\?'wizTrtGenerate\(\)':'wizNext\(\)'/.test(stk));
+    check('  …and the inline Generate button is suppressed there',
+      /if\(hideRun\)h=h\.replace\(/.test(stk));
+  }
+
+  // ── The wizard solve needs a compound, not just a plan ────────────────────
+  // Reported: "The free T generator fails with unknown ester?" — "Compound not found."
+  // with an ester plainly selected. In target mode the ester lives only in
+  // _wiz.trtPlan.compId and does not become an entry in _wiz.trt.compounds until save,
+  // but trtSolveRun (and trtSolveApply) resolve through that array.
+  {
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const svWiz=ev('typeof _wiz!=="undefined"?_wiz:null');
+    ev('_wiz={step:0,goals:["trt"],trt:{enabled:false,compounds:[]},enhanced:{},cycle_length:12};');
+    const p=G._wizEnsureTrtPlan();
+    p.mode='target'; p.compId='enanthate'; p.targetPmol='1500'; p.startDate='2026-08-29';
+    check('generating materialises the compound the solver resolves',
+      (function(){ G._wizEnsureTrtCompound(p); return ev('_wiz.trt.compounds.length')===1; })(),
+      String(ev('_wiz.trt.compounds.length')));
+    check('  …and it is the ester that was chosen',
+      ev('_wiz.trt.compounds[0].id')==='enanthate');
+    // ⚠️ Still no invented dose — Apply is what writes the ramp.
+    check('  …carrying no dose of its own', ev('_wiz.trt.compounds[0].dose')==='',
+      JSON.stringify(ev('_wiz.trt.compounds[0].dose')));
+    check('  …with the TRT block enabled so wizSave keeps it',
+      ev('_wiz.trt.enabled')===true);
+    check('  …and the first-injection date carried across',
+      ev('_wiz.trt.compounds[0].start_date')==='2026-08-29');
+    check('  …calling it twice does not duplicate the compound',
+      (function(){ G._wizEnsureTrtCompound(p); return ev('_wiz.trt.compounds.length')===1; })());
+    sandbox.__w=svWiz; if(svWiz) ev('_wiz=__w;');
+  }
+
+  // ── The female guard reaches the TRT tier ─────────────────────────────────
+  // _renderTRTGuide takes cId, but its female-guard block referenced `id` — undefined,
+  // so it threw on every render and the try/catch swallowed it. The guard was therefore
+  // silently absent from the whole TRT tier, which is where topical and test_e live and
+  // exactly what that block's own comment says must not happen.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    const m=stk.match(/function _renderTRTGuide\(cId[\s\S]*?\n\}/);
+    check('the TRT guide resolves the female table on cId, not an undefined id',
+      !!m && /x\.id===cId/.test(m[0]) && !/x\.id===id;/.test(m[0]));
+    check('  …and passes cId to the guard itself',
+      !!m && /_femaleGuardHtml\(_fc\|\|\{id:cId,/.test(m[0]));
+    // It must actually produce something rather than throw into the catch.
+    if(typeof G._renderTRTGuide==='function'){
+      let threw=false, out='';
+      try{ out=G._renderTRTGuide('enanthate',150)||''; }catch(e){ threw=true; }
+      check('  …and the guide renders without throwing', !threw && out.length>0);
+    }
+  }
+
+  // ── No swallowed ReferenceErrors ──────────────────────────────────────────
+  // _renderTRTGuide referenced `id` where its parameter is `cId`. It threw on every
+  // render and a try/catch calling _logErr swallowed it, so the female dosing guard was
+  // silently absent from the whole TRT tier for as long as it took someone to notice a
+  // stray log line. A catch that logs and continues is right for a render helper — it
+  // just means a typo'd identifier can hide indefinitely, so the class is pinned here.
+  {
+    const fsx=require('fs'), pathx=require('path');
+    const files=['index.html','tab-stack.js','tab-tcalc.js','tab-blood.js','tab-today.js',
+      'tab-labs.js','tab-recon.js','tab-schedule.js','tab-supplements.js','tab-thist.js',
+      'tab-timeline.js','tab-macros.js','tab-body.js','tab-cycles.js','inj-writer.js']
+      .map(f=>pathx.join(__dirname,'..',f)).filter(f=>fsx.existsSync(f));
+    const srcMap={};
+    files.forEach(f=>{ let t=fsx.readFileSync(f,'utf8');
+      if(f.endsWith('.html')) t=(t.match(/<script>[\s\S]*?<\/script>/g)||[]).map(b=>b.slice(8,-9)).join('\n');
+      srcMap[pathx.basename(f)]=t; });
+    const ALLSRC=Object.keys(srcMap).map(k=>srcMap[k]).join('\n');
+    const isDeclared=n=>new RegExp('(?:function|var|let|const|class)\\s+'+n+'\\b').test(ALLSRC)
+      || new RegExp('function[^(]*\\([^)]*\\b'+n+'\\b[^)]*\\)').test(ALLSRC)
+      || new RegExp('\\b'+n+'\\s*(?:=>|:)').test(ALLSRC)
+      || new RegExp('catch\\s*\\(\\s*'+n+'\\b').test(ALLSRC)
+      || new RegExp('\\b'+n+'\\s*=[^=]').test(ALLSRC);
+    const KNOWN=new Set(('Math JSON Date Object Array String Number Boolean RegExp Error Set Map Promise '
+      +'console window document localStorage sessionStorage navigator location fetch setTimeout clearTimeout '
+      +'setInterval clearInterval requestAnimationFrame parseInt parseFloat isNaN isFinite AbortController '
+      +'encodeURIComponent decodeURIComponent NaN Infinity undefined true false typeof instanceof new delete '
+      +'void in of return if else for while do switch case break continue function var let const try catch '
+      +'finally throw yield await async this arguments null Intl Symbol Blob URL FormData TextEncoder '
+      +'performance crypto structuredClone RE').split(/\s+/));
+    const suspects=[];
+    Object.keys(srcMap).forEach(function(fname){
+      const t=srcMap[fname], re=/try\s*\{/g; let m;
+      while((m=re.exec(t))){
+        let i=m.index+m[0].length, d=1;
+        while(i<t.length&&d>0){const c=t[i]; if(c==='{')d++; else if(c==='}')d--; i++;}
+        const body=t.slice(m.index+m[0].length,i-1);
+        if(!/catch\s*\([\s\S]{0,40}\)\s*\{[\s\S]{0,200}_logErr/.test(t.slice(i,i+300))) continue;
+        const clean=body
+          .replace(/\/\*[\s\S]*?\*\//g,' ').replace(/(^|[^:])\/\/[^\n]*/g,'$1 ')
+          .replace(/'(?:\\.|[^'\\])*'/g,"''").replace(/"(?:\\.|[^"\\])*"/g,'""')
+          .replace(/`(?:\\.|[^`\\])*`/g,'``')
+          .replace(/([=(,:!&|?{;[+]\s*)\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\n])+\/[gimsuy]*/g,'$1RE')
+          .replace(/\.\s*[A-Za-z_$][\w$]*/g,'.')
+          .replace(/[A-Za-z_$][\w$]*\s*:/g,' ');
+        const seen={};
+        let idm; const idre=/\b([A-Za-z_$][\w$]*)\b/g;
+        while((idm=idre.exec(clean))){
+          const n=idm[1];
+          if(KNOWN.has(n)||seen[n]) continue; seen[n]=1;
+          if(isDeclared(n)) continue;
+          suspects.push(fname+':~'+t.slice(0,m.index).split('\n').length+' uses `'+n+'`');
+        }
+      }
+    });
+    check('no _logErr-guarded block references an undeclared identifier',
+      suspects.length===0, suspects.slice(0,5).join(' | '));
+  }
+
+  // ── Generate & continue must not be a dead button ─────────────────────────
+  // Reported: "App hangs at 'Generate and continue' or button doesn't work, clicking it
+  // does nothing." Three faults: _trtRerender('wiz') rendered the CLASSIC step, wiping
+  // the planner's body and footer (and throwing); trtSolveRun re-renders outside its own
+  // try/catch so that rejection escaped an onclick handler silently; and applying clears
+  // st.result, which flipped the footer back to "Generate" — a loop with no way forward.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('the wizard re-render targets the current TRT step, not the classic one',
+      /wizStepTRTHandoff==='function'\)\?wizStepTRTHandoff/.test(stk));
+    check('  …and generate cannot reject silently out of an onclick',
+      /_logErr\('wizTrtGenerate',e\)/.test(stk) && /Could not generate a schedule/.test(stk));
+    check('  …an applied plan counts as solved, so the footer advances',
+      /return !q\.result&&!q\.running&&!q\._applied;/.test(stk));
+    check('  …and the plan stays on screen after the wizard applies it',
+      /st\.result=_res;/.test(stk));
+    // The box must stop claiming "not applied yet" once it has been applied.
+    if(typeof G._renderTRTSolve==='function'){
+      const comp={id:'enanthate',name:'Test E',dose:'20',unit:'mg',cadence:'interval',
+        freqVal:1,freqUnit:'days',dose_phases:[{w:0,d:'10',u:'mg'},{w:4,d:'20',u:'mg'}]};
+      const res={best:{cadence:{label:'Daily, dose varies by day',dithered:true,freqVal:1,freqUnit:'days'},
+        lowPmol:1400,highPmol:1500,ripple:.04,drift:.02,worst:.05,meanErr:10,settleWeeks:3,stepPmol:100,
+        phases:[{w:0,mg:7,ml:0.03,perWeek:50,iv:1,pattern:[12.5,0,12.5,0,12.5,12.5,0]}],
+        weekly:[{week:0,mean:1450}]},alternatives:[],target:1500,concMgPerMl:250,stepMl:0.05,weeks:12,notes:[]};
+      G._trtSolveState={enanthate:{target:'1500',conc:'250',weeks:12,step:'0.05',
+        running:false,error:'',result:res,_applied:res.best}};
+      const h=G._renderTRTSolve(comp,{},'wiz',true);
+      check('  …and the panel says applied, not "not applied yet"',
+        /Applied\. This protocol now schedules/.test(h) && !/Not applied yet/.test(h));
+      G._trtSolveState={};
+    }
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -6659,15 +6921,21 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 2: TRT only (T2, trt.enabled=true, no pep goals)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
   var f2=G._wizFlow();
-  check('flow TRT-only: 5 steps', f2.length===5, 'got '+f2.length);
+  check('flow TRT-only: 8 steps', f2.length===8, 'got '+f2.length);
   check('flow TRT-only: has trt', f2.includes('trt'));
   check('flow TRT-only: no peptides step', !f2.includes('peptides'));
-  check('flow TRT-only: no validate', !f2.includes('validate'));
+  check('flow TRT-only: has advise, the overlay host step', f2.includes('advise'));
+  // ...and answering No to the overlay strips the advanced steps back out.
+  G._wiz.advSkipped=true;
+  var f2b=G._wizFlow();
+  G._wiz.advSkipped=false;
+  check('flow TRT-only after No: 5 steps', f2b.length===5, 'got '+f2b.length);
+  check('flow TRT-only after No: no validate', !f2b.includes('validate'));
 
   // Flow 3: Peps + TRT (T2, trt.enabled, pep goal)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
   var f3=G._wizFlow();
-  check('flow peps+TRT: 9 steps', f3.length===9, 'got '+f3.length);
+  check('flow peps+TRT: 11 steps', f3.length===11, 'got '+f3.length);
   check('flow peps+TRT: has peptides', f3.includes('peptides'));
   check('flow peps+TRT: has trt', f3.includes('trt'));
   check('flow peps+TRT: has validate', f3.includes('validate'));
@@ -7529,7 +7797,8 @@ console.log('\n── Wizard TRT step ──────────────
     G.wizSetTrtPlan('mode','target'); b=_mkEl(); f=_mkEl(); G.wizStepTRTHandoff(b,f);
     check('  …target mode asks for the level, not the milligrams',
       /Target free T \(pmol\/L\)/.test(b.innerHTML) && !/2 · Dose per injection/.test(b.innerHTML));
-    check('  …and says the schedule comes next', /worked out on the next screen/.test(b.innerHTML));
+    check('  …and says Next will work the schedule out',
+      /Press Next and the app works out the schedule/.test(b.innerHTML));
     check('  …seeding the solver with the level typed here', (function(){
       G.wizSetTrtPlan('compId','enanthate'); G.wizSetTrtPlan('targetPmol','600');
       return G._trtSolveSt('enanthate','wiz').target==='600';
@@ -7861,6 +8130,17 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     // block tests the plan/manual merge in isolation — the history layer has its own
     // block further down.
     var _svHistP = G._tcHistory, _svHStateP = G._tcHistoryState;
+    // ⚠️ THE PLAN NEEDS AN ACTIVE PROTOCOL TO OWN IT.
+    // These rows carry cycle_id 'stack1'. The curve now renders ACTIVE protocols only
+    // (deactivating one used to need a restart), so a cycle no protocol owns is an
+    // orphan and is deliberately excluded. This block is about the plan/manual merge,
+    // not orphan handling, so 'stack1' is registered as a real active protocol.
+    var _svStacksP = vm.runInContext('_userStacks.slice()', sandbox);
+    var _svActP    = vm.runInContext('_activeStackIndices.slice()', sandbox);
+    sandbox.__p1 = [{id:'stack1', name:'stack1', cycle_start:'2026-08-01', cycle_length:26,
+                     trt:{enabled:true,compounds:[]}, enhanced:{}}];
+    vm.runInContext('_userStacks.length=0;__p1.forEach(function(x){_userStacks.push(x);});'
+                    +'_activeStackIndices=[0];', sandbox);
     G._tcHistory = []; G._tcHistoryState = 'ready';
     var _setup = function(cache, manual){
       G._injectionsCache = cache;
@@ -7948,6 +8228,9 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     check('a missing injections cache is handled', G._tcProtocolInjections().length === 0);
 
     G._injectionsCache = _svCache; G._tcHistory = _svHistP; G._tcHistoryState = _svHStateP; G._tcp = _svTcp;
+    sandbox.__p1 = _svStacksP;
+    vm.runInContext('_userStacks.length=0;__p1.forEach(function(x){_userStacks.push(x);});', sandbox);
+    sandbox.__a1 = _svActP; vm.runInContext('_activeStackIndices=__a1;', sandbox);
   }else{
     check('_tcCurveLog / _tcProtocolInjections available', false);
   }
@@ -10586,8 +10869,12 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   } catch(e){ _awThrew=true; console.error('  avg-window test threw:', e.message); }
   check('avg window: hook fires with a window', !_awThrew && _awWhole && _awMonth);
   if (_awWhole && _awMonth) {
-    check('avg window: reported average equals the mean of its own visible window',
-      Math.abs(_awWhole.avg - _awWinMean(_awWhole.xStart, _awWhole.xEnd)) < 0.5);
+    // Since 2026-08-29 the window is clamped to the dosed span (day 0 .. last injection),
+    // so the reported figure is the mean of avgFrom..avgTo, not of the raw visible window.
+    check('avg window: reported average equals the mean of the span it says it averaged',
+      Math.abs(_awWhole.avg - _awWinMean(_awWhole.avgFrom, _awWhole.avgTo)) < 0.5);
+    check('avg window: whole zoom does not average past the last injection',
+      _awWhole.avgTo <= _awWhole.logDays, 'avgTo='+_awWhole.avgTo+' logDays='+_awWhole.logDays);
     check('avg window: zoom changes the window (month narrower than whole)',
       (_awMonth.xEnd - _awMonth.xStart) < (_awWhole.xEnd - _awWhole.xStart));
     check('avg window: the two zooms yield different averages (not a stale global value)',
@@ -13201,7 +13488,16 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // the FUTURE doubled. The 7 doses were counted as drafts still in manualLog AND
   // as the stored protocol rows they had just become.
   {
-    const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState };
+    const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState,
+      st: vm.runInContext('_userStacks.slice()',sandbox),
+      ac: vm.runInContext('_activeStackIndices.slice()',sandbox) };
+    // ⚠️ Same reason as the plan/manual block above: the curve renders ACTIVE protocols
+    // only now, so these rows need the protocol that owns them to exist and be active.
+    // The subject here is the double count, not orphan handling.
+    sandbox.__dp = [{id:'protocol_2_nostart', name:'protocol_2', cycle_start:'2026-08-01',
+                     cycle_length:26, trt:{enabled:true,compounds:[]}, enhanced:{}}];
+    vm.runInContext('_userStacks.length=0;__dp.forEach(function(x){_userStacks.push(x);});'
+                    +'_activeStackIndices=[0];', sandbox);
     // Relative to today: these were fixed dates when written on 2026-08-15 and have
     // since aged into the past, where the curve legitimately drops them. The point of
     // the check is the double count, not the calendar.
@@ -13237,6 +13533,9 @@ console.log('\n── injection deletes: scoped, and never a record ────
         log2.length === 1, 'got ' + log2.map(function(e){ return e.compId; }).join(','));
     }
     G._tcp=_dupSave.tp; G._injectionsCache=_dupSave.ic; G._tcHistory=_dupSave.h; G._tcHistoryState=_dupSave.hs;
+    sandbox.__dp=_dupSave.st;
+    vm.runInContext('_userStacks.length=0;__dp.forEach(function(x){_userStacks.push(x);});',sandbox);
+    sandbox.__da=_dupSave.ac; vm.runInContext('_activeStackIndices=__da;',sandbox);
   }
 
   // Saving must do what a cold start does: re-read the record, then rebuild. The
@@ -14541,4 +14840,65 @@ console.log('\n── Supplier-list groups and the new ester ──────�
   (G.TRT_CAT || []).forEach(function(c){
     check('  …' + c.id + ' has dose guidance', !!(G.TRT_GUIDE && G.TRT_GUIDE[c.id]));
   });
+}
+
+// ── average window: stops at the last injection ────────────────────────────────
+// Henrik, 2026-08-29: "Average should not include time before furst injection in
+// history or after last planned injection in the current active protocol."
+// At Whole zoom the visible window runs past the last dose into the washout tail,
+// where the level decays toward zero by construction. Averaging that in reported a
+// plan holding ~1570 as avg 1051. The average must be taken over the dosed span only.
+console.log('\n── average line: dosed span only, no washout tail ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _azSavedFT  = G._tcp.measuredFT;
+  var _azSavedBw  = G._tcBwEntries;
+  var _azSavedGet = G.document.getElementById;
+
+  G._tcp.measuredFT = '217';
+  G._tcBwEntries = [{date:'2026-06-26', free_t:'217', total_t:'17', shbg:'45', unit:'pmol/L'}];
+
+  var _azCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:noop, closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop,
+    moveTo:noop, lineTo:noop, clip:noop, rect:noop, clearRect:noop,
+    quadraticCurveTo:noop, bezierCurveTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  var _azSeen = null;
+  function _azKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  var _azLog = [], _azS0 = new Date('2026-06-26T12:00:00');
+  for (var _azI = 0; _azI < 84; _azI++) {
+    _azLog.push({compId:'enanthate', doseMg:'20', date:_azKey(new Date(_azS0.getTime()+_azI*86400000))});
+  }
+  G.document.getElementById = function(id){
+    if (id === 'tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testAvgHook: function(o){ _azSeen = o; },
+      getContext: function(){ return _azCtx; }
+    };
+    return _azSavedGet(id);
+  };
+  var _azThrew = null;
+  try { G._tcDrawManualChart('tc-manual-chart', _azLog.slice()); }
+  catch (e) { _azThrew = e; }
+  G.document.getElementById = _azSavedGet;
+
+  check('avg window: chart draws without throwing', !_azThrew, _azThrew && _azThrew.message);
+  check('avg window: the hook fired', !!_azSeen);
+  if (_azSeen) {
+    check('avg window: the visible window runs past the last injection',
+      _azSeen.xEnd > _azSeen.logDays, 'xEnd='+_azSeen.xEnd+' logDays='+_azSeen.logDays);
+    check('avg window: averaging stops at the last injection',
+      _azSeen.avgTo === _azSeen.logDays, 'avgTo='+_azSeen.avgTo+' logDays='+_azSeen.logDays);
+    check('avg window: averaging starts no earlier than the first injection',
+      _azSeen.avgFrom >= 0, 'avgFrom='+_azSeen.avgFrom);
+    check('avg window: the reported average is a real level, not a decay',
+      _azSeen.avg > 0);
+  }
+
+  G._tcp.measuredFT = _azSavedFT;
+  G._tcBwEntries    = _azSavedBw;
 }

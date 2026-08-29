@@ -1291,9 +1291,44 @@ function _tcLoadLogFromStack(){
 // and nothing else, so this deliberately excludes anything already ticked (that row
 // is in the history, and counting both would double it) and anything past-dated but
 // unticked (a plan the user never confirmed taking).
+// Rows the cache still holds for protocols that are not active, kept for the debug
+// dump so a stale or orphaned schedule is still visible even though it no longer
+// reaches the curve.
+var _tcInjExcluded = {count:0, cycles:{}};
+// ⚠️ THE CURVE RENDERS ACTIVE PROTOCOLS ONLY.
+// Henrik, 2026-08-28: "Deactivate a protocol doesn't directly remove it from t-calc
+// curve render, it requires restarting."
+//
+// This read _injectionsCache and trusted it to be correct. The cache IS filtered by
+// active cycle id — but only when refreshInjectionsCache rebuilds it, so between the
+// toggle and that round trip the curve went on plotting a protocol the user had just
+// switched off. Restarting "fixed" it because startup rebuilds the cache from scratch.
+//
+// Deciding it here makes the curve right at the moment of the toggle and independent
+// of a network round trip. An orphaned cycle — one no protocol owns any more — is not
+// active either, so it stops driving the curve too.
+function _tcActiveCycleIds(){
+  var set = {};
+  if (typeof _activeStackIndices === 'undefined' || typeof _userStacks === 'undefined') return null;
+  // ⚠️ AN EMPTY STACK LIST MEANS "NOT LOADED", NOT "NOTHING IS ACTIVE".
+  // Filtering on it would hide every row during boot, before loadStacks returns — a
+  // blank curve that fills in a moment later, which is worse than the bug being fixed.
+  // Once stacks exist, an empty _activeStackIndices genuinely means nothing is active
+  // and hiding everything is correct.
+  if (!(_userStacks && _userStacks.length)) return null;
+  (_activeStackIndices || []).forEach(function(si){
+    var st = _userStacks[si];
+    if (!st) return;
+    var cid = (typeof _stackCycleId === 'function') ? _stackCycleId(st) : st.id;
+    if (cid) set[cid] = true;
+  });
+  return set;
+}
 function _tcProtocolInjections(){
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
   var out = [], todayKey = dateKey(NOW);
+  var activeIds = _tcActiveCycleIds();
+  _tcInjExcluded = {count:0, cycles:{}};
   Object.keys(_injectionsCache).forEach(function(dateKeyStr){
     (_injectionsCache[dateKeyStr] || []).forEach(function(e){
       if (!e || !_tcIsTestoRow(e.tier, e.compound_id)) return;
@@ -1301,6 +1336,14 @@ function _tcProtocolInjections(){
       if (e.logged) return;                       // the history owns every checked dose
       if ((e.date || '') < todayKey) return;      // past + unticked ≠ the past
       if (_tcIsTcalcOwned(e.cycle_id)) return;
+      // null means the app's stack state is not loaded here (tests, early boot) — in
+      // that case fall back to the cache's own filtering rather than hiding everything.
+      if (activeIds && !activeIds[e.cycle_id || '']) {
+        _tcInjExcluded.count++;
+        var _ck = e.cycle_id || '(no cycle id)';
+        _tcInjExcluded.cycles[_ck] = (_tcInjExcluded.cycles[_ck] || 0) + 1;
+        return;
+      }
       var unit = (e.unit || 'mg').toLowerCase();
       if (unit !== 'mg') return;
       var mg = parseDec(e.dose);
@@ -3869,10 +3912,26 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // the average of just what you're looking at. Still makes the "peak differs, average
   // doesn't" point: an infrequent-large schedule peaks far above it, a frequent one hugs it.
   if (calFT && _tcShowAvg()) {
+    // ⚠️ THE AVERAGE STOPS AT THE LAST INJECTION.
+    // Henrik, 2026-08-29: "Average should not include time before first injection in
+    // history or after last planned injection in the current active protocol."
+    //
+    // It ran over the whole visible window, so at Whole zoom it averaged in the washout
+    // tail — a stretch where nothing is being taken and the level is decaying toward
+    // zero by construction. That dragged the figure well below anything the schedule
+    // actually holds: a plan sitting at ~1570 reported avg 1051 because a month of decay
+    // was counted as part of it. logDays is the last injection's day index, and day 0 is
+    // the first, so the series bounds are the answer.
+    //
+    // If the visible window is entirely inside the tail there is nothing to average and
+    // the line is hidden rather than reporting the decay as a level.
+    var _avgTo   = (logDays > 0) ? Math.min(xEnd, logDays) : xEnd;
+    var _avgFrom = Math.max(xStart, 0);
     var _avgSum = 0, _avgN = 0;
-    for (var _ai = xStart; _ai <= xEnd; _ai++) { _avgSum += total[_ai] * (calFT_arr ? calFT_arr[_ai] : scale); _avgN++; }
+    for (var _ai = _avgFrom; _ai <= _avgTo; _ai++) { _avgSum += total[_ai] * (calFT_arr ? calFT_arr[_ai] : scale); _avgN++; }
     var _avgLvl = _avgN > 0 ? _avgSum / _avgN : 0;
-    if (canvas._testAvgHook) canvas._testAvgHook({ avg: _avgLvl, xStart: xStart, xEnd: xEnd });
+    if (canvas._testAvgHook) canvas._testAvgHook({ avg: _avgLvl, xStart: xStart, xEnd: xEnd,
+                                                  avgFrom: _avgFrom, avgTo: _avgTo, logDays: logDays });
     if (_avgLvl > 0 && _avgLvl <= vMax) {
       var _avY = yOf(_avgLvl);
       ctx.strokeStyle = '#5ad1b0cc'; ctx.lineWidth = 1; ctx.setLineDash([1,3]);
@@ -4676,6 +4735,17 @@ function _tcDebugDump(){
       if(orphans)
         p('  ⚠ '+orphans+' group(s) belong to no existing protocol. Deleting a protocol is '
           +'known not to always remove its doses; these are still being injected into the model.');
+    }
+    // Rows the cache holds that the curve deliberately ignores. They no longer plot —
+    // that is the deactivate fix — but a schedule sitting in the record for a protocol
+    // that is switched off, or for one that was deleted, is still worth seeing.
+    if(typeof _tcInjExcluded!=='undefined'&&_tcInjExcluded&&_tcInjExcluded.count){
+      p('  not plotted ('+_tcInjExcluded.count+' rows, protocol not active):');
+      Object.keys(_tcInjExcluded.cycles).sort().forEach(function(k){
+        var live=all.some(function(sx){return sx&&sx.id===k;});
+        p('    '+pad(k,26)+_tcInjExcluded.cycles[k]+' rows'
+          +(live?'  [switched off]':'  ⚠ no such protocol — left behind by a delete'));
+      });
     }
 
     // ── the logged past, and how stale it is ──
