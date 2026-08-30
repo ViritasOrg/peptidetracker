@@ -42,7 +42,13 @@ var _tcSsPeakPmol     = null;  // steady-state peak in pmol/L, read from the val
 var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
                               // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
-var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
+// ⚠️ ONE LIST. Shortest → longest, which is the order the strip renders in.
+// The button strip and the click handler used to hardcode this separately and
+// had drifted: the strip offered 5 levels, the handler styled 4, so clicking
+// 3MO cleared the other four and never lit itself — the strip ended up with
+// nothing selected and the level looked broken. Add a level here, once.
+var TC_ZOOM_LEVELS = ['today','week','month','3mo','whole'];
+var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | '3mo' | 'whole'
 var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
 var _tcGhStack = [];          // [{pepId, startDateStr, interactions, dailyDose}] — SHBG suppressors from active stacks (dailyDose in the compound's doseResponse unit)
 var _tcSysInter = null;       // compounds map from /systemic-interactions
@@ -1783,7 +1789,7 @@ function _tcSetChartZoom(z) {
   var validLog = _tcCurveLog();
   _tcDrawManualChart('tc-main-chart', validLog, z);
   _tcAttachPanListeners(document.getElementById('tc-main-chart'));
-  ['today','week','month','whole'].forEach(function(zz) {
+  TC_ZOOM_LEVELS.forEach(function(zz) {
     var btn = document.getElementById('tc-zoom-' + zz);
     if (!btn) return;
     btn.style.background   = zz === z ? 'rgba(102,136,204,0.25)' : 'none';
@@ -1795,6 +1801,56 @@ function _tcSetChartZoom(z) {
 // Steady-state average reference line — shown by default, hideable via the chart
 // checkbox. Read the raw flag (getData's `|| default` would turn a stored false
 // back into true, so check the string directly). Default = shown.
+// ── Whole-view tail trim ──────────────────────────────────────────────────────
+// A plan that ends washes back toward the anchor and then sits there for months.
+// On Whole that flat run ate most of the width.
+//
+// ⚠️ TWO CRITERIA HAVE FAILED HERE. Do not reach for a third without measuring.
+//
+// 1. "last day the curve is >= the anchor" — could never fire, for anyone. The
+//    model's endogenous baseline IS the anchor, so the curve approaches it from
+//    above and never crosses. Every day passed; nothing was ever trimmed.
+//
+// 2. "last day the curve is >10% above the anchor" — fired, but nowhere near
+//    far enough on a long ester. Measured on the reported case (nebido, washout
+//    sized from its 75-day high-end half-life, totalDays 472): it cut at day 414,
+//    14 Aug 2027, still months of dead flat. Landing on the wanted date needed a
+//    ~50% tolerance, which is not a defensible reading of "close to the last lab"
+//    and would savage a short ester, whose curve really does reach the anchor.
+//
+// The mistake both share is measuring PROXIMITY to a number. What makes the tail
+// dead is that nothing is HAPPENING in it. So measure that instead: the curve is
+// done when the next 30 days barely move it, relative to its own full range. That
+// is scale-free — it reads the same on a propionate plan and a nebido depot — and
+// it needs no assumption about where the curve eventually lands.
+//
+// Nothing is discarded: this sets the WINDOW, and Whole pans out to totalDays.
+var TC_FLAT_WINDOW = 30;    // days to look ahead
+var TC_FLAT_FRAC   = 0.02;  // of (peak - final). 2% over 30 days on the reported
+                            // case cuts at day 216, 28 Jan 2027 — the ask was
+                            // "anything around 1 Feb". 3% cuts to 19 Dec, which
+                            // eats the washout itself; 1% only reaches 13 Apr.
+
+// valueAt(t) → free T on day t. floorDay: a day the window must always reach (the
+// last injection) so the plan can never be trimmed away, and so the scan starts
+// after dosing stops — a mid-plan steady plateau is also "flat" and would
+// otherwise cut the protocol in half.
+function _tcSettleDay(valueAt, totalDays, floorDay) {
+  if (!(totalDays > 0)) return totalDays;
+  var peak = 0, peakDay = 0, t;
+  for (t = 0; t <= totalDays; t++) { var vv = valueAt(t); if (vv > peak) { peak = vv; peakDay = t; } }
+  var range = peak - valueAt(totalDays);
+  if (!(range > 0)) return totalDays;            // nothing rises and falls — nothing to trim
+  var thresh = range * TC_FLAT_FRAC;
+  var from = (floorDay > 0) ? floorDay : peakDay;
+  from = Math.max(0, Math.min(totalDays, from));
+  for (t = from; t <= totalDays; t++) {
+    var ahead = valueAt(Math.min(totalDays, t + TC_FLAT_WINDOW));
+    if (Math.abs(valueAt(t) - ahead) < thresh) return Math.max(1, Math.min(totalDays, t));
+  }
+  return totalDays;
+}
+
 function _tcShowAvg() {
   try { return localStorage.getItem('tc-avg-line') !== 'false'; } catch (e) { return true; }
 }
@@ -1818,7 +1874,7 @@ function _tcAttachPanListeners(canvas) {
     canvas._tcTouchStart = null;
   }
   var state = canvas._tcPanState;
-  if (!state || state.zoom === 'whole') { canvas.style.cursor = ''; canvas.style.touchAction = ''; return; }
+  if (!state || (state.zoom === 'whole' && !state.canPan)) { canvas.style.cursor = ''; canvas.style.touchAction = ''; return; }
   canvas.style.cursor = 'grab';
   canvas.style.touchAction = 'pan-y';
   var _pDX = null, _pDY = null, _pOff = null;
@@ -3734,22 +3790,40 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // Clip x-axis to where free T last crosses back down to baseline (the interesting area)
   var xDays = totalDays;
   if (_mftNum && calFT) {
-    for (var _xi = totalDays; _xi > 0; _xi--) {
-      if (total[_xi] * (calFT_arr ? calFT_arr[_xi] : scale) >= _mftNum) { xDays = _xi; break; }
-    }
+    xDays = _tcSettleDay(function (t) {
+      return total[t] * (calFT_arr ? calFT_arr[t] : scale);
+    }, totalDays, logDays);
   }
 
   // Zoom window
   var _zoom = zoom3 || _tcChartZoom || 'whole';
   var nowDay = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-  var panDays = _zoom !== 'whole' ? Math.round(_tcChartPanOffset || 0) : 0;
+  // Panning applies to Whole as well now: the trim decides the window, not what
+  // exists, so dragging must still reach the washout. Every clamp is totalDays
+  // rather than xDays for the same reason — otherwise a tighter trim would
+  // silently shorten how far the other zooms can be dragged.
+  // The window is built UNPANNED first (panDays 0 below), then slid by an offset
+  // clamped to what the data actually holds. Applying a raw offset inside these
+  // expressions let a fast flick push xStart past xEnd and invert the window —
+  // 3mo dragged hard right produced xStart 10017 against xEnd 237.
+  var panDays = 0;
   var xStart = 0, xEnd = xDays;
-  if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(xDays, nowDay + 2 + panDays); }
-  else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(xDays, nowDay + 4 + panDays); }
-  else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(xDays, nowDay + 15 + panDays); }
+  if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(totalDays, nowDay + 2 + panDays); }
+  else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(totalDays, nowDay + 4 + panDays); }
+  else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(totalDays, nowDay + 15 + panDays); }
   // 3 months: the span a titration decision actually plays out over — long enough to see
   // accumulation trend, short enough to still resolve individual injections.
-  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(xDays, nowDay + 45 + panDays); }
+  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(totalDays, nowDay + 45 + panDays); }
+  else                         { xStart = 0; xEnd = Math.min(totalDays, xDays); }
+
+  // Slide it. Whole pans too now: the trim chose the window, not what exists, so
+  // the hidden washout must stay reachable by dragging. The clamped value is
+  // written back so a flick past the end does not bank an offset the user then
+  // has to drag all the way back.
+  panDays = Math.max(-xStart, Math.min(Math.round(_tcChartPanOffset || 0), totalDays - xEnd));
+  if (!(panDays === panDays)) panDays = 0;               // NaN guard
+  _tcChartPanOffset = panDays;
+  xStart += panDays; xEnd += panDays;
   // Whole view: make sure "today" is inside the window so its marker/level show
   // even when the curve has already washed back to baseline before today.
   if (_zoom === 'whole' && nowDay > xEnd && nowDay <= totalDays) xEnd = nowDay;
@@ -4069,7 +4143,9 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     var lbl = labelDate.getDate() + ' ' + _MONTHS[labelDate.getMonth()];
     ctx.fillText(lbl, lx, PAD.top + cH + 18);
   }
-  canvas._tcPanState = {xStart: xStart, xEnd: xEnd, cW: cW, zoom: _zoom};
+  // canPan: Whole is draggable only when the trim actually hid something.
+  canvas._tcPanState = {xStart: xStart, xEnd: xEnd, cW: cW, zoom: _zoom,
+                        canPan: (xEnd < totalDays || xStart > 0)};
 }
 
 // ── OPTIMIZER ─────────────────────────────────────────────────────────────────
@@ -5057,7 +5133,7 @@ function buildTCalc() {
   } else if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
-    ['today','week','month','3mo','whole'].forEach(function(z) {
+    TC_ZOOM_LEVELS.forEach(function(z) {
       var isA = _tcChartZoom === z;
       html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
     });
