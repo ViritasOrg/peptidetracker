@@ -14902,3 +14902,260 @@ if (typeof G._tcDrawManualChart === 'function') {
   G._tcp.measuredFT = _azSavedFT;
   G._tcBwEntries    = _azSavedBw;
 }
+
+// ── in/out-of-range label: boundaries and real catalogue values ───────────────
+// Henrik, 2026-08-29: free T 217 pmol/L showed "IN RANGE" when the backend band
+// was (200,600). Two gaps let it through: that bound, and the fact that every
+// frontend flag test ran against a MOCK catalogue, so no test ever read a real
+// bound. The band is now derived from citations.FREE_T_REFERENCE (243-804,
+// Bhasin 2011 Framingham, PMID 21697255) — the research value, not a lab's own
+// interval, which may be age-adjusted. These cover the boundary arithmetic.
+console.log('\n── lab flag: boundary conditions and real free-T band ──');
+if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function') {
+  var _lfSaved = G._labMarkers;
+  G._labSetCatalogue({
+    version:'2', panels:[{key:'hormones',label:'Hormones'},{key:'lipids',label:'Lipids'}],
+    markers:[
+      // free_t carries the REAL backend band, so a regression there fails here too.
+      {key:'free_t',label:'Free Testosterone',unit:'pmol/L',panel:'hormones',direction:'band',safety:false,
+       ranges:{male:{low:243.0,high:804.0},female:{low:3.0,high:35.0}},
+       altUnits:[{unit:'pg/mL',factor:0.288}],meaning:'ft'},
+      {key:'hdl',label:'HDL',unit:'mmol/L',panel:'lipids',direction:'higher',safety:true,
+       ranges:{male:{low:1.0,high:null},female:{low:1.3,high:null}},altUnits:[],meaning:'h'},
+      {key:'ldl',label:'LDL',unit:'mmol/L',panel:'lipids',direction:'lower',safety:true,
+       ranges:{male:{low:0,high:3.0},female:{low:0,high:3.0}},altUnits:[],meaning:'l'}
+    ]
+  });
+  var _F = function(k){ return G._labMarkerIndex[k]; };
+
+  // The reported bug, exactly.
+  check('lab flag: free T 217 pmol/L is LOW, not in range',
+    G._labFlag(_F('free_t'), 217, 'male') === 'low',
+    'got ' + G._labFlag(_F('free_t'), 217, 'male'));
+
+  // Boundaries — the arithmetic that decides the label. `low` and `high` are
+  // themselves IN range; only strictly outside flags.
+  check('lab flag: exactly at low bound is in range',  G._labFlag(_F('free_t'), 243, 'male') === 'in');
+  check('lab flag: one below low bound is low',        G._labFlag(_F('free_t'), 242.9, 'male') === 'low');
+  check('lab flag: exactly at high bound is in range', G._labFlag(_F('free_t'), 804, 'male') === 'in');
+  check('lab flag: one above high bound is high',      G._labFlag(_F('free_t'), 804.1, 'male') === 'high');
+  check('lab flag: mid-band is in range',              G._labFlag(_F('free_t'), 500, 'male') === 'in');
+
+  // direction:'lower' — only the ceiling flags, and the ceiling itself is in.
+  check('lab flag lower: exactly at ceiling is in',    G._labFlag(_F('ldl'), 3.0, 'male') === 'in');
+  check('lab flag lower: just over ceiling is high',   G._labFlag(_F('ldl'), 3.01, 'male') === 'high');
+  check('lab flag lower: far below never flags low',   G._labFlag(_F('ldl'), -5, 'male') === 'in');
+
+  // direction:'higher' — only the floor flags, and the floor itself is in.
+  check('lab flag higher: exactly at floor is in',     G._labFlag(_F('hdl'), 1.0, 'male') === 'in');
+  check('lab flag higher: just under floor is low',    G._labFlag(_F('hdl'), 0.99, 'male') === 'low');
+  check('lab flag higher: open ceiling never flags',   G._labFlag(_F('hdl'), 999, 'male') === 'in');
+
+  // A value entered in an alternate unit must be converted BEFORE flagging —
+  // flagging the raw number would compare pg/mL against a pmol/L band.
+  var _pg = G._labConvert(_F('free_t'), 62, 'pg/mL');          // 62 / 0.288 ≈ 215 pmol/L
+  check('lab flag: pg/mL converts before flagging', Math.abs(_pg - 215.3) < 1, 'got ' + _pg);
+  check('lab flag: 62 pg/mL flags low (215 pmol/L)', G._labFlag(_F('free_t'), _pg, 'male') === 'low');
+  var _pg2 = G._labConvert(_F('free_t'), 100, 'pg/mL');        // ≈ 347 pmol/L
+  check('lab flag: 100 pg/mL is in range (347 pmol/L)', G._labFlag(_F('free_t'), _pg2, 'male') === 'in');
+  // 230 pmol/L sat inside the briefly-used 220-800 lab band but below the cited
+  // 2.5th percentile — the discrepancy that made deriving from one source matter.
+  check('lab flag: 230 is low against the research floor', G._labFlag(_F('free_t'), 230, 'male') === 'low');
+
+  // Sexes read their own band — 217 is low for a man, high for a woman.
+  check('lab flag: 217 is HIGH on the female band', G._labFlag(_F('free_t'), 217, 'female') === 'high');
+
+  // The label the user actually sees for each flag.
+  check('lab label: low → "Low"',        G._labFlagMeta('low', false).label === 'Low');
+  check('lab label: high → "High"',      G._labFlagMeta('high', false).label === 'High');
+  check('lab label: in → "In range"',    G._labFlagMeta('in', false).label === 'In range');
+  check('lab label: unknown → no label', G._labFlagMeta(null, false).label === '');
+
+  if (_lfSaved) G._labSetCatalogue(_lfSaved);
+}
+
+// ── Whole zoom: trim the settled tail, keep it reachable by panning ──────────
+// Henrik, 2026-08-29: "The Whole zoom should still cut most of the long tail
+// here, to better use the available window size. Once close enough to latest lab
+// stop drawing more, keep the data avail so the user can scroll to see the full
+// washout."
+//
+// The old trim took the last day the curve was >= the anchor. It could never
+// fire: the model's endogenous baseline IS the anchor, so the curve approaches
+// from above and never crosses. Every day passed, xDays was always totalDays.
+console.log('\n── whole zoom: settled-tail trim + pan ──');
+if (typeof G._tcSettleDay === 'function') {
+  // Rebuilt from the reported dump: totalDays 472 (washout sized from nebido's
+  // 75-day high-end half-life), logDays 148, weekly means 1485/1107/599/441/380
+  // from week 12, then an asymptotic approach to the 217 anchor.
+  var _stTotal = 472, _stLog = 148, _stAnchor = 217, _stKw = Math.pow(0.5, 7 / 75);
+  var _stWk = [[12,1485],[13,1107],[14,599],[15,441],[16,380]];
+  var _stArr = new Float64Array(_stTotal + 1);
+  for (var _sti = 0; _sti <= _stTotal; _sti++) {
+    if (_sti <= 64) { _stArr[_sti] = 217 + (1384-217) * Math.min(1, _sti/64); continue; }
+    var _stw = (_sti - 64) / 7;
+    if (_stw <= 12) { _stArr[_sti] = 1384 + (1485-1384) * (_stw/12); continue; }
+    if (_stw < 16) {
+      for (var _stk = 0; _stk < _stWk.length-1; _stk++) {
+        if (_stw >= _stWk[_stk][0] && _stw < _stWk[_stk+1][0]) {
+          var _stf = (_stw - _stWk[_stk][0]) / (_stWk[_stk+1][0] - _stWk[_stk][0]);
+          _stArr[_sti] = _stWk[_stk][1] + (_stWk[_stk+1][1] - _stWk[_stk][1]) * _stf;
+        }
+      }
+      continue;
+    }
+    _stArr[_sti] = _stAnchor + (380 - _stAnchor) * Math.pow(_stKw, _stw - 16);
+  }
+  var _stV = function (t) { return _stArr[Math.max(0, Math.min(_stTotal, Math.round(t)))]; };
+  var _stCut = G._tcSettleDay(_stV, _stTotal, _stLog);
+
+  // "Anything around 1 Feb should be cut out" — 1 Feb 2027 is day 220 from 26 Jun 2026.
+  check('settle: the reported case cuts around 1 Feb (day 220)',
+    _stCut >= 200 && _stCut <= 245, 'cut at day ' + _stCut);
+  // The criterion this replaced cut at day 414 on this same curve — barely a trim.
+  check('settle: it cuts far earlier than the old 10%-above-anchor rule did',
+    _stCut < 414, 'cut at day ' + _stCut);
+  check('settle: most of the washout is off the default view',
+    (_stTotal - _stCut) > _stTotal / 2, 'hidden ' + (_stTotal - _stCut) + ' of ' + _stTotal);
+  // ...but the washout must still START on screen; the user wants to see it happen.
+  check('settle: the plan is never trimmed away', _stCut >= _stLog);
+  check('settle: some washout is still drawn past the last injection',
+    (_stCut - _stLog) > 30, 'only ' + (_stCut - _stLog) + ' d shown');
+
+  // A SHORT ester genuinely reaches the anchor — it must not be over-trimmed.
+  var _stShort = function (t) {
+    return t <= 90 ? 200 + 1300 * Math.min(1, t/60) : 200 + 1300 * Math.pow(0.5, (t-90)/4.5);
+  };
+  var _stSc = G._tcSettleDay(_stShort, 200, 90);
+  check('settle: a short ester still shows its washout', _stSc > 90 && (_stSc - 90) >= 15,
+    'cut at ' + _stSc);
+  check('settle: a short ester still gets trimmed', _stSc < 200, 'cut at ' + _stSc);
+
+  // Only flatness AFTER dosing counts — a mid-plan plateau is flat too, and
+  // scanning from 0 would cut the protocol in half.
+  check('settle: the scan starts at the last injection, not at a mid-plan plateau',
+    G._tcSettleDay(_stV, _stTotal, _stLog) >= _stLog);
+
+  // Degenerate inputs must not produce an empty or nonsense window.
+  check('settle: a curve that never moves trims nothing',
+    G._tcSettleDay(function () { return 217; }, _stTotal, _stLog) === _stTotal);
+  check('settle: totalDays 0 is returned untouched', G._tcSettleDay(_stV, 0, 0) === 0);
+  check('settle: result always inside the series', _stCut >= 1 && _stCut <= _stTotal);
+}
+
+// End-to-end through the real chart: window trimmed, tail still reachable.
+if (typeof G._tcDrawManualChart === 'function') {
+  var _twGet = G.document.getElementById;
+  var _twCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop, fillText:noop,
+    closePath:noop, save:noop, restore:noop, fillRect:noop, setLineDash:noop,
+    strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    clip:noop, rect:noop, clearRect:noop, quadraticCurveTo:noop, bezierCurveTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  var _twCanvas = {
+    style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+    offsetWidth:350, offsetHeight:250, getContext:function(){ return _twCtx; },
+    addEventListener:noop, removeEventListener:noop,
+    getBoundingClientRect:function(){ return {left:0,top:0,width:350,height:250}; }
+  };
+  var _twSaveFT = G._tcp.measuredFT, _twSaveBw = G._tcBwEntries, _twSavePan = G._tcChartPanOffset;
+  G._tcp.measuredFT = '217';
+  G._tcBwEntries = [{date:'2026-06-26', free_t:'217', total_t:'17', shbg:'45', unit:'pmol/L'}];
+  G.document.getElementById = function(id){
+    return id === 'tc-main-chart' ? _twCanvas : _twGet(id);
+  };
+  function _twKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  // A long-ester course that stops: months of flat washout follow.
+  var _twLog = [], _twS0 = new Date('2026-06-27T12:00:00');
+  for (var _twi = 0; _twi < 30; _twi++) {
+    _twLog.push({compId:'nebido', doseMg:'100', date:_twKey(new Date(_twS0.getTime()+_twi*2*86400000))});
+  }
+  function _twDraw(zoom, pan){
+    G._tcChartPanOffset = pan || 0;
+    try { G._tcDrawManualChart('tc-main-chart', _twLog.slice(), zoom); } catch (e) { return null; }
+    return _twCanvas._tcPanState;
+  }
+  var _twWhole = _twDraw('whole', 0);
+  check('whole: the chart reports a pan window', !!_twWhole);
+  if (_twWhole) {
+    var _twFullEnd = _twDraw('whole', 1e6).xEnd;   // pan hard right = the true end
+    check('whole: the settled tail is trimmed from the default view',
+      _twWhole.xEnd < _twFullEnd, 'xEnd=' + _twWhole.xEnd + ' full=' + _twFullEnd);
+    check('whole: the window still starts at day 0', _twWhole.xStart === 0);
+
+    // "keep the data avail so the user can scroll to see the full washout"
+    var _twR = _twDraw('whole', 1e6);
+    check('whole: panning right reaches the very end of the washout',
+      _twR.xEnd === _twFullEnd);
+    check('whole: panning preserves the window width',
+      (_twR.xEnd - _twR.xStart) === (_twWhole.xEnd - _twWhole.xStart),
+      'panned ' + (_twR.xEnd-_twR.xStart) + ' vs ' + (_twWhole.xEnd-_twWhole.xStart));
+    check('whole: it is marked pannable when a tail is hidden', _twWhole.canPan === true);
+
+    // A flick past either end must not invert or collapse the window.
+    var _twL = _twDraw('whole', -1e6);
+    check('whole: panning hard left clamps to day 0', _twL.xStart === 0);
+    check('whole: panning hard left keeps the width',
+      (_twL.xEnd - _twL.xStart) === (_twWhole.xEnd - _twWhole.xStart));
+    var _tw3 = _twDraw('3mo', 1e6);
+    check('3mo: panning hard right does not invert the window', _tw3.xEnd > _tw3.xStart,
+      _tw3.xStart + '..' + _tw3.xEnd);
+    check('3mo: panning hard right reaches the end', _tw3.xEnd === _twFullEnd);
+  }
+  G.document.getElementById = _twGet;
+  G._tcp.measuredFT = _twSaveFT; G._tcBwEntries = _twSaveBw; G._tcChartPanOffset = _twSavePan;
+}
+
+// ── zoom strip: every level the strip offers must also get styled ────────────
+// The strip rendered 5 levels while the click handler styled 4. Clicking 3MO
+// cleared the highlight from the other four and never set its own, so the strip
+// showed NOTHING selected — the level looked broken. The existing tests checked
+// that selecting 3mo did not throw and that _tcChartZoom changed, neither of
+// which touches the button styling, which is how it shipped on 15 Aug.
+console.log('\n── zoom strip: offered levels are styled levels ──');
+{
+  var _zsSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('there is a single zoom-level list', /var TC_ZOOM_LEVELS\s*=\s*\['today','week','month','3mo','whole'\]/.test(_zsSrc));
+  // No second hardcoded list may reappear alongside it.
+  var _zsLists = _zsSrc.match(/\['today','week','month'[^\]]*\]/g) || [];
+  check('the level list is declared exactly once', _zsLists.length === 1,
+    'found ' + _zsLists.length + ': ' + _zsLists.join(' | '));
+  check('the button strip iterates the shared list',
+    /TC_ZOOM_LEVELS\.forEach\(function\(z\)/.test(_zsSrc));
+  check('the click handler iterates the shared list',
+    /TC_ZOOM_LEVELS\.forEach\(function\(zz\)/.test(_zsSrc));
+
+  // Behavioural: selecting each level must leave exactly that button highlighted.
+  // The suite's getElementById hands back a FRESH mock each call, so styles set on
+  // one lookup are invisible to the next. Give the zoom buttons a persistent
+  // registry for this block, else every read comes back blank whatever the code does.
+  if (typeof G._tcSetChartZoom === 'function' && Array.isArray(G.TC_ZOOM_LEVELS)) {
+    var _zsSaveZoom = G._tcChartZoom, _zsSaveGet = G.document.getElementById;
+    var _zsBtns = {};
+    G.TC_ZOOM_LEVELS.forEach(function (z) { _zsBtns['tc-zoom-' + z] = {style:{}}; });
+    G.document.getElementById = function (id) {
+      return Object.prototype.hasOwnProperty.call(_zsBtns, id) ? _zsBtns[id] : _zsSaveGet(id);
+    };
+    // Sanity: the registry really does persist, or the assertions below prove nothing.
+    _zsBtns['tc-zoom-whole'].style.color = '__probe__';
+    check('zoom strip: the test registry persists between lookups',
+      G.document.getElementById('tc-zoom-whole').style.color === '__probe__');
+    _zsBtns['tc-zoom-whole'].style.color = '';
+
+    G.TC_ZOOM_LEVELS.forEach(function (z) {
+      var threw = false;
+      try { G._tcSetChartZoom(z); } catch (e) { threw = true; }
+      if (threw) { check('zoom strip: selecting ' + z + ' does not throw', false); return; }
+      var lit = G.TC_ZOOM_LEVELS.filter(function (zz) {
+        return _zsBtns['tc-zoom-' + zz].style.color === '#6688cc';
+      });
+      check('zoom strip: selecting ' + z + ' lights exactly ' + z,
+        lit.length === 1 && lit[0] === z, 'lit: [' + lit.join(',') + ']');
+    });
+
+    G.document.getElementById = _zsSaveGet;
+    try { G._tcSetChartZoom(_zsSaveZoom || 'whole'); } catch (e) {}
+  }
+}
