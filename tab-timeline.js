@@ -2,8 +2,9 @@
 // Replaces the old vertical milestone list. The tab now answers "what have I
 // actually been on, and when" in one screen: colour-coded compound lanes laid
 // across a scrollable date window, ordered Anabolics → Peptides → Supplements
-// (design spec §3, "Visual Hierarchy"), with the cycles they belong to drawn as
-// bands above them.
+// (design spec §3, "Visual Hierarchy"). Every cycle is shown, always — there is
+// deliberately no protocol filter and nothing drawn above the lanes; the lanes
+// are the content, and each one names its owning protocol when expanded.
 //
 // Two things separate this from every other tab:
 //  1. It reads the WHOLE record, not the active protocol. refreshInjectionsCache
@@ -12,12 +13,13 @@
 //     viewer that did the same would be lying about the past, so this tab holds
 //     its own cache over its own, much wider date span and keeps everything,
 //     labelling each lane with the protocol that owns it.
-//  2. It does not log injections. Tapping a dose mark opens a read-only detail
-//     sheet — dose, protocol, whether it was taken — and Today remains the only
-//     place an injection is ticked off. What logging the tab does have goes
-//     through the existing flows rather than re-implementing them: a supplement
-//     ticks through toggleSupplementDose, and "+" hands off to the past-injection
-//     sheet with the compound and date already filled in.
+//  2. IT WRITES NOTHING. Not a dose, not a supplement, not a new row. Tapping a
+//     mark opens a read-only detail sheet and that is the whole of its
+//     interaction model; Today is where anything gets ticked off. The per-dose
+//     tick, the supplement slot buttons and the "+" that opened the
+//     past-injection sheet were all removed on request (2026-08-30). Keep it
+//     that way: this is a history view, and at four pixels a day a mis-tap here
+//     writes a false claim about what went into your body.
 
 // Plain-language "What this means" line for the cycle progress bar — derived only
 // from the cycle's own position (weeks in / left, before-start / complete). No
@@ -38,13 +40,13 @@ function _tlWhatThisMeans(wk,total,daysDone,totalDays){
 var _tlWin=28;            // days visible in the window
 var _tlAnchor=null;       // Date — first day of the window (local midnight)
 var _tlOpen={};           // laneKey → true when the lane is expanded
-var _tlProto='all';       // protocol filter: 'all' | owner id
 var _tlRows=null;         // raw injection rows for the loaded span
 var _tlSpan=null;         // {from:Date,to:Date} currently loaded
 var _tlState='idle';      // idle | loading | ready
 var _tlMarks={};          // markKey → {lane,dk} for the tap handlers
 var _tlOff=0;             // fractional day offset into the window — the drag lives here
 var _tlDragEndedAt=0;     // ms timestamp of the last pan, to swallow its trailing click
+var _tlGroupClosed=null;  // group key → true when collapsed; loaded from storage on first use
 
 var _TL_WINDOWS=[{d:14,l:'2W'},{d:28,l:'4W'},{d:56,l:'8W'},{d:84,l:'12W'}];
 // Supplements carry no colour of their own (the catalogue is a plain list), so a
@@ -59,6 +61,41 @@ function _tlFmtNum(n){return (Math.round(n*100)/100).toString();}
 function _tlUnit(u){return (typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[u])?UNIT_LABELS[u]:(u||'');}
 function _tlEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function _tlShortDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'short'});}
+
+// ── lane labels ──────────────────────────────────────────────────────────────
+// Long compound names do not fit a lane header: "Nebido (Testosterone
+// Undecanoate)" truncated mid-word at every window size. Henrik, 2026-08-30:
+// "Shorten Testosterone to Test. Also truncate esters to first three characters
+// same with names like Nebido or Depot."
+//
+// A WORD LIST, NOT A BLANKET TRUNCATION. Cutting every long word to three
+// characters would read well on the esters and badly everywhere else, and in a
+// medical app it invents collisions — "Enanthate" and "Estradiol" would both
+// become "Est". Only the testosterone vocabulary named in the request is
+// shortened; every other name is left exactly as it is, so HGH (Somatropin),
+// Anadrol and the supplements are untouched.
+//
+// Display only. The stored name is not changed, and the dose sheet still shows
+// it in full — tap the mark and you get "Nebido (Testosterone Undecanoate)"
+// back. ENHANCEMENT_COMPOUNDS is served by the backend, so a new ester that is
+// not on this list simply stays long; that is a cosmetic miss, not a wrong label.
+var _TL_SHORT_WORDS={
+  testosterone:'Test',
+  // esters
+  enanthate:'Ena', cypionate:'Cyp', undecanoate:'Und', propionate:'Pro',
+  phenylpropionate:'Phe', decanoate:'Dec', isocaproate:'Iso', caproate:'Cap',
+  acetate:'Ace', hexahydrobenzylcarbonate:'Hex',
+  // brand and formulation words
+  nebido:'Neb', depot:'Dep', testoviron:'Tes', sustanon:'Sus', omnadren:'Omn',
+  aveed:'Ave'
+};
+function _tlShortName(name){
+  // Alpha runs only, so "Depo-Testosterone" shortens its second half and
+  // "Sustanon 250" keeps its number.
+  return String(name==null?'':name).replace(/[A-Za-z]+/g,function(w){
+    return _TL_SHORT_WORDS[w.toLowerCase()]||w;
+  });
+}
 
 // ── data span ────────────────────────────────────────────────────────────────
 // Wide enough to hold every cycle the user has ever configured, plus the plan
@@ -112,6 +149,35 @@ async function _tlLoad(){
   _tlSpan=need;
   _tlState='ready';
   if(document.getElementById('timeline-body'))buildTimeline();
+}
+
+// ── keeping this tab's copy in step with the record ──────────────────────────
+// THE SAME BUG CLASS AS _tcHistory — SEE THE NOTE IN toggleInjection.
+// This tab holds its OWN fetch of /injections, over a far wider span than
+// _injectionsCache, so the cache patch toggleInjection applies on every tick
+// never reaches these rows. Ticking a dose on Today therefore left the timeline
+// showing the pre-tick state for the rest of the session: the mark stayed
+// outlined, and the lane's "6/9 taken" stayed wrong, until the app was
+// restarted. Reported 2026-08-30.
+//
+// Anything that changes whether a dose was taken must call one of these two.
+// _tlNoteInjection is the cheap path — patch the flag we already hold, repaint
+// if the tab is on screen. _tlInvalidateInjections is for when the row SET
+// changed (doses added, a protocol regenerated): drop the span so the next paint
+// refetches rather than trusting a copy that is now missing rows.
+function _tlNoteInjection(id,logged){
+  var hit=false;
+  (_tlRows||[]).forEach(function(e){if(e&&e.id===id){e.logged=!!logged;hit=true;}});
+  // A row we do not hold is a copy we cannot trust to be complete — refetch.
+  if(!hit){_tlInvalidateInjections();return;}
+  if(typeof _currentTab!=='undefined'&&_currentTab==='timeline'&&document.getElementById('tl-canvas'))_tlPaint();
+}
+function _tlInvalidateInjections(){
+  _tlSpan=null;
+  if(_tlState!=='loading')_tlState='idle';
+  // Visible right now: refetch immediately, which repaints when it lands. Not
+  // visible: buildTimeline's own idle check picks it up when the tab is opened.
+  if(typeof _currentTab!=='undefined'&&_currentTab==='timeline'&&document.getElementById('timeline-body'))_tlLoad();
 }
 
 // ── protocol / owner naming ──────────────────────────────────────────────────
@@ -169,7 +235,6 @@ function _tlBuildLanes(from,to){
     if(!e||!e.date)return;
     if(e.date<fromK||e.date>toK)return;
     var owner=_tlOwnerId(e);
-    if(_tlProto!=='all'&&owner!==_tlProto)return;
     var tier=e.tier||'peptide';
     var key=tier+'|'+(e.compound_id||e.compound_name||'?');
     var L=lane(key,{key:key,name:e.compound_name||e.compound_id||'Compound',
@@ -185,7 +250,7 @@ function _tlBuildLanes(from,to){
     day.entries.push(e);
   });
   // Supplements come from the regimen + its own taken-log, not /injections.
-  if(_tlProto==='all'&&typeof _supplements!=='undefined'&&_supplements&&_supplements.length&&typeof _suppActiveOn==='function'){
+  if(typeof _supplements!=='undefined'&&_supplements&&_supplements.length&&typeof _suppActiveOn==='function'){
     var nDays=_tlDiff(to,from)+1;
     (_supplements||[]).forEach(function(s){
       if(!s)return;
@@ -251,8 +316,35 @@ function _tlSetWin(n){
   _tlLoad();
   buildTimeline();
 }
-function _tlSetProto(id){_tlProto=id;buildTimeline();}
-function _tlToggleLane(key){if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
+// A drag that finishes over a tap target still delivers a click on iOS, and every
+// one of these sits inside the pannable canvas. Without this a pan ending on a
+// mark opened a dose sheet and a pan ending on a lane header collapsed the lane.
+function _tlTapBlocked(){return (Date.now()-_tlDragEndedAt)<350;}
+function _tlToggleLane(key){if(_tlTapBlocked())return;if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
+
+// ── group headers ───────────────────────────────────────────────────────────
+// Anabolics / Peptides / Supplements fold away, so a long supplement list can be
+// put out of sight without losing it. Persisted: a collapse that evaporated on
+// the next render would not be much of a choice.
+function _tlGroups(){
+  if(_tlGroupClosed)return _tlGroupClosed;
+  _tlGroupClosed=(typeof getData==='function')?(getData('pep-tl-groups',{})||{}):{};
+  return _tlGroupClosed;
+}
+function _tlGroupIsClosed(g){return !!_tlGroups()[g];}
+function _tlToggleGroup(g){
+  if(_tlTapBlocked())return;
+  var m=_tlGroups();
+  if(m[g])delete m[g];else m[g]=true;
+  if(typeof setData==='function')setData('pep-tl-groups',m);
+  _tlPaint()||buildTimeline();
+}
+function _tlGroupHdr(g){
+  var closed=_tlGroupIsClosed(g);
+  return '<div class="tl-group'+(closed?' is-closed':'')+'" onclick="_tlToggleGroup(\''+_tlEsc(g)+'\')">'+
+    '<span class="tl-group-name">'+_tlEsc(_TL_GROUP_TITLES[g]||g)+'</span>'+
+    '<span class="tl-group-tog">'+(closed?'+':'\u2212')+'</span></div>';
+}
 
 // ── rendering ────────────────────────────────────────────────────────────────
 function _tlPct(i,n){return (i/n*100);}
@@ -298,60 +390,12 @@ function _tlGrid(from,n){
   return h+'</div>';
 }
 
-// Cycle bands — each protocol drawn across the days it covers (spec §4.1 header
-// context). Clipped to the window, so a cycle that started last spring still
-// shows as a band running off both edges.
-function _tlBands(from,n){
-  var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
-  var B=_tlBleed(n);
-  var winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),rows=[];
-  stacks.forEach(function(st,idx){
-    if(!st||!st.cycle_start)return;
-    var id=_tlStackId(st);
-    if(_tlProto!=='all'&&_tlProto!==id)return;
-    var s=parseLocalDate(st.cycle_start);
-    var e=st.cycle_length?_tlAdd(s,st.cycle_length*7-1):_tlAdd(NOW,365);
-    if(e<winFrom||s>winTo)return;
-    var a=Math.max(-B,_tlDiff(s,from)),b=Math.min(n-1+B,_tlDiff(e,from));
-    var active=((typeof _activeStackIndices!=='undefined'&&_activeStackIndices)||[]).indexOf(idx)>=0;
-    var wk=Math.floor(_tlDiff(NOW,s)/7)+1;
-    var label=(st.name||('Protocol '+(idx+1)));
-    if(st.cycle_length&&wk>=1&&wk<=st.cycle_length)label+=' · Wk '+wk+'/'+st.cycle_length;
-    else if(!st.cycle_length)label+=' · continuous';
-    rows.push('<div class="tl-band'+(active?' is-active':'')+'"><div class="tl-strip">'+
-      '<div class="tl-band-bar" style="left:'+_tlX(a,n)+'%;width:'+_tlPct(b-a+1,n)+'%"></div>'+
-      '<div class="tl-band-label" style="left:'+_tlX(Math.max(a,0),n)+'%">'+_tlEsc(label)+'</div></div></div>');
-  });
-  return rows.length?'<div class="tl-bands">'+rows.join('')+'</div>':'';
-}
-
-// Milestones kept from the old tab, re-cast as markers on the same date axis —
-// cycle starts, cycle ends, the day a peptide joined the protocol.
-function _tlMilestones(from,n){
-  var all=((typeof MILESTONES!=='undefined'&&MILESTONES)||[]).slice();
-  var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
-  stacks.forEach(function(st,idx){
-    if(!st||!st.cycle_start)return;
-    var id=_tlStackId(st);
-    if(_tlProto!=='all'&&_tlProto!==id)return;
-    var sd=parseLocalDate(st.cycle_start);
-    all.push({date:sd,name:(st.name||'Protocol '+(idx+1))+' starts',desc:'Cycle start'});
-    if(st.cycle_length)all.push({date:_tlAdd(sd,st.cycle_length*7),name:(st.name||'Protocol '+(idx+1))+' ends',desc:'Week '+st.cycle_length+' — cycle complete'});
-    (st.peptides||[]).forEach(function(p){
-      if(!p||!p.start_date||p.start_date===st.cycle_start)return;
-      all.push({date:parseLocalDate(p.start_date),name:(p.name||p.id)+' added',desc:'Added to protocol'});
-    });
-  });
-  var B=_tlBleed(n),winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),out=[];
-  all.forEach(function(m){
-    if(!m||!m.date)return;
-    var d=_tl0(m.date);
-    if(d<winFrom||d>winTo)return;
-    var i=_tlDiff(d,from);
-    out.push('<div class="tl-ms" style="left:'+_tlX(i+0.5,n)+'%" title="'+_tlEsc(m.name+' — '+(m.desc||''))+'"><span class="tl-ms-dot"></span><span class="tl-ms-txt">'+_tlEsc(m.name)+'</span></div>');
-  });
-  return out.length?'<div class="tl-msrow"><div class="tl-strip">'+out.join('')+'</div></div>':'';
-}
+// The cycle bands and the milestone diamonds that used to sit here are gone
+// (Henrik, 2026-08-30: "the top part showing protocol and weird milestones
+// should be removed they just waste space"). They cost three or four rows above
+// every lane to restate what the header already says, and the milestone
+// diamonds were unlabelled — a row of shapes you could not read. The lanes
+// themselves are the content; anything above them pushes the content down.
 
 // One lane's track. Marks are absolutely positioned by day index so blocks and
 // dots share the same geometry and stay aligned with the axis at every window
@@ -390,18 +434,6 @@ function _tlTrack(L,from,n,expanded){
        lbl+'<div class="tl-mark" style="'+sty+'"></div></div>';
   });
   return h+'</div></div>';
-}
-
-// The "+" entry point, aligned with the current day (spec §4.2). It sits in its
-// own row under the track rather than on it: aligned to today INSIDE the track it
-// covered the very dose mark it stands next to, and that mark is the tap target
-// for ticking the dose off. Injections only — a supplement is ticked per slot
-// from its own sheet.
-function _tlAddRow(L,from,n){
-  if(L.tier==='supplement')return '';
-  var B=_tlBleed(n),ti=_tlDiff(NOW,from);
-  if(ti<-B||ti>=n+B)return '';
-  return '<div class="tl-addrow"><div class="tl-strip"><div class="tl-plus" style="left:'+_tlX(ti+0.5,n)+'%" onclick="event.stopPropagation();_tlAddDose(\''+_tlEsc(L.key)+'\')" title="Log a dose">+</div></div></div>';
 }
 
 // Per-week totals for an expanded lane (spec §4.2, "Wk 4: 750mg"). Weeks are
@@ -451,12 +483,12 @@ function _tlLaneHtml(L,from,n){
   return '<div class="tl-lane'+(expanded?' is-open':'')+'">'+
     '<div class="tl-lane-hd" onclick="_tlToggleLane(\''+_tlEsc(L.key)+'\')">'+
       '<span class="tl-lane-dot" style="background:'+L.color+'"></span>'+
-      '<span class="tl-lane-name">'+_tlEsc(L.name)+'</span>'+
+      '<span class="tl-lane-name">'+_tlEsc(_tlShortName(L.name))+'</span>'+
       '<span class="tl-lane-sub">'+_tlEsc(sub)+'</span>'+
       '<span class="tl-caret">'+(expanded?'▾':'▸')+'</span>'+
     '</div>'+
     _tlTrack(L,from,n,expanded)+
-    (expanded?(_tlAddRow(L,from,n)+'<div class="tl-lane-foot">'+_tlWeekSummary(L,_tlViewFrom(),n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
+    (expanded?('<div class="tl-lane-foot">'+_tlWeekSummary(L,_tlViewFrom(),n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
   '</div>';
 }
 
@@ -472,7 +504,7 @@ function _tlPaint(){
   _tlMarks={};
   var from=_tlAnchorDate(),n=_tlWin,B=_tlBleed(n);
   var lanes=_tlBuildLanes(_tlAdd(from,-B),_tlAdd(from,n-1+B));
-  var h=_tlAxis(from,n)+_tlBands(from,n)+_tlMilestones(from,n);
+  var h=_tlAxis(from,n);
   if(!lanes.length){
     h+='<div class="tl-blank">Nothing in this date range.<br>'+
        '<button class="tl-chip" onclick="_tlGoToday()" style="margin-top:10px">Jump to today</button></div>';
@@ -481,9 +513,9 @@ function _tlPaint(){
     lanes.forEach(function(L){
       if(L.group!==lastGroup){
         lastGroup=L.group;
-        h+='<div class="tl-group">'+_tlEsc(_TL_GROUP_TITLES[L.group]||L.group)+'</div>';
+        h+=_tlGroupHdr(L.group);
       }
-      h+=_tlLaneHtml(L,from,n);
+      if(!_tlGroupIsClosed(L.group))h+=_tlLaneHtml(L,from,n);
     });
   }
   el.innerHTML=h;
@@ -513,32 +545,17 @@ function buildTimeline(){
   if(_tlState==='idle'&&(typeof _currentTab==='undefined'||_currentTab==='timeline')){_tlLoad();}
   var from=_tlViewFrom(),n=_tlWin,to=_tlAdd(from,n-1);
 
-  // ── header: date navigator + window sizes + protocol filter ───────────────
+  // ── header: date navigator + window sizes ────────────────────────────────
   var rangeLabel=_tlShortDate(from)+' – '+_tlShortDate(to)+' '+to.getFullYear();
   var winBtns=_TL_WINDOWS.map(function(w){
     return '<button class="tl-chip'+(_tlWin===w.d?' is-on':'')+'" onclick="_tlSetWin('+w.d+')">'+w.l+'</button>';
   }).join('');
-  var owners=['all'];
-  ((typeof _userStacks!=='undefined'&&_userStacks)||[]).forEach(function(st){
-    var id=_tlStackId(st);
-    if(id&&owners.indexOf(id)<0)owners.push(id);
-  });
-  (_tlRows||[]).forEach(function(e){
-    var id=_tlOwnerId(e);
-    if(owners.indexOf(id)<0)owners.push(id);
-  });
-  var protoBtns=owners.length>2?('<div class="tl-chiprow">'+owners.map(function(id){
-    var label=id==='all'?'All':_tlOwnerName(id);
-    return '<button class="tl-chip'+(_tlProto===id?' is-on':'')+'" onclick="_tlSetProto(\''+_tlEsc(id)+'\')">'+_tlEsc(label)+'</button>';
-  }).join('')+'</div>'):'';
-
   var head='<div class="card"><div class="tl-nav">'+
     '<button class="tl-arrow" onclick="_tlShift(-1)" aria-label="Earlier">‹</button>'+
     '<div class="tl-range"><div class="tl-range-main">'+_tlEsc(rangeLabel)+'</div>'+
     '<div class="tl-range-sub">'+_tlEsc(_tlHeadSub())+'</div></div>'+
     '<button class="tl-arrow" onclick="_tlShift(1)" aria-label="Later">›</button></div>'+
-    '<div class="tl-chiprow">'+winBtns+'<button class="tl-chip tl-today-btn" onclick="_tlGoToday()">Today</button></div>'+
-    protoBtns+'</div>';
+    '<div class="tl-chiprow">'+winBtns+'<button class="tl-chip tl-today-btn" onclick="_tlGoToday()">Today</button></div></div>';
 
   // ── cycle progress + "what this means", carried over from the old tab ──────
   var prog=_tlProgressCard();
@@ -576,7 +593,6 @@ function buildTimeline(){
 // Sub-label under the date range: the active cycle's week, matching Today's
 // header wording, or the filter in force.
 function _tlHeadSub(){
-  if(_tlProto!=='all')return _tlOwnerName(_tlProto);
   var st=((typeof _userStacks!=='undefined'&&_userStacks)||[])[((typeof _activeStackIndices!=='undefined'&&_activeStackIndices)||[])[0]];
   if(st&&st.cycle_start){
     var sd=parseLocalDate(st.cycle_start);
@@ -691,9 +707,7 @@ function _tlFindLane(key,from,n){
 }
 
 function _tlOpenDose(markKey){
-  // A drag that finishes over a mark still delivers a click on iOS. Without this
-  // every pan ended in a dose sheet.
-  if(Date.now()-_tlDragEndedAt<350)return;
+  if(_tlTapBlocked())return;
   var m=_tlMarks[markKey];
   if(!m)return;
   var from=_tlAnchorDate(),n=_tlWin;
@@ -708,18 +722,21 @@ function _tlOpenDose(markKey){
     '<button class="tl-sheet-x" onclick="_tlCloseSheet()">×</button></div>';
 
   if(L.tier==='supplement'){
+    // ⚠️ NO TICK BOX HERE EITHER — the slot buttons that used to sit below these
+    // rows were removed with the injection ones (2026-08-30). A supplement is
+    // ticked off on Today. The Status row is what the buttons used to convey by
+    // reading "Undo AM" rather than "Mark AM as taken"; without it, removing them
+    // would have taken the state away along with the control.
     var slots=day.slots||['AM'];
     h+='<div class="tl-sheet-rows">'+(day.doseText?('<div class="tl-row"><span>Dose</span><b>'+_tlEsc(day.doseText)+'</b></div>'):'')+
-      '<div class="tl-row"><span>Type</span><b>Supplement</b></div></div>';
-    if(isFuture){
-      h+='<div class="tl-sheet-note">Not due yet — you can tick this off on the day.</div>';
-    }else{
-      h+=slots.map(function(sl){
-        var taken=(typeof _suppIsTaken==='function')&&_suppIsTaken(L.compId,m.dk,sl);
-        return '<button class="tl-cta'+(taken?' is-off':'')+'" onclick="_tlToggleSupp(\''+_tlEsc(L.compId)+'\',\''+_tlEsc(m.dk)+'\',\''+_tlEsc(sl)+'\')">'+
-          (taken?'Undo '+sl:'Mark '+sl+' as taken')+'</button>';
-      }).join('');
-    }
+      '<div class="tl-row"><span>Type</span><b>Supplement</b></div>'+
+      (slots.length>1?('<div class="tl-row"><span>Slots</span><b>'+_tlEsc(slots.join(' · '))+'</b></div>'):'')+
+      '<div class="tl-row"><span>Status</span><b>'+(day.logged>=day.n?'Taken':(day.logged?day.logged+' of '+day.n+' taken':'Not taken'))+'</b></div></div>';
+    h+='<div class="tl-sheet-note">'+
+       (isFuture ? 'Scheduled. Tick it off on the day, from Today.'
+                 : (day.logged>=day.n ? 'Recorded as taken.'
+                    : 'Today is where supplements are ticked off.'))+
+       '</div>';
     _tlSheet(h);
     return;
   }
@@ -745,30 +762,4 @@ function _tlOpenDose(markKey){
                                 : 'Not recorded as taken. Today is where doses are ticked off.')))+
      '</div>';
   _tlSheet(h);
-}
-
-function _tlToggleSupp(suppId,dk,slot){
-  if(typeof toggleSupplementDose==='function')toggleSupplementDose(suppId,dk,slot);
-  _tlCloseSheet();
-  buildTimeline();
-}
-
-// "+" → the existing past-injection sheet, with the lane's compound, tier and
-// today's date already filled in. Nothing about logging is re-implemented here.
-function _tlAddDose(laneKey){
-  var from=_tlAnchorDate();
-  var L=_tlFindLane(laneKey,from,_tlWin);
-  if(!L||typeof openPastInjection!=='function')return;
-  var tier=(L.tier==='peptide'||L.tier==='enhanced')?L.tier:'trt';
-  openPastInjection(tier);
-  if(typeof _piDraft!=='undefined'&&_piDraft){
-    // Only pre-select a compound the sheet's own catalogue actually offers —
-    // T-Calc canonicalises some ids on write, so a lane id is not guaranteed to
-    // be a catalogue id.
-    if(typeof _piCatEntry==='function'&&_piCatEntry(tier,L.compId))_piDraft.compId=L.compId;
-    _piDraft.date=dateKey(NOW);
-    var dk=dateKey(NOW),day=L.days[dk]||L.days[Object.keys(L.days).sort().pop()];
-    if(day&&day.dose!==null){_piDraft.dose=_tlFmtNum(day.dose);if(day.unit)_piDraft.unit=_tlUnit(day.unit);}
-    if(typeof _piRerender==='function')_piRerender();
-  }
 }
