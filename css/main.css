@@ -142,19 +142,11 @@
   .tl-axis-tick{position:absolute;top:0;font-size:10px;color:var(--muted2);white-space:nowrap;border-left:1px solid var(--border);padding-left:4px;height:100%;}
   .tl-axis-today{position:absolute;top:0;transform:translateX(-50%);font-size:9px;font-weight:700;letter-spacing:1px;color:var(--accent);white-space:nowrap;}
 
-  .tl-bands{margin-bottom:6px;}
-  .tl-band{position:relative;height:20px;margin-bottom:3px;overflow:hidden;}
-  .tl-band-bar{position:absolute;top:6px;height:8px;border-radius:4px;background:var(--border-strong);opacity:0.45;}
-  .tl-band.is-active .tl-band-bar{background:var(--accent);opacity:0.55;}
-  .tl-band-label{position:absolute;top:2px;font-size:10px;font-weight:700;letter-spacing:0.5px;color:var(--muted2);white-space:nowrap;padding-left:5px;pointer-events:none;}
-  .tl-band.is-active .tl-band-label{color:var(--text);}
-
-  .tl-msrow{position:relative;height:15px;margin-bottom:4px;overflow:hidden;}
-  .tl-ms{position:absolute;top:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;}
-  .tl-ms-dot{width:7px;height:7px;background:var(--accent4);transform:rotate(45deg);display:block;}
-  .tl-ms-txt{display:none;}
-
-  .tl-group{font-size:9.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:10px 0 4px;}
+  /* Group heading doubles as the fold control for its section: the whole row is
+     the tap target, with a +/− on the right saying which way it goes. Padded so
+     it is a thumb-sized row rather than a 12px strip of text. */
+  .tl-group{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:10px 0 2px;padding:4px 2px;cursor:pointer;user-select:none;-webkit-user-select:none;}
+  .tl-group-tog{font-size:16px;line-height:1;width:18px;text-align:center;flex-shrink:0;}
   .tl-lane{border-radius:8px;margin-bottom:4px;}
   .tl-lane.is-open{background:var(--surface2);padding:2px 4px 6px;}
   .tl-lane-hd{display:flex;align-items:center;gap:7px;padding:5px 2px 3px;cursor:pointer;min-width:0;}
@@ -172,8 +164,6 @@
   .tl-slot{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;cursor:pointer;}
   .tl-mark{flex-shrink:0;box-sizing:border-box;}
   .tl-mark-lbl{position:absolute;top:-1px;font-size:9px;font-family:var(--font-mono);color:var(--muted2);white-space:nowrap;pointer-events:none;}
-  .tl-addrow{position:relative;height:24px;margin-top:2px;overflow:hidden;}
-  .tl-plus{position:absolute;top:1px;transform:translateX(-50%);width:22px;height:22px;border-radius:50%;background:var(--accent);color:#000;font-size:16px;font-weight:800;line-height:21px;text-align:center;cursor:pointer;}
 
   .tl-lane-foot{padding:5px 2px 0;}
   .tl-wkrow{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;}
@@ -200,8 +190,6 @@
   .tl-row:last-child{border-bottom:none;}
   .tl-row b{color:var(--text);font-weight:600;text-align:right;}
   .tl-sheet-note{font-size:12px;color:var(--muted2);line-height:1.5;padding:4px 2px;}
-  .tl-cta{width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;margin-top:8px;}
-  .tl-cta.is-off{background:none;border:1px solid var(--border-strong);color:var(--muted2);}
   .prog-wrap{padding:12px 16px 14px;}
   .prog-label{display:flex;justify-content:space-between;font-size:13px;color:var(--muted2);margin-bottom:6px;}
   .prog-bar{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}

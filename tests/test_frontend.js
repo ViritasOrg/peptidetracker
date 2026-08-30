@@ -11315,6 +11315,7 @@ if (typeof G._blBuildLines === 'function') {
     // NOW is a top-level `const` in index.html, so it is NOT a sandbox property —
     // reading G.NOW gives undefined and every date below silently becomes NaN.
     var _tlNow = new Date();
+    var _tlSrc = fs.readFileSync(path.join(__dirname, '../tab-timeline.js'), 'utf8');
     var _tlD = function(n){ return G.dateKey(G._tlAdd(_tlNow, n)); };
     var _tlFrom = G._tlAdd(_tlNow, -7), _tlN = 28, _tlTo = G._tlAdd(_tlFrom, _tlN - 1);
 
@@ -11339,6 +11340,36 @@ if (typeof G._blBuildLines === 'function') {
       _lanes[0].group === 'anabolics' && _lanes[_lanes.length-1].group === 'peptides');
     check('timeline: continuous TRT is pinned above the enhanced compounds',
       _lanes[0].tier === 'trt');
+    // ── Lane labels ─────────────────────────────────────────────────────────
+    // "Nebido (Testosterone Undecanoate)" truncated mid-word in a lane header at
+    // every window size. Henrik, 2026-08-30: shorten Testosterone to Test, and
+    // esters / names like Nebido or Depot to three characters.
+    if (typeof G._tlShortName === 'function') {
+      check('timeline: Testosterone shortens to Test',
+        G._tlShortName('Testosterone Enanthate') === 'Test Ena');
+      check('  …esters go to three characters',
+        G._tlShortName('Testosterone Cypionate') === 'Test Cyp' &&
+        G._tlShortName('Testosterone Phenylpropionate') === 'Test Phe' &&
+        G._tlShortName('Nandrolone Decanoate') === 'Nandrolone Dec');
+      check('  …as do brand and formulation words',
+        G._tlShortName('Nebido (Testosterone Undecanoate)') === 'Neb (Test Und)' &&
+        G._tlShortName('Testoviron Depot') === 'Tes Dep');
+      check('  …numbers and hyphens survive',
+        G._tlShortName('Sustanon 250') === 'Sus 250' &&
+        G._tlShortName('Depo-Testosterone') === 'Depo-Test');
+      // ⚠️ NOT A BLANKET TRUNCATION. Cutting every long word to three characters
+      // would invent collisions in a medical app — Enanthate and Estradiol both
+      // becoming "Est" — so only the testosterone vocabulary is touched.
+      check('  …and nothing outside that vocabulary is touched',
+        G._tlShortName('HGH (Somatropin)') === 'HGH (Somatropin)' &&
+        G._tlShortName('Magnesium (Glycinate)') === 'Magnesium (Glycinate)' &&
+        G._tlShortName('Retatrutide') === 'Retatrutide' &&
+        G._tlShortName('Anadrol') === 'Anadrol');
+      check('  …the shortening is display-only — the lane keeps the stored name',
+        _tlSrc.indexOf('_tlShortName(L.name)') > -1 &&
+        /tl-sheet-title[^;]*_tlEsc\(L\.name\)/.test(_tlSrc));
+    }
+
     check('timeline: injectables draw as blocks, daily peptides as dots',
       _byKey['trt|test_e'].style === 'blocks' && _byKey['peptide|hgh'].style === 'dots');
     check('timeline: two doses on one day aggregate into one mark',
@@ -11353,11 +11384,12 @@ if (typeof G._blBuildLines === 'function') {
       G._tlOwnerId({cycle_id:'tcalc:stk1'}) === 'stk1' &&
       G._tlOwnerName('_manual') === 'Logged manually');
 
-    // Filtering to one protocol hides the others' lanes entirely.
-    G._tlProto = 'stk1';
-    check('timeline: the protocol filter drops other cycles',
-      G._tlBuildLanes(_tlFrom, _tlTo).length === 3);
-    G._tlProto = 'all';
+    // ⚠️ NO PROTOCOL FILTER. Removed on request (2026-08-30) along with the chip
+    // row that drove it: the tab shows every cycle, always, and an archived
+    // protocol's lanes are part of the history rather than something to filter
+    // out. Ownership is still named — on the expanded lane and in the dose sheet.
+    check('timeline: shows every cycle, with no filter to switch between them',
+      _tlSrc.indexOf('_tlProto') === -1 && _tlSrc.indexOf('_tlSetProto') === -1);
 
     // Week numbers come from the owning protocol's start, so "Wk 4" here means
     // the same week every other tab calls week 4.
@@ -11382,20 +11414,75 @@ if (typeof G._blBuildLines === 'function') {
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
     check('timeline: the today rule is drawn on every lane',
       _closed.indexOf('tl-grid-today') > -1);
-    check('timeline: "+" sits beside the today mark, never on top of it',
+    // ── Collapsible group headings ──────────────────────────────────────────
+    // Anabolics / Peptides / Supplements fold away so a long supplement list can
+    // be put out of sight. The heading row is the control, with a +/− saying
+    // which way it goes.
+    if (typeof G._tlGroupHdr === 'function') {
+      var _grSave = G._tlGroupClosed;
+      G._tlGroupClosed = {};
+      G._tlDragEndedAt = 0;
+      check('timeline: a group heading says which way it folds',
+        G._tlGroupHdr('supplements').indexOf('−') > -1 &&
+        G._tlGroupHdr('supplements').indexOf('Supplements') > -1 &&
+        /_tlToggleGroup\('supplements'\)/.test(G._tlGroupHdr('supplements')));
+      G._tlToggleGroup('supplements');
+      check('  …tapping it collapses the group',
+        G._tlGroupIsClosed('supplements') === true &&
+        G._tlGroupHdr('supplements').indexOf('+') > -1);
+      G._tlToggleGroup('supplements');
+      check('  …and tapping again brings it back', G._tlGroupIsClosed('supplements') === false);
+      check('  …the choice is persisted, not lost on the next render',
+        _tlSrc.indexOf("setData('pep-tl-groups'") > -1 && _tlSrc.indexOf("getData('pep-tl-groups'") > -1);
+      // A collapsed group renders its heading and none of its lanes. Seed a
+      // supplement first — without one there is no supplements group at all and
+      // the check would pass for the wrong reason.
+      var _grSupp = G._supplements;
+      G._supplements = [{ supp_id:'creatine', name:'Creatine', dose:'5 g', freq:'daily',
+                          timing:'AM', start_date:G.dateKey(G._tlAdd(_tlNow,-10)) }];
+      G._tlGroupClosed = { supplements: true };
+      G._tlMarks = {};
+      var _paintedClosed = G._tlPaint();
+      check('  …a collapsed group draws no lanes', _paintedClosed === true &&
+        Object.keys(G._tlMarks).every(function(k){ return k.indexOf('supplement|') !== 0; }));
+      G._tlGroupClosed = {};
+      G._tlMarks = {};
+      G._tlPaint();
+      check('  …and an open one draws them again',
+        Object.keys(G._tlMarks).some(function(k){ return k.indexOf('supplement|') === 0; }));
+      G._supplements = _grSupp;
+      G._tlGroupClosed = _grSave;
+    }
+    // The heading is now a tap target inside the pannable canvas, and so is the
+    // lane header — which never had the guard the dose marks did, so a pan that
+    // happened to end over one collapsed the lane.
+    check('timeline: every tap target inside the canvas ignores a pan\'s trailing click',
+      /function _tlTapBlocked\(\)/.test(_tlSrc) &&
+      (_tlSrc.match(/if\(_tlTapBlocked\(\)\)return;/g) || []).length === 3);
+    check('timeline: group headings are bigger than the 9.5px they were',
+      /\.tl-group\{[^}]*font-size:12\.5px/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
+
+    // ⚠️ THE TAB WRITES NOTHING. The "+" that opened the past-injection sheet is
+    // gone (2026-08-30), along with the per-dose tick and the supplement slot
+    // buttons before it. An expanded lane offers no control at all.
+    check('timeline: an expanded lane offers no "+" — the tab writes nothing',
+      typeof G._tlAddRow === 'undefined' && typeof G._tlAddDose === 'undefined' &&
       _closed.indexOf('tl-plus') === -1 && _openTr.indexOf('tl-plus') === -1 &&
-      G._tlAddRow(_byKey['trt|test_e'], _tlFrom, _tlN).indexOf('tl-plus') > -1);
-    check('  …and a supplement lane gets no injection "+"',
-      G._tlAddRow({tier:'supplement'}, _tlFrom, _tlN) === '');
+      _tlSrc.indexOf('tl-plus') === -1 && _tlSrc.indexOf('tl-addrow') === -1);
     check('timeline: dose marks are tappable',
       _closed.indexOf('_tlOpenDose(') > -1);
     check('timeline: supplements are dotted lanes in their own group',
       G._tlLaneStyle('supplement') === 'dots' && G._tlGroupOf('supplement') === 'supplements');
 
-    var _bands = G._tlBands(_tlFrom, _tlN);
-    check('timeline: the owning cycle is drawn as a band over the lanes',
-      _bands.indexOf('tl-band-bar') > -1 && _bands.indexOf('Blast 1') > -1);
-    check('  …and an active cycle is marked as such', _bands.indexOf('is-active') > -1);
+    // ⚠️ NOTHING IS DRAWN ABOVE THE LANES except the date axis. The cycle bands
+    // and the unlabelled milestone diamonds were removed on request (2026-08-30,
+    // "they just waste space") — they cost three or four rows restating what the
+    // header already says, above the content people came for.
+    check('timeline: nothing but the axis sits above the lanes',
+      typeof G._tlBands === 'undefined' && typeof G._tlMilestones === 'undefined' &&
+      _tlSrc.indexOf('tl-band') === -1 && _tlSrc.indexOf('tl-msrow') === -1);
+    check('  …and their styles went with them',
+      !/\.tl-band|\.tl-msrow|\.tl-ms-dot/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
 
     // A supplement lane is built from the regimen + its taken-log, not /injections.
     G._supplements = [{ supp_id:'creatine', name:'Creatine', dose:'5 g', freq:'daily', timing:'AM',
@@ -11452,15 +11539,62 @@ if (typeof G._blBuildLines === 'function') {
       /Math\.abs\(dx\)<=Math\.abs\(dy\)/.test(_tlJs3) && /touch-action:pan-y/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     check('timeline: reads the whole record, not just the active cycle',
       _tlJs3.indexOf('fetchInjectionsForRange') > -1);
-    check('timeline: what logging it has reuses the existing flows',
-      _tlJs3.indexOf('toggleSupplementDose(') > -1 && _tlJs3.indexOf('openPastInjection(') > -1);
+
+    // ── The timeline's copy has to follow the record ────────────────────────
+    // Same bug class as _tcHistory (see the note in toggleInjection): this tab
+    // holds its OWN fetch of /injections over a much wider span, so the cache
+    // patch toggleInjection applies never reaches these rows. Ticking a dose on
+    // Today left the timeline showing the pre-tick state until the app was
+    // restarted — reported 2026-08-30.
+    {
+      const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+      const _thistJs = fs.readFileSync(path.join(__dirname, '../tab-thist.js'), 'utf8');
+      check('timeline: ticking a dose on Today reaches the timeline\'s own copy',
+        /_tlNoteInjection\(id,newLogged\)/.test(_todayJs));
+      check('  …and both rollbacks put it back',
+        (_todayJs.match(/_tlNoteInjection\(id,currentLogged\)/g) || []).length === 2);
+      check('  …and Reset Today unticks it there too',
+        /_tlNoteInjection\(e\.id,false\)/.test(_todayJs));
+      check('  …and saving past injections drops the span, since the row set changed',
+        /_tlInvalidateInjections\(\)/.test(_thistJs));
+      check('  …every hookup is typeof-guarded — tab-timeline.js loads after Today',
+        (_todayJs.match(/typeof _tlNoteInjection==='function'/g) || []).length === 4 &&
+        /typeof _tlInvalidateInjections === 'function'/.test(_thistJs));
+    }
+    if (typeof G._tlNoteInjection === 'function') {
+      var _niRows = G._tlRows, _niState = G._tlState, _niSpan = G._tlSpan, _niTab = G._currentTab;
+      G._currentTab = 'today';                       // not on screen: patch, don't repaint
+      G._tlRows = [{ id:'x1', date:'2026-08-01', compound_id:'test_e', tier:'trt', logged:false }];
+      G._tlState = 'ready'; G._tlSpan = { from:new Date(2000,0,1), to:new Date(2099,0,1) };
+      G._tlNoteInjection('x1', true);
+      check('timeline: a tick flips the row this tab is holding',
+        G._tlRows[0].logged === true && G._tlState === 'ready');
+      G._tlNoteInjection('x1', false);
+      check('  …and an untick flips it back', G._tlRows[0].logged === false);
+      // A dose the timeline has never seen means its copy is incomplete, so the
+      // flag patch is not enough — the span has to be dropped and refetched.
+      G._tlNoteInjection('not-in-our-copy', true);
+      check('  …while an unknown dose invalidates the span instead of silently missing it',
+        G._tlState === 'idle' && G._tlSpan === null);
+      G._tlRows = _niRows; G._tlState = _niState; G._tlSpan = _niSpan; G._currentTab = _niTab;
+    }
+    // The one invariant that matters most here: no path in this file writes to
+    // the record. Not a dose, not a supplement, not a new row.
+    check('timeline: no code path in the tab writes to the record',
+      !/\btoggleInjection\s*\(/.test(_tlJs3) && !/\btoggleSupplementDose\s*\(/.test(_tlJs3) &&
+      !/\bopenPastInjection\s*\(/.test(_tlJs3) && _tlJs3.indexOf('_tlToggleSupp') === -1 &&
+      !/method\s*:\s*'(POST|PUT|DELETE)'/.test(_tlJs3));
+    check('  …and no button styles are left over from the controls that went',
+      !/\.tl-cta|\.tl-plus|\.tl-addrow/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     // ⚠️ An injection is ticked off on Today and NOWHERE else. The dose sheet used
     // to carry per-dose "Mark as taken" / "Mark as not taken" buttons; Henrik had
     // them removed (2026-08-30) because a mis-tap on a history view showing months
     // at four pixels a day writes a false claim about what went into his body, and
     // that claim feeds the free-T curve. This pins the removal.
+    // Assert on CALLS, not on the word: the file names toggleInjection in a
+    // comment explaining where a tick belongs, and that reference should stay.
     check('timeline: cannot tick an injection off — that lives on Today',
-      _tlJs3.indexOf('toggleInjection') === -1 && _tlJs3.indexOf('_tlToggleInj') === -1);
+      !/\btoggleInjection\s*\(/.test(_tlJs3) && _tlJs3.indexOf('_tlToggleInj') === -1);
     if (typeof G._tlOpenDose === 'function' && typeof G._tlPaint === 'function') {
       var _dsRows = G._tlRows, _dsSupp = G._supplements, _dsStacks = G._userStacks,
           _dsAct = G._activeStackIndices, _dsProto = G._tlProto, _dsOpen = G._tlOpen,
