@@ -11472,15 +11472,36 @@ if (typeof G._blBuildLines === 'function') {
     var _axis = G._tlAxis(_tlFrom, _tlN);
     var _ticks = (_axis.match(/tl-axis-tick/g) || []).length;
     var _labelled = (_axis.match(/<span>/g) || []).length;
-    check('timeline: the axis labels week boundaries and marks today',
+    check('timeline: the axis labels its boundaries and marks today',
       _ticks >= 4 && _labelled >= 1 && _axis.indexOf('TODAY') > -1);
     check('  …and draws past the window edges so the pan has something to slide in',
       _ticks > 4 && G._tlBleed(_tlN) >= 2);
-    // At twelve weeks a label on every week boundary prints "17 Jul 24 Jul 31 Jul"
-    // on top of itself, so labels thin out while the ticks stay.
-    var _axis12 = G._tlAxis(_tlFrom, 84);
-    check('  …and thins labels at the wide windows so they cannot collide',
-      (_axis12.match(/<span>/g) || []).length * 2 <= (_axis12.match(/tl-axis-tick/g) || []).length);
+
+    // ── The zooms are months now, not weeks (Henrik, 2026-08-30) ────────────
+    check('timeline: the zoom presets are 1/3/6/9 months',
+      JSON.stringify((G._TL_WINDOWS || []).map(function(w){ return w.l; })) ===
+        JSON.stringify(['1M','3M','6M','9M']) &&
+      JSON.stringify((G._TL_WINDOWS || []).map(function(w){ return w.d; })) ===
+        JSON.stringify([30,91,182,273]));
+    check('  …and the default window is one of them',
+      (G._TL_WINDOWS || []).some(function(w){ return w.d === G._tlWin; }));
+    // Ticks follow the zoom: week boundaries at 1M, real calendar-month starts
+    // beyond it. At 9M a rule every seven days would be one hairline per eight
+    // pixels, and the labels would promise weeks while the chips say months.
+    var _tk1 = G._tlTicks(_tlFrom, 30);
+    check('  …the 1M window still steps by week',
+      _tk1.length > 2 && _tk1.every(function(t,k){ return k === 0 || t.i - _tk1[k-1].i === 7; }));
+    [91, 182, 273].forEach(function(win){
+      var tk = G._tlTicks(_tlFrom, win);
+      check('  …the ' + (win === 91 ? '3M' : win === 182 ? '6M' : '9M') + ' window steps by calendar month',
+        tk.length > 2 && tk.every(function(t){ return G._tlAdd(_tlFrom, t.i).getDate() === 1; }),
+        tk.length ? JSON.stringify(tk.slice(0,3).map(function(t){ return t.label; })) : 'no ticks');
+    });
+    // However wide the window, at most a handful of labels land inside it.
+    var _axis9 = G._tlAxis(_tlFrom, 273);
+    check('  …and however wide it gets, the labels stay readable',
+      (_axis9.match(/<span>/g) || []).length <= 10 &&
+      (_axis9.match(/tl-axis-tick/g) || []).length > (_axis9.match(/<span>/g) || []).length);
 
     var _closed = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, false);
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
