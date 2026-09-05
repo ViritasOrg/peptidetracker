@@ -290,7 +290,7 @@ async function useTemplate(tid){
 function viewStack(idx){_editReadOnly=true;showStackEditor(idx);}
 function editStack(idx){_editReadOnly=false;showStackEditor(idx);}
 // ── Inline Stack Editor ──────────────────────────────────────────────────────
-var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;var _trtLogCache={};
+var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;
 function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // One spelling per molecule (Phase 1 chose the PK ids). Delegates rather than
 // duplicating: _tcCanonCompId and _isEnhTestosterone are what the PK model and the
@@ -1593,7 +1593,6 @@ async function saveEditBuf(){
         await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
-    _trtLogCache={};
     await generateAndPushInjections(_editBuf,_editToday0);
     await refreshInjectionsCache();
   }
@@ -2647,48 +2646,7 @@ function _renderTRTViewTab(st){
       html+='</div>';
     });
   }
-  html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:10px;">Injection Log</div>';
-  if(!st.cycle_start){
-    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Set a start date to see the injection log for this protocol.</div>';
-  }else{
-    var _cid=_stackCycleId(st);
-    if(!_trtLogCache.hasOwnProperty(_cid)){
-      _fetchTRTLog(st,_cid);
-      html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Loading...</div>';
-    }else{
-      var _cachedInj=_trtLogCache[_cid];
-      var _byDate={};
-      _cachedInj.forEach(function(inj){if(!_byDate[inj.date])_byDate[inj.date]=[];_byDate[inj.date].push(inj);});
-      var _sortedDates=Object.keys(_byDate).sort(function(a,b){return b.localeCompare(a);});
-      if(!_sortedDates.length){
-        html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT injections logged during this protocol.</div>';
-      }else{
-        _sortedDates.forEach(function(dateStr){
-          var dp=dateStr.split('-');var dObj=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]));
-          html+='<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">';
-          html+='<div style="font-size:12px;color:var(--muted2);min-width:90px;flex-shrink:0;">'+fmtDate(dObj)+'</div>';
-          html+='<div style="flex:1;">';
-          _byDate[dateStr].forEach(function(inj){
-            html+='<div style="font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px;margin-bottom:2px;">';
-            html+='<div style="width:7px;height:7px;border-radius:50%;background:'+(inj.dot||'#e8a020')+';flex-shrink:0;"></div>';
-            html+=_esc(inj.compound_name||inj.compound_id);
-            html+='</div>';
-          });
-          html+='</div></div>';
-        });
-      }
-    }
-  }
   return html;
-}
-async function _fetchTRTLog(st,cycleId){
-  try{
-    var r=await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cycleId)+'&active_only=false',{headers:authHeaders()});
-    if(!r.ok){_trtLogCache[cycleId]=[];renderStackEditor();return;}
-    var all=await r.json();
-    _trtLogCache[cycleId]=(Array.isArray(all)?all:[]).filter(function(e){return e.tier==='trt'&&e.logged;});
-  }catch(e){_logErr('fetchTRTLog',e);_trtLogCache[cycleId]=[];}
-  renderStackEditor();
 }
 function setStackViewTab(t){_stackViewTab=_compTabId(t);renderStackEditor();}
 // The two tiers became one tab. Anything that still asks for 'trt' or 'enhanced' —
@@ -3713,13 +3671,34 @@ function _renderEnhancedViewTab(st){
       html+='</div>';
     });
     // Recovery & PCT panel — filled async from the backend by _ensurePctPanel(st)
-    html+='<div class="wiz-section" style="margin-top:18px;">On-cycle &amp; recovery</div>';
+    html+='<div class="wiz-section" id="pct-recovery-head" style="margin-top:18px;">On-cycle &amp; recovery</div>';
     html+='<div id="pct-recovery-body"><div style="color:var(--muted2);font-size:12px;padding:8px 0;">Loading recovery plan…</div></div>';
   }
   return html;
 }
 // ── Recovery & PCT (fetched from /compounds/pct-plan, cached per compound set) ──
+// ⚠️ PCT ADVICE ONLY WHEN PCT IS IN THE PROTOCOL.
+// Henrik, 2026-09-03: "Weird PCT advice printed in Protocol details, only show if
+// added to Protocol." The backend returns a full post-cycle plan for any enhanced
+// compound set, and this panel printed it whether or not the user had added a
+// single recovery compound — a SERM restart schedule, week by week, for a protocol
+// that contains no SERM. That is advice nobody asked to be shown, on a screen whose
+// job is to state what this protocol IS.
+//
+// The on-cycle support block is left alone: it is the other half of the same
+// payload and was not what was reported.
 var _pctCache={};
+function _pctHasRecoveryCompound(st){
+  var comps=(st&&st.enhanced&&st.enhanced.compounds)||[];
+  if(!comps.length)return false;
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length)
+    ?_COMPOUND_CATALOG:((typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)||[]);
+  return comps.some(function(c){
+    if(!c||!c.id)return false;
+    var e=cat.filter(function(x){return x&&x.id===c.id;})[0];
+    return !!e&&_TIER2_EXTRA_GROUPS.indexOf(String(e.group||''))>=0;
+  });
+}
 function _pctSig(st){var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean).sort();var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';return sex+'|'+ids.join(',');}
 async function pctPlanFromAgent(compoundIds,sex){
   var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
@@ -3730,16 +3709,41 @@ async function pctPlanFromAgent(compoundIds,sex){
     var d=await r.json();return{ok:true,plan:(d&&d.plan)||null};
   }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('pct',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
-function _renderPctPlanHtml(plan){
+// Is the agent this plan is talking about actually IN the protocol? The plan is a
+// recommendation engine — it names hCG, a SERM, whatever the compound set implies —
+// and Protocol details is not the place to meet a recommendation. Matched on the
+// compound's own name or id, both ways, because the plan writes display names
+// ("HCG") while the protocol stores catalogue entries.
+function _pctAgentInStack(agent,st){
+  var a=String(agent==null?'':agent).toLowerCase().trim();
+  if(!a)return false;
+  var comps=(st&&st.enhanced&&st.enhanced.compounds)||[];
+  return comps.some(function(c){
+    if(!c)return false;
+    var n=String(c.name||'').toLowerCase(), i=String(c.id||'').toLowerCase();
+    return (!!n&&(a.indexOf(n)>=0||n.indexOf(a)>=0))||(!!i&&(a.indexOf(i)>=0||i.indexOf(a)>=0));
+  });
+}
+// ⚠️ THIS VIEW STATES THE PROTOCOL — IT DOES NOT RECOMMEND ONE.
+// Henrik, 2026-09-03: "This advice is needed when one creates the stack, but if not
+// part of the stack then it should not be part of this view."
+//
+// Everything here is gated on the protocol actually containing the thing being
+// discussed: on-cycle entries on the named agent being in it, the whole post-cycle
+// block plus its notes and guardrails on a recovery compound being in it. A
+// protocol of HGH alone showed a "＋ HCG" card, an HPTA-recovery note and three
+// SERM guardrails for compounds it does not contain.
+function _renderPctPlanHtml(plan,hasPct,st){
   if(!plan)return '<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable.</div>';
   if(plan.applicable===false){return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--muted2);line-height:1.5;">'+_esc((plan.notes&&plan.notes[0])||'Not applicable.')+'</div>';}
   var h='';
   // ── On-cycle support (runs DURING the cycle) ──
-  if(plan.on_cycle&&plan.on_cycle.length){
+  var onCyc=(plan.on_cycle||[]).filter(function(o){return _pctAgentInStack(o&&o.agent,st);});
+  if(onCyc.length){
     h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin:0 0 6px;">On-cycle support</div>';
-    plan.on_cycle.forEach(function(o){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;"><div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px;">＋ '+_esc(o.agent||'')+'</div><div style="font-size:12px;color:var(--muted2);line-height:1.5;">'+_esc(o.message||'')+'</div></div>';});
+    onCyc.forEach(function(o){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;"><div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px;">＋ '+_esc(o.agent||'')+'</div><div style="font-size:12px;color:var(--muted2);line-height:1.5;">'+_esc(o.message||'')+'</div></div>';});
   }
-  var p=plan.pct;
+  var p=hasPct?plan.pct:null;
   if(p){
     h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:16px 0 6px;border-top:1px solid var(--border);padding-top:12px;">Post-cycle (PCT)</div>';
     h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:4px 0 4px;">Start PCT</div>';
@@ -3754,21 +3758,38 @@ function _renderPctPlanHtml(plan){
     }
     if(p.confirm_labs&&p.confirm_labs.length){h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 4px;">Confirm recovery</div>'+p.confirm_labs.map(function(l){return '<div style="font-size:11px;color:var(--text);line-height:1.5;padding:1px 0;">• '+_esc(l)+'</div>';}).join('');}
   }
-  (plan.notes||[]).forEach(function(n){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-top:6px;font-size:11px;color:var(--muted2);line-height:1.5;">ℹ '+_esc(n)+'</div>';});
-  if(plan.guardrails&&plan.guardrails.length){h+='<div style="margin-top:8px;">'+plan.guardrails.map(function(g){return '<div style="font-size:11px;color:var(--muted2);line-height:1.5;">• '+_esc(g)+'</div>';}).join('')+'</div>';}
-  h+=(typeof _renderSafetyNote==='function')?_renderSafetyNote('enhanced'):'';
+  // The notes and guardrails are post-cycle copy — HPTA recovery, "never run a SERM
+  // during an HCG priming phase" — so they belong to the block above and leave with it.
+  if(hasPct){
+    (plan.notes||[]).forEach(function(n){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-top:6px;font-size:11px;color:var(--muted2);line-height:1.5;">ℹ '+_esc(n)+'</div>';});
+    if(plan.guardrails&&plan.guardrails.length){h+='<div style="margin-top:8px;">'+plan.guardrails.map(function(g){return '<div style="font-size:11px;color:var(--muted2);line-height:1.5;">• '+_esc(g)+'</div>';}).join('')+'</div>';}
+  }
+  // The tier safety card is NOT part of this and is appended by _pctPaint, so that
+  // an empty advisory can drop the heading without dropping a safety message.
   return h;
+}
+// Gated this hard, a plan usually renders to nothing — so the "On-cycle & recovery"
+// heading goes with it rather than standing over an empty box. The enhanced-tier
+// safety card is deliberately outside that test: it is about the compounds the
+// protocol DOES contain, so it survives an empty advisory and renders on its own.
+function _pctPaint(el,plan,hasPct,st){
+  var h=_renderPctPlanHtml(plan,hasPct,st);
+  var empty=!String(h||'').replace(/<[^>]*>/g,'').trim();
+  var head=document.getElementById('pct-recovery-head');
+  if(head)head.style.display=empty?'none':'';
+  var safety=(typeof _renderSafetyNote==='function')?_renderSafetyNote('enhanced'):'';
+  el.innerHTML=(empty?'':h)+safety;
 }
 function _ensurePctPanel(st){
   var el=document.getElementById('pct-recovery-body');if(!el||!st)return;
   var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean);
   if(!ids.length){el.innerHTML='';return;}
-  var sig=_pctSig(st);
-  if(_pctCache[sig]){el.innerHTML=_renderPctPlanHtml(_pctCache[sig]);return;}
+  var sig=_pctSig(st),hasPct=_pctHasRecoveryCompound(st);
+  if(_pctCache[sig]){_pctPaint(el,_pctCache[sig],hasPct,st);return;}
   var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';
   pctPlanFromAgent(ids,sex).then(function(res){
     var el2=document.getElementById('pct-recovery-body');if(!el2)return;
-    if(res.ok&&res.plan){_pctCache[sig]=res.plan;el2.innerHTML=_renderPctPlanHtml(res.plan);}
+    if(res.ok&&res.plan){_pctCache[sig]=res.plan;_pctPaint(el2,res.plan,hasPct,st);}
     else{el2.innerHTML='<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable'+(res.status?(' (HTTP '+res.status+')'):'')+'.</div>';}
   });
 }
