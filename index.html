@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.306</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -171,6 +171,7 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Body comp</span><span style="font-size:13px;" id="s-local-bc">—</span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Milestones</span><span style="font-size:13px;" id="s-milestones-count">—</span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Protocol format</span><button id="s-migrate-tier-btn" onclick="migrateProtocolsToCompounds()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Merge tiers</button></div>
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Orphaned doses</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;" id="s-orphan-doses">—</span><button id="s-orphan-btn" onclick="cleanupOrphanDoses()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Clean up</button></span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Local dose logs → backend</span><button id="peptide-sync-btn" onclick="pushAllPeptideToBackend()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Sync</button></div>
       </div>
     </div>
@@ -379,7 +380,26 @@ function _logHttp(ctx,status,url){var msg='[pep:'+ctx+'] HTTP '+status+' — '+u
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
 async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders()});if(!r.ok){_logHttp('syncWeights',r.status,'/weights');return;}const remote=await r.json();weights=remote.map(function(w){return{date:_normDt(w.date),weight:w.weight};}).sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){_logErr('syncWeights',e);weights=getData('weight_log',[]);}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepLog',r.status,'/peptide-log');return;}const remote=await r.json();remote.forEach(function(entry){var key='proto-chk-'+_normDt(entry.date);try{var local=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(local))local=[];var merged=local.slice();entry.doses.forEach(function(d){if(!merged.includes(d))merged.push(d);});if(merged.length!==local.length)localStorage.setItem(key,JSON.stringify(merged));}catch(e){}});}catch(e){_logErr('syncPepLog',e);}finally{_syncPending=false;buildToday();}}
-async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:authHeaders()});if(!r.ok){_logHttp('syncBodyComp',r.status,'/bodycomp');return;}const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();await Promise.all(local.map(e=>{const[y,m,d]=e.date.split('-');return pushBodyCompToAgent({...e,date:y+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')});}));}catch(e){_logErr('syncBodyComp',e);}}
+// The record stores dates zero-padded — the backend's validator pads on write — and
+// this app has written unpadded ones, which is why the push at the end of the sync
+// pads too. The prune below has to agree with that: a local '2026-7-22' must not
+// slip past a tombstone for '2026-07-22' and stay on the list.
+function _bcPadDate(d){var p=String(d||'').split('-');return p.length===3?(p[0]+'-'+p[1].padStart(2,'0')+'-'+p[2].padStart(2,'0')):String(d||'');}
+// A row missing from the server is not always a row the server has yet to hear
+// about. bodycomp.json is SHARED — the Workout app writes the same rows for the
+// same person, in the same data namespace — so a row can go missing because it was
+// deleted over there.
+//
+// This function could not tell those apart: anything local and not remote was kept
+// and re-uploaded. That is how a deleted entry survived, in both directions — the
+// 2026-07-22 reading Henrik deleted here came back because Workout still had it,
+// and a reading deleted in Workout would have lingered here for the same reason.
+//
+// So ask for the tombstones (?include_deleted=true), keep them out of the merged
+// list, and drop the local copies: a deleted row is gone, not missing. Only deleted
+// dates are pruned — a local row the server has simply never seen is still pushed,
+// which is what this sync exists for.
+async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp?include_deleted=true",{headers:authHeaders()});if(!r.ok){_logHttp('syncBodyComp',r.status,'/bodycomp');return;}const all=await r.json();const remote=all.filter(function(e){return!e.deleted;});const gone=new Set(all.filter(function(e){return e.deleted;}).map(function(e){return _bcPadDate(e.date);}));const local=bcLoad().filter(function(e){return!gone.has(_bcPadDate(e.date));});const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();await Promise.all(local.map(e=>{const[y,m,d]=e.date.split('-');return pushBodyCompToAgent({...e,date:y+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')});}));}catch(e){_logErr('syncBodyComp',e);}}
 var _userTier=1;var _userFeatures={tier:1,trt:false,enhanced:false,peptides:true};var _featuresLoaded=false;
 async function syncFeaturesFromAgent(){try{const r=await fetch(AGENT_URL+'/user/features',{headers:authHeaders()});if(!r.ok){_logHttp('syncFeatures',r.status,'/user/features');return;}const d=await r.json();_userTier=d.tier||1;_userFeatures=d;_featuresLoaded=true;}catch(e){_logErr('syncFeatures',e);_userTier=1;_userFeatures={tier:1,trt:false,enhanced:false,peptides:true};}}
 // Cycles + cycle bloodtest recs are TRT/Enhanced-tier features (#639/#640). Gate
@@ -718,6 +738,96 @@ function buildLastPushDropdown(){const el=document.getElementById('push-to-prod-
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done — '+count+' synced';setTimeout(()=>{btn.textContent='Sync';btn.disabled=false;},2500);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
 async function pushMilestonesToBackend(){const colorMap=[['nebido','#c084fc'],['testoviron','#c084fc'],['trt','#c084fc'],['glow','#3b9eff'],['blood','#ff6b2b'],['panel','#ff6b2b'],['hgh','#3cffa0']];function _mc(name){const n=name.toLowerCase();for(const[kw,col]of colorMap)if(n.includes(kw))return col;return'#e8ff3c';}const milestones=MILESTONES.map(m=>{const d=m.date;const date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');return{date,label:m.name,color:_mc(m.name),desc:m.desc||''};});try{const r=await fetch(AGENT_URL+'/stack-milestones/custom',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({milestones})});if(!r.ok)throw new Error('HTTP '+r.status);}catch(e){_logErr('pushMilestones',e);}}
 async function migrateLegacyData(){const btn=document.getElementById('s-migrate-btn');if(btn){btn.textContent='Fixing…';btn.disabled=true;}try{const r=await fetch(AGENT_URL+'/auth/migrate',{method:'POST',headers:authHeaders()});if(!r.ok)throw new Error('HTTP '+r.status);const res=await r.json();if(btn){btn.textContent='Fixed ('+res.total+')';setTimeout(()=>{btn.textContent='Fix old data';btn.disabled=false;},3000);}await syncPeptideLogFromAgent();loadSettings();}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;}}}
+
+// ── Orphaned plan rows — the debris a deleted protocol used to leave ─────────
+// deleteStack now takes its protocol's untaken doses with it, but that only helps
+// protocols deleted from here on. Rows orphaned before it did are still stored:
+// 384 of them under a Protocol 4 that no longer exists. This sweeps those.
+//
+// It is a button, not something that runs on load. The Timeline's own note says a
+// render path must hide and report, never delete — and a sweep that ran by itself
+// would be doing exactly that, at the one moment it is least safe to: before the
+// protocol list has finished loading, when EVERY row looks orphaned.
+
+// The ids that mean "a protocol that still exists". Both spellings deliberately:
+// _stackCycleId returns a stack's frozen id, but rows written before that id was
+// frozen carry the DERIVED name_start form instead, and a live protocol's rows must
+// not be mistaken for debris because of which era they were written in. Widening the
+// live set can only ever spare a row, never delete one — which is the direction an
+// error here has to fall.
+//
+// null, not {}, when there are no stacks: an empty _userStacks is far more likely to
+// mean "not loaded yet" than "the user has no protocols", and the caller refuses to
+// sweep on it. Same reasoning as _tlIsDeadPlan.
+function _livePlanOwnerIds(){
+  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)||[];
+  if(!stacks.length)return null;
+  var out={};
+  stacks.forEach(function(st){
+    if(!st)return;
+    var a=(typeof _stackCycleId==='function')?_stackCycleId(st):(st.id||'');
+    var b=(typeof _deriveStackCycleId==='function')?_deriveStackCycleId(st):'';
+    if(a)out[a]=true;
+    if(b)out[b]=true;
+  });
+  return out;
+}
+// Which stored cycle_ids are debris, and how many rows each holds. Pure, so the
+// tests can drive it with rows copied out of the real record.
+//
+// A row survives if ANY of these is true, and each one is a rule the user stated:
+//   • it is logged — a taken dose stays forever, whatever happened to its protocol;
+//   • it has no cycle_id, or a shared one ('manual', bare 'tcalc') — those belong to
+//     no protocol, so no protocol's deletion can orphan them;
+//   • its owning protocol still exists.
+// Everything else is a schedule generated for a protocol that is gone.
+function _orphanPlanCycleIds(rows,liveIds){
+  var out={};
+  if(!liveIds)return out;
+  (rows||[]).forEach(function(e){
+    if(!e||e.logged)return;
+    var raw=e.cycle_id||'';
+    if(!raw||raw==='manual'||raw==='tcalc')return;
+    var owner=(raw.indexOf('tcalc:')===0)?raw.slice(6):raw;
+    if(liveIds[owner])return;
+    out[raw]=(out[raw]||0)+1;
+  });
+  return out;
+}
+async function cleanupOrphanDoses(){
+  var btn=document.getElementById('s-orphan-btn');
+  var out=document.getElementById('s-orphan-doses');
+  var say=function(t){if(out)out.textContent=t;};
+  var reset=function(){if(btn){btn.textContent='Clean up';btn.disabled=false;}};
+  var live=_livePlanOwnerIds();
+  if(!live){say('protocols not loaded');return;}
+  if(btn){btn.textContent='Scanning…';btn.disabled=true;}
+  // Wide enough to cover the whole record. A window would leave rows outside it
+  // uncounted, and this is the one place that is supposed to see all of them.
+  var y=NOW.getFullYear();
+  var rows=await fetchInjectionsForRange(dateKey(new Date(y-10,0,1)),dateKey(new Date(y+10,0,1)));
+  // Also the shape a failed fetch takes — it returns [] rather than throwing. Saying
+  // "no doses on record" is true either way; claiming a clean sweep would not be.
+  if(!rows.length){say('no doses on record');reset();return;}
+  var dead=_orphanPlanCycleIds(rows,live);
+  var ids=Object.keys(dead);
+  if(!ids.length){say('none');reset();return;}
+  var total=ids.reduce(function(a,k){return a+dead[k];},0);
+  if(!confirmGlobalDelete(total+' untaken dose'+(total===1?'':'s')+' left by '+
+                          ids.length+' deleted protocol'+(ids.length===1?'':'s'))){
+    say(total+' orphaned');reset();return;
+  }
+  if(btn)btn.textContent='Cleaning…';
+  var res=await Promise.all(ids.map(function(cid){return injPurgeCyclePlan(cid,'cleanupOrphanDoses');}));
+  var removed=res.reduce(function(a,n){return a+(typeof n==='number'?n:0);},0);
+  var failed=res.filter(function(n){return n===null;}).length;
+  say(removed+' removed'+(failed?' · '+failed+' failed':''));
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+  if(typeof buildToday==='function')buildToday();
+  if(typeof buildWeekStrip==='function')buildWeekStrip();
+  reset();
+}
 function dateKey(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function _normDt(s){if(!s)return s;var p=s.split('-');return p.length===3?p[0]+'-'+p[1].padStart(2,'0')+'-'+p[2].padStart(2,'0'):s;}
 function _normDoseId(id){var parts=id.split('_');var last=parts[parts.length-1];var p=last.split('-');if(p.length===3&&/^\d{4}$/.test(p[0])){parts[parts.length-1]=p[0]+'-'+p[1].padStart(2,'0')+'-'+p[2].padStart(2,'0');}return parts.join('_');}
@@ -1478,13 +1588,46 @@ async function useStack(idx){
   }
 }
 // ── Delete a stack ───────────────────────────────────────────────────────────
+// Deleting a protocol deletes its PLAN too. It did not until 2026-09-05, and the
+// leftovers were not harmless: Protocol 4 was removed from stacks.json and its 384
+// generated injections stayed in the record, 345 of them dated in the future, owned
+// by a cycle_id that resolved to no protocol. They put Masteron and Test Enanthate
+// on the Timeline as compounds the user had no protocol for, and inflated the
+// denominator of every lane they shared (HGH read 40/192 where the live protocols
+// account for 40/102). The Timeline stopped drawing them in v1.746; this stops them
+// being left behind in the first place.
+//
+// Only the untaken ones. injPurgeCyclePlan cannot be asked to take a logged dose —
+// a dose that was administered is a fact about the user's body, and it outlives the
+// protocol that planned it. Deleting a protocol must never edit that history.
+//
+// Order matters: the stack list is saved FIRST. If the purge fails after that, the
+// protocol is gone and some plan rows survive — debris the cleanup in Settings can
+// still sweep. The other order risks the opposite, which is not recoverable: the
+// plan erased while the protocol it belongs to is still there.
 async function deleteStack(idx){
   if(!confirmGlobalDelete('this protocol'))return;
   if(idx>=0&&idx<_userStacks.length){
+    // Read the id off the stack before it leaves the array — after the splice there
+    // is nothing left to derive it from, and an empty cycle_id is not a narrow
+    // delete, it is no filter at all.
+    var _goneId=_stackCycleId(_userStacks[idx]);
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
     if(_activeStackIndices.length&&_activeStackIndices[0]>=_userStacks.length)_activeStackIndices=[Math.max(0,_userStacks.length-1)];
     await saveStacksToBackend();
+    // Both namespaces this protocol owns: its own rows, and a T-Calc plan assigned
+    // to it ('tcalc:<id>'). Bare 'tcalc' is the unassigned pool and belongs to no
+    // protocol, so it is not this delete's to touch — injPurgeCyclePlan refuses it.
+    if(_goneId&&typeof injPurgeCyclePlan==='function'){
+      await Promise.all([
+        injPurgeCyclePlan(_goneId,'deleteStack'),
+        injPurgeCyclePlan('tcalc:'+_goneId,'deleteStack')
+      ]);
+      // The row set changed underneath both caches that hold injections.
+      if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+      if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+    }
     updateWEEKLY();
     buildWeekStrip();
     buildToday();
@@ -2477,20 +2620,20 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="inj-writer.js?v=1.305"></script>
-<script src="tab-cycles.js?v=1.305"></script>
-<script src="tab-macros.js?v=1.305"></script>
-<script src="tab-stack.js?v=1.305"></script>
-<script src="tab-today.js?v=1.305"></script>
-<script src="tab-schedule.js?v=1.305"></script>
-<script src="tab-timeline.js?v=1.305"></script>
-<script src="tab-body.js?v=1.305"></script>
-<script src="tab-recon.js?v=1.305"></script>
-<script src="tab-blood.js?v=1.305"></script>
-<script src="tab-labs.js?v=1.305"></script>
-<script src="tab-tcalc.js?v=1.305"></script>
-<script src="tab-thist.js?v=1.305"></script>
-<script src="tab-supplements.js?v=1.305"></script>
+<script src="inj-writer.js?v=1.306"></script>
+<script src="tab-cycles.js?v=1.306"></script>
+<script src="tab-macros.js?v=1.306"></script>
+<script src="tab-stack.js?v=1.306"></script>
+<script src="tab-today.js?v=1.306"></script>
+<script src="tab-schedule.js?v=1.306"></script>
+<script src="tab-timeline.js?v=1.306"></script>
+<script src="tab-body.js?v=1.306"></script>
+<script src="tab-recon.js?v=1.306"></script>
+<script src="tab-blood.js?v=1.306"></script>
+<script src="tab-labs.js?v=1.306"></script>
+<script src="tab-tcalc.js?v=1.306"></script>
+<script src="tab-thist.js?v=1.306"></script>
+<script src="tab-supplements.js?v=1.306"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
