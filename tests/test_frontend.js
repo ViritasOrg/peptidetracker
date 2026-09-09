@@ -21,6 +21,9 @@ const patchedScript = rawScript
   .replace('let _googleToken=',      'var _googleToken=')
   .replace('const GOOGLE_CLIENT_ID=', 'var GOOGLE_CLIENT_ID=')
   .replace('const CYCLE_SUGGESTIONS=','var CYCLE_SUGGESTIONS=')
+  // Needed by the all-hidden nav fallback check, which derives the Levels group
+  // from the app rather than hardcoding its members.
+  .replace('const PRIMARY_GROUPS=',    'var PRIMARY_GROUPS=')
   .replace('var WIZ_TITLES=',         'var WIZ_TITLES=')
   .replace('const WIZ_TITLES=',       'var WIZ_TITLES=')
   .replace('let WEEKLY=',             'var WEEKLY=')
@@ -78,7 +81,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -2265,8 +2268,16 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   // artefact of two adjacent series joining, which it is not (the join is seamless;
   // the flat is entirely the unticked doses). Prose under the chart was not enough.
   check('skipped doses are marked on the chart itself',
-    /_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    /var _skVis = _tcSkippedVisible\(\);[\s\S]{0,40}?if \(_skVis\.length\)/.test(_skSrc) &&
     /ctx\.arc\(sx, PAD\.top \+ cH \+ 3/.test(_skSrc));
+  // …and BOTH surfaces read the filtered list. The stems and the prose have to agree;
+  // one filtered and one not is how a "12 never ticked" note ends up under a chart
+  // that draws none of them.
+  check('  …and the note under the chart reads the same filtered list',
+    /var _sk = _tcSkippedVisible\(\)\.filter/.test(_skSrc));
+  check('  …with neither surface reading the raw unfiltered list any more',
+    !/_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    !/var _sk = \(_tcSkippedPast \|\| \[\]\)\.filter/.test(_skSrc));
   check('  …distinct from a real dose tick, not drawn as one',
     /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
 
@@ -2607,6 +2618,801 @@ if (typeof G._tcFetchHistory === 'function') {
   G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
 }
 
+
+// ── GHOST DOSES: A DELETED OR SWITCHED-OFF PROTOCOL'S SCHEDULE ──────────────
+// Reported 2026-09-08 with a screenshot: a dozen amber "never ticked" stems across
+// late August on a run where every planned Nebido dose HAD been ticked in Today.
+// _tcSkippedPast is built from a deliberately active_only=false fetch — the curve
+// needs every logged dose whatever stack it was filed under — but it never inherited
+// the filters the curve applies to the PLAN (_tcActiveCycleIds, _tcIsTcalcOwned).
+// Rows left behind by a deleted or deactivated protocol were therefore reported as
+// missed injections the model was penalised for, while the curve itself had rightly
+// ignored them. The logged-day de-duplication above cannot catch these: it needs a
+// ticked dose on the SAME DAY, and a dead protocol's schedule sits on its own dates.
+if (typeof G._tcSkippedVisible === 'function') {
+  const _ghSave = {sk:G._tcSkippedPast, us:G._userStacks, ai:G._activeStackIndices};
+  const _d = n => G.dateKey(new Date(Date.now() - n*86400000));
+  G._userStacks = [{id:'live', name:'Current'}, {id:'off', name:'Old'}];
+  G._activeStackIndices = [0];
+  G._tcSkippedPast = [
+    {compId:'nebido', doseMg:'100', date:_d(9), cycleId:'live'},   // real miss
+    {compId:'nebido', doseMg:'100', date:_d(7), cycleId:'off'},    // switched off
+    {compId:'nebido', doseMg:'100', date:_d(5), cycleId:'gone'},   // deleted protocol
+    {compId:'nebido', doseMg:'100', date:_d(3), cycleId:'tcalc:live'}, // round-trip copy
+  ];
+  const _ghSeen = G._tcSkippedVisible().map(e => e.cycleId);
+  check('a dose on a switched-off protocol is not reported as missed',
+    _ghSeen.indexOf('off') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …nor one left behind by a deleted protocol',
+    _ghSeen.indexOf('gone') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check("  …nor T-Calc's own round-tripped copy of the plan",
+    _ghSeen.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …while a genuine miss on the ACTIVE protocol is still reported',
+    _ghSeen.length === 1 && _ghSeen[0] === 'live', 'saw ' + JSON.stringify(_ghSeen));
+  // The raw list is untouched — only the reporting is filtered. Anything that needs
+  // every row (the planner's own scoping, the debug dump) still has it.
+  check('  …and the underlying list is not mutated',
+    (G._tcSkippedPast || []).length === 4);
+
+  // ⚠️ THE FALLBACK. _tcActiveCycleIds() returns null until loadStacks has run, and a
+  // history fetch can land first. Hiding every miss behind that race would be a worse
+  // bug than the one being fixed, so an unloaded stack list reports everything.
+  G._userStacks = [];
+  G._activeStackIndices = [];
+  const _ghBoot = G._tcSkippedVisible().map(e => e.cycleId);
+  check('an unloaded stack list reports real misses rather than hiding them',
+    _ghBoot.indexOf('live') >= 0 && _ghBoot.indexOf('off') >= 0,
+    'saw ' + JSON.stringify(_ghBoot));
+  check("  …though T-Calc's round-trip copies are dropped even then",
+    _ghBoot.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghBoot));
+
+  // Nothing is active, stacks ARE loaded: hiding everything is correct here.
+  G._userStacks = [{id:'live', name:'Current'}];
+  G._activeStackIndices = [];
+  check('with stacks loaded and none active, nothing is reported missed',
+    G._tcSkippedVisible().length === 0);
+
+  G._tcSkippedPast = _ghSave.sk; G._userStacks = _ghSave.us;
+  G._activeStackIndices = _ghSave.ai;
+}
+
+
+// ── DOSE FINDER: target free T → mg/week ────────────────────────────────────
+// The tab inverts the model; it must never grow one of its own. Every assertion
+// here is either "it agrees with _tcFreeTSeries" or "it says what it does not know".
+console.log('\n── Dose Finder: target free T → weekly mg ─────────────────');
+if (typeof G._tdSolveWeekly === 'function') {
+  const _tdSave = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack, cat:G._tcExtraCatalog};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cad = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _solve = (o) => G._tdSolveWeekly(Object.assign(
+    {esterId:'enanthate', cadence:_cad('2xwk'), history:[], startDate:'2026-09-09',
+     concMgPerMl:250, stepMl:0.05}, o));
+
+  const _r600 = _solve({targetPmol:600});
+  check('solves a target to a weekly dose', _r600.ok && _r600.mgPerWeek > 0,
+    JSON.stringify(_r600).slice(0,160));
+  // The whole point: the answer must be reachable, not merely returned.
+  check('  …landing within 15% of the target level',
+    Math.abs(_r600.achieved - 600)/600 < 0.15,
+    'achieved ' + Math.round(_r600.achieved));
+  check('  …with mg/week = mg per injection x injections per week',
+    Math.abs(_r600.mgPerWeek - _r600.mgPerInjection*_r600.perWeek) < 1e-9);
+
+  // ⚠️ SCORED BY THE SAME FUNCTION THAT DRAWS THE CURVE.
+  // Re-deriving the achieved level here from _tcSolveSeries directly is what
+  // proves there is no second pharmacology in the tab: if the finder ever grew
+  // its own model, these two numbers would part company.
+  const _dates = G._tcSolveDates(_cad('2xwk'), '2026-09-09', _r600.weeks);
+  const _evts  = _dates.map(d => ({compId:'enanthate', doseMg:String(_r600.mgPerInjection),
+                                   date:G._tcSolveDayKey(d)}));
+  const _ser   = G._tcSolveSeries(_evts);
+  const _last  = _dates[_dates.length-1].getTime();
+  const _indep = G._tcSolveWindowStats(_ser, _last - 7*86400000, _last).mean;
+  check('  …and the reported level is the model\'s own, not a second calculation',
+    Math.abs(_indep - _r600.achieved) < 0.5,
+    'tab ' + Math.round(_r600.achieved) + ' vs model ' + Math.round(_indep));
+
+  // Monotone: a higher target must never ask for less drug.
+  const _r400 = _solve({targetPmol:400}), _r900 = _solve({targetPmol:900});
+  check('a higher target never returns a smaller dose',
+    _r400.mgPerWeek <= _r600.mgPerWeek && _r600.mgPerWeek <= _r900.mgPerWeek,
+    [_r400.mgPerWeek,_r600.mgPerWeek,_r900.mgPerWeek].join(' / '));
+
+  // Steady state is ester-specific: a 56-day depot needs far longer to settle
+  // than a 4.5-day ester, and averaging too early reports a rising curve.
+  const _rNeb = _solve({targetPmol:600, esterId:'nebido', cadence:_cad('1xwk')});
+  check('the settling window is sized off the ester\'s half-life',
+    _rNeb.weeks > _r600.weeks, 'nebido ' + _rNeb.weeks + 'w vs enanthate ' + _r600.weeks + 'w');
+  check('  …and a long depot still solves to a holdable weekly dose',
+    _rNeb.ok && Math.abs(_rNeb.achieved - 600)/600 < 0.15, 'achieved ' + Math.round(_rNeb.achieved));
+
+  // ⚠️ THE WINDOW ENDS AT THE LAST INJECTION.
+  // _tcFreeTSeries appends ~4.3 half-lives of washout. Averaging across it reports
+  // the decay as the plateau — the 309-vs-1090 error. A trough far under the mean
+  // is the signature of that bug, so assert the plateau is a plateau.
+  check('the level is measured on the plateau, never the washout tail',
+    _rNeb.trough > _rNeb.achieved * 0.8,
+    'trough ' + Math.round(_rNeb.trough) + ' vs mean ' + Math.round(_rNeb.achieved));
+
+  // Snapping is to what a syringe can draw, and the reported figures are the
+  // SNAPPED schedule — never the continuous solution behind it.
+  const _step = 250*0.05;
+  check('the dose is snapped to whole syringe steps',
+    Math.abs(_r600.mgPerInjection/_step - Math.round(_r600.mgPerInjection/_step)) < 1e-9,
+    _r600.mgPerInjection + ' mg vs ' + _step + ' mg steps');
+  check('  …and the level reported is the snapped one, not the exact solution',
+    _r600.stepMg === _step);
+
+  // Guards: say what it cannot do rather than returning a confident number.
+  check('an empty target is refused, not solved',  _solve({targetPmol:''}).reason === 'no-target');
+  check('a missing cadence is refused',            _solve({targetPmol:600, cadence:null}).reason === 'no-cadence');
+  const _huge = _solve({targetPmol:900000, esterId:'propionate', cadence:_cad('1xwk')});
+  check('an unreachable target is flagged, not silently capped', _huge.ok && _huge.maxedOut === true);
+
+  // Cheap enough to run on a phone: the fixed-point exists so this stays in the
+  // single digits rather than the ~40 rebuilds a bisection would cost.
+  check('the solve costs only a handful of model rebuilds',
+    _r600.modelCalls > 0 && _r600.modelCalls <= 12, _r600.modelCalls + ' calls');
+
+  G._tcBwEntries = _tdSave.bw; G._tcp = _tdSave.tp; G._tcGhStack = _tdSave.gh;
+  G._tcExtraCatalog = _tdSave.cat;
+}
+
+// ── Dose Finder: the advanced-compound half invents nothing ─────────────────
+{
+  const _fsTd = require('fs'), _pTd = require('path');
+  const _tdSrc = _fsTd.readFileSync(_pTd.join(__dirname, '../tab-tdose.js'), 'utf8');
+  // Doses come from the catalogue, through the SAME renderer the Protocols tab
+  // uses. A second renderer here is how two surfaces start quoting different
+  // milligrams for one compound.
+  check('advanced doses render through the shared enhanced guide',
+    /_renderEnhancedGuide\(cat/.test(_tdSrc));
+  check('  …reading the backend catalogue, not a local dose table',
+    /ENHANCEMENT_COMPOUNDS/.test(_tdSrc) &&
+    !/doseTiers\s*[:=]\s*\[/.test(_tdSrc) && !/var _TD_DOSES/.test(_tdSrc));
+  // 'Base' is the testosterone the solver above answers for. Listing it again
+  // invites reading a catalogue default as the answer to the solved question.
+  check('  …and excludes the testosterone base from the compound lists',
+    !/_TD_INJ_GROUPS\s*=\s*\[[^\]]*'Base'/.test(_tdSrc));
+  check('the tab carries no pharmacology of its own',
+    !/halfLife\s*[:=]\s*\d/.test(_tdSrc) && !/_TD_T_FRACTION/.test(_tdSrc));
+
+  if (typeof G._tdRecommended === 'function') {
+    // The catalogue marks one tier as recommended with `b`. Falling back to the
+    // FIRST tier would present the lowest as the recommendation.
+    const _fake = {id:'x', unit:'mg/week', doseTiers:[
+      {l:'Low', d:'100-200 mg/wk'}, {l:'Standard', d:'300-400 mg/wk', b:true}]};
+    check('the recommended tier is the one the catalogue marks, not the first',
+      G._tdRecommended(_fake).label === 'Standard');
+    check('  …falling back to the catalogue default when no tier is marked',
+      G._tdRecommended({id:'y', defaultDose:50, unit:'mg/day', doseTiers:[]}).dose === '50 mg/day');
+    check('  …and returning nothing rather than guessing when there is neither',
+      G._tdRecommended({id:'z'}) === null);
+  }
+  if (typeof G._tdWeeklyEquivalent === 'function') {
+    // Orals are prescribed per day; a weekly total is arithmetic for comparison,
+    // never a dosing instruction, and the UI says so next to it.
+    check('a daily oral shows a weekly equivalent',
+      G._tdWeeklyEquivalent({unit:'mg/day'}, {dose:'40-60 mg/day'}) === '280–420 mg/week');
+    check('  …and a weekly injectable is not double-converted',
+      G._tdWeeklyEquivalent({unit:'mg/week'}, {dose:'300-400 mg/wk'}) === '');
+    check('  …with the caveat shown beside it, not buried',
+      /arithmetic, not a way to take it/.test(_tdSrc));
+  }
+}
+
+// ── A DELETE MUST REACH EVERY CACHE, T-CALC'S INCLUDED ──────────────────────
+// Reported 2026-09-08: "Clean up still requires app restart to not show the
+// orphan doses in T-calc". The rows were gone from the record; _tcSkippedPast
+// still held them and still drew them as amber "never ticked" stems, because
+// _tcHistory is fetched ONCE PER SESSION — _tcFetchHistory returns early on a
+// warm cache and buildTCalc only calls it while the state is 'idle'.
+console.log('\n── A delete reaches every injection cache, T-Calc included ──');
+{
+  const _fsIv = require('fs'), _pIv = require('path');
+  const _ivSrc = _fsIv.readFileSync(_pIv.join(__dirname, '../index.html'), 'utf8');
+  const _pick = (re) => (_ivSrc.match(re) || [''])[0];
+
+  // ⚠️ FORCED. A plain _tcFetchHistory() returns early on the warm cache this
+  // path is guaranteed to have, so an unforced call is indistinguishable from
+  // no call at all — and that is exactly the bug.
+  const _ivFn = _pick(/async function _injRowsChanged\(tag\)\{[\s\S]*?\n\}/);
+  check('one helper refreshes every cache that holds injection rows', _ivFn.length > 0);
+  check('  …_injectionsCache', /refreshInjectionsCache\(\)/.test(_ivFn));
+  check('  …the Timeline\'s', /_tlInvalidateInjections\(\)/.test(_ivFn));
+  check('  …and T-Calc\'s session-long history, FORCED',
+    /_tcFetchHistory\(true\)/.test(_ivFn));
+  check('  …never an unforced call, which a warm cache would ignore',
+    !/_tcFetchHistory\(\s*\)/.test(_ivFn));
+
+  // Both delete paths route through it. The sweep is what was reported; the
+  // protocol delete purges the same rows the same way and had the same gap.
+  const _cleanFn = _pick(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/);
+  const _delFn   = _pick(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/);
+  check('the orphan sweep invalidates through it', /_injRowsChanged\(/.test(_cleanFn));
+  check('  …and so does deleting a protocol',      /_injRowsChanged\(/.test(_delFn));
+  // Belt and braces: neither may quietly go back to refreshing only the caches
+  // it can see, which is how this regressed the first time.
+  check('  …with neither hand-rolling a partial refresh any more',
+    !/refreshInjectionsCache\(\)/.test(_cleanFn) && !/refreshInjectionsCache\(\)/.test(_delFn));
+
+  // The behaviour itself, driven through the real _tcFetchHistory.
+  if (typeof G._tcFetchHistory === 'function' && typeof G.injPurgeCyclePlan === 'function') {
+    const _sv = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast,
+                 us:G._userStacks, ai:G._activeStackIndices, sc:G._stackCycleId};
+    const _pd = n => G.dateKey(new Date(Date.now() - n*86400000));
+    // An ACTIVE protocol carrying unlogged past rows, so the stems are genuinely
+    // visible and this isolates the CACHE from the display filter.
+    let _rows = [
+      {id:'a1',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(6),logged:false,active:true},
+      {id:'a2',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(4),logged:false,active:true},
+      {id:'k1',cycle_id:'p3',compound_id:'nebido',   tier:'trt',dose:'100', unit:'mg',date:_pd(5),logged:true, active:true}
+    ];
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'DELETE') {
+        const cid = decodeURIComponent(/cycle_id=([^&]+)/.exec(url)[1]);
+        const before = _rows.length;
+        _rows = _rows.filter(e => !(e.cycle_id === cid && !e.logged));
+        return {ok:true, status:200, json: async () => ({removed: before-_rows.length})};
+      }
+      return {ok:true, status:200, json: async () => _rows};
+    };
+    G._userStacks = [{id:'p3', name:'P3'}];
+    G._activeStackIndices = [0];
+    G._stackCycleId = st => st.id;
+
+    await G._tcFetchHistory(true);
+    check('unticked past rows show as stems to begin with',
+      G._tcSkippedVisible().length === 2, String(G._tcSkippedVisible().length));
+
+    await G.injPurgeCyclePlan('p3', 'test');
+    check('  …the purge removes them from the record, keeping the logged dose',
+      _rows.length === 1 && _rows[0].logged === true);
+    check('  …but T-Calc still shows them until it re-reads (the reported bug)',
+      G._tcSkippedVisible().length === 2);
+
+    // The precise reason a plain call is not enough.
+    await G._tcFetchHistory();
+    check('  …and an UNFORCED re-read changes nothing, the cache being warm',
+      G._tcSkippedVisible().length === 2);
+
+    await G._tcFetchHistory(true);
+    check('  …while the forced re-read clears them without a restart',
+      G._tcSkippedVisible().length === 0 && G._tcSkippedPast.length === 0);
+    check('  …and the logged dose is still in the history afterwards',
+      (G._tcHistory||[]).length === 1 && G._tcHistory[0].compId === 'nebido');
+
+    G.fetch = _sv.f; G._tcHistory = _sv.h; G._tcHistoryState = _sv.hs;
+    G._tcSkippedPast = _sv.sk; G._userStacks = _sv.us;
+    G._activeStackIndices = _sv.ai; G._stackCycleId = _sv.sc;
+  }
+}
+
+// ── Dose Finder: ancillaries, and what the target field starts at ───────────
+{
+  const _fsAn = require('fs'), _pAn = require('path');
+  const _anSrc = _fsAn.readFileSync(_pAn.join(__dirname, '../tab-tdose.js'), 'utf8');
+
+  if (typeof G._tdCompounds === 'function') {
+    // The sandbox never fetches, so ENHANCEMENT_COMPOUNDS is the app's empty
+    // default. Seed it with the catalogue's real group/id shape — asserting
+    // against [] would pass on nothing at all.
+    const _svCat = G.ENHANCEMENT_COMPOUNDS;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'anastrozole', group:'Estrogen Control'},   {id:'exemestane',  group:'Estrogen Control'},
+      {id:'tamoxifen',   group:'PCT & Recovery'},     {id:'hcg',         group:'PCT & Recovery'},
+      {id:'cabergoline', group:'Side-Effect Support'},{id:'finasteride', group:'Side-Effect Support'},
+      {id:'hgh',         group:'GH Axis'},            {id:'mast_e',      group:'DHT-Derived'},
+      {id:'anavar',      group:'Oral'},               {id:'test_e',      group:'Base'}
+    ];
+    const _anc = G._tdCompounds(G._TD_ANC_GROUPS).map(c => c.id);
+    check('ancillaries cover estrogen control, PCT and side-effect support',
+      ['anastrozole','tamoxifen','hcg','cabergoline','finasteride'].every(id => _anc.indexOf(id) >= 0),
+      _anc.join(','));
+    // hGH is a growth compound, not support — filing it here would misread it.
+    check('  …and hGH is not filed as an ancillary', _anc.indexOf('hgh') < 0);
+    // Ancillaries are titrated against a draw, not run to a template. Saying so
+    // beside them is the difference between a reference and a prescription.
+    check('  …shown as bloodwork-titrated, not a standing prescription',
+      /dosed to BLOODWORK/.test(_anSrc) && /never a standing prescription/.test(_anSrc));
+    // The base ester stays out of all three lists — it is the solved question.
+    check('  …and the testosterone base is in none of the three lists',
+      [G._TD_INJ_GROUPS, G._TD_ORAL_GROUPS, G._TD_ANC_GROUPS]
+        .every(g => G._tdCompounds(g).every(c => c.id !== 'test_e')));
+    G.ENHANCEMENT_COMPOUNDS = _svCat;
+  }
+
+  if (typeof G._tdDefaultTarget === 'function') {
+    const _sv = {cl:G._tcCurveLog, bw:G._tcBwEntries, st:G._tdState};
+    // ⚠️ THE SEED IS DESCRIPTIVE, NEVER A RECOMMENDATION.
+    // Seeding from a reference range was considered and rejected: a number
+    // pre-typed into the box becomes a goal, and choosing the level is the
+    // user's half of this tool. It may only ever reflect where they already are.
+    // The active-protocol level is asserted in its own block below; here the
+    // concern is only the FALLBACK order once there is no protocol to read.
+    G._tcCurveLog = () => [];
+    G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+    check('  …falling back to the last MEASURED free T',
+      G._tdDefaultTarget().value === 217);
+    G._tcBwEntries = [];
+    check('  …and to blank rather than an invented figure',
+      G._tdDefaultTarget().value === '');
+    check('  …never from a reference range or ceiling',
+      !/_tdDefaultTarget[\s\S]{0,700}_FT_REF/.test(_anSrc) &&
+      !/_tdDefaultTarget[\s\S]{0,700}ceiling/.test(_anSrc));
+    // Every seeded value names its source on screen, so it cannot read as advice.
+    check('  …and the source is named beside the field',
+      /not a level the app\s*\+?\s*'?\s*recommends|not a level the app /.test(_anSrc));
+    G._tcCurveLog = _sv.cl; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
+  }
+  // A target the user typed is theirs.
+  check('a user-set target is never overwritten by the seed',
+    /if\(s\.targetPmol===''\|\|s\.targetPmol==null\)/.test(_anSrc));
+}
+
+// ── The workflow rule: stage, then ping. Never prod. ────────────────────────
+// Henrik, 2026-09-08: "you must move code to Stage, and once ready for test
+// ping me, but never ever push to prod!!" The earlier "explicit go-ahead in
+// that specific moment" clause was the crack any plausible argument could
+// widen, so it is gone and this asserts it stays gone.
+{
+  const _md = require('fs').readFileSync(require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
+  check('CLAUDE.md states the stage-then-ping workflow up front',
+    /STAGE, THEN PING\. NEVER PROD/.test(_md) && _md.indexOf('STAGE, THEN PING') < 2000);
+  check('  …says landing on stage means MERGED, not just pushed',
+    /has not been delivered|unmerged branch has not been delivered/.test(_md));
+  check('  …and that questions go in a numbered list at the end',
+    /numbered[\s\S]{0,4}list of questions/.test(_md));
+  check('the prod prohibition carries no go-ahead exception any more',
+    /no "explicit go-ahead" exception any more/.test(_md) &&
+    !/without Henrik's explicit go-ahead in that specific moment/.test(_md));
+}
+
+// ── A live protocol's OTHER spelling ────────────────────────────────────────
+// _orphanPlanCycleIds finds rows whose protocol is gone. This finds the rows a
+// protocol that STILL EXISTS left under an id it no longer writes to —
+// 84 of them under protocol_4_2026-09-25 in prod on 2026-09-08, which nothing
+// could ever remove: _livePlanOwnerIds spares both spellings by design.
+console.log('\n── Clean up: a live protocol\'s stale id spelling ─────────');
+if (typeof G._staleSpellingCycleIds === 'function') {
+  const _mkRow = (cyc, logged) => ({cycle_id:cyc, logged:logged, date:'2026-09-01'});
+  // Frozen id holds the live plan; the derived name_start form is the leftover.
+  const _st = {id:'protocol_4_nostart', name:'Protocol 4', cycle_start:'2026-09-25'};
+  const _rows = [
+    _mkRow('protocol_4_nostart', false), _mkRow('protocol_4_nostart', true),
+    _mkRow('protocol_4_2026-09-25', false), _mkRow('protocol_4_2026-09-25', false)
+  ];
+  const _found = G._staleSpellingCycleIds(_rows, [_st]);
+  check('the stale spelling of a live protocol is found',
+    _found['protocol_4_2026-09-25'] === 2, JSON.stringify(_found));
+  check('  …and the spelling it actually writes under is left alone',
+    !_found['protocol_4_nostart']);
+
+  // ⚠️ THE PROOF OBLIGATION IS ON THE DELETE.
+  // Without rows under the frozen id there is no evidence which spelling is
+  // live, and the derived one might BE it — deleting then destroys a real plan.
+  check('no evidence the protocol writes under the frozen id → nothing is swept',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('protocol_4_2026-09-25', false)], [_st])).length === 0);
+  check('  …a protocol with only one spelling is never swept',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('p3', false), _mkRow('p3_nostart', false)],
+      [{id:'p3_nostart', name:'p3'}])).length === 0);
+  // An unloaded stack list means "not loaded", never "nothing is live".
+  check('  …and an unloaded protocol list sweeps nothing at all',
+    Object.keys(G._staleSpellingCycleIds(_rows, [])).length === 0);
+
+  // A taken dose outlives every id it was ever filed under.
+  const _lg = G._staleSpellingCycleIds(
+    [_mkRow('protocol_4_nostart', true), _mkRow('protocol_4_2026-09-25', true)], [_st]);
+  check('a LOGGED row under the stale spelling is never counted',
+    Object.keys(_lg).length === 0);
+  // Shared namespaces belong to no protocol.
+  check('  …nor are the shared namespaces claimed by a protocol\'s spelling',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('protocol_4_nostart', false), _mkRow('manual', false), _mkRow('tcalc', false)],
+      [_st])).length === 0);
+
+  const _swpSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../index.html'), 'utf8');
+  const _sweepFn = (_swpSrc.match(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('the sweep purges both kinds, under one confirm',
+    /_staleSpellingCycleIds\(/.test(_sweepFn) && /ids=ids\.concat\(staleIds\)/.test(_sweepFn));
+  check('  …and names them as different claims in the prompt',
+    /still exists/.test(_sweepFn) && /deleted protocol/.test(_sweepFn));
+  check('  …still asking before deleting anything',
+    _sweepFn.indexOf('confirmGlobalDelete') < _sweepFn.indexOf('injPurgeCyclePlan'));
+}
+
+// ── The target seed comes from BLOODWORK, and from nothing else ─────────────
+// It used to seed from the level the active protocol holds, read through
+// _tcCurveLog — the coupling this tab is not allowed to have. A measured draw is
+// the one value here that is neither a model output nor a recommendation.
+if (typeof G._tdDefaultTarget === 'function') {
+  const _sd = {bw:G._tcBwEntries, st:G._tdState};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  check('the target seeds from the last measured free T',
+    G._tdDefaultTarget().value === 217);
+  check('  …naming the draw it came from, so it cannot read as advice',
+    /last measured free T/.test(G._tdDefaultTarget().source));
+  G._tcBwEntries = [];
+  check('  …and blank rather than an invented figure when there is no draw',
+    G._tdDefaultTarget().value === '');
+  G._tcBwEntries = _sd.bw; G._tdState = _sd.st;
+}
+
+// ── THE DOSE FINDER IS ISOLATED FROM THE T-CALC CURVE ───────────────────────
+// Henrik, 2026-09-08: "This tab should work in isolation from the t-calc curve.
+// This is not to be using past injections or anything. It should only take
+// available research resources and any existing blood work as input."
+//
+// The bug that made the rule necessary: ~362 mg/week of Nebido was logged, the
+// history was fed in to calibrate, and its 56-day depot was still releasing at
+// the measurement window. That residue was scored as if the candidate schedule
+// had produced it, so "what holds 1457 pmol/L on enanthate" came back as
+// 100 mg/week when the honest answer was 200.
+console.log('\n── Dose Finder: isolated from the curve, driven by bloodwork ─');
+if (typeof G._tdSolveWeekly === 'function') {
+  const _sv = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack, sb:G._tcShbgBaseline};
+  const _setBw = (ft, shbg, tt) => {
+    G._tcBwEntries = [{date:'2026-06-26', free_t:ft, shbg:shbg, total_t:tt}];
+    G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:String(ft), shbg:String(shbg),
+                                            totalT:String(tt), birthYear:'1980'});
+  };
+  G._tcGhStack = [];
+  const _cadI = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _run = o => G._tdSolveWeekly(Object.assign({targetPmol:1457, esterId:'enanthate',
+    cadence:_cadI('2xwk'), startDate:'2026-09-09', concMgPerMl:250, stepMl:0.05}, o));
+
+  _setBw(217, 45, 17);
+  const _base = _run({});
+  check('it solves a target to a weekly dose from bloodwork alone',
+    _base.ok && _base.mgPerWeek > 0, JSON.stringify(_base).slice(0,140));
+
+  // ⚠️ THE CONTRACT. A history handed in must change NOTHING. This is the
+  // assertion that would have caught the 2026-09-08 report on the day.
+  const _neb = [];
+  for (let i = 74; i >= 0; i -= 2)
+    _neb.push({compId:'nebido', doseMg:'100',
+      date:G._tcSolveDayKey(new Date(Date.parse('2026-09-08') - i*86400000))});
+  check('  …and a logged injection history changes the answer not at all',
+    _run({history:_neb}).mgPerWeek === _base.mgPerWeek,
+    _run({history:_neb}).mgPerWeek + ' vs ' + _base.mgPerWeek);
+
+  // Source-level: the coupling must be gone, not merely unused by one caller.
+  const _tdI = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  const _tdCodeI = _tdI.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …with no reference to the curve\'s data anywhere in the tab',
+    !/_tcLoggedHistory|_tcCurveLog|_tcSsPeakPmol|_injectionsCache/.test(_tdCodeI));
+  // Isolated from the DATA, not from the pharmacology — a second free-T model
+  // here would let two surfaces disagree about the same drug.
+  check('  …while still scoring through the shared free-T model',
+    /_tcSolveSeries\(/.test(_tdCodeI) && /_tcCompInfo\(/.test(_tdCodeI));
+
+  // BLOODWORK IS AN INPUT, so it must actually move the answer, in the right
+  // direction: a higher measured free T means less drug is needed to hold a
+  // target, a higher SHBG means more.
+  _setBw(400, 45, 30); const _hi = _run({});
+  _setBw(120, 70, 12); const _lo = _run({});
+  _setBw(217, 45, 17);
+  check('bloodwork drives the result, and in the right direction',
+    _hi.mgPerWeek < _base.mgPerWeek && _lo.mgPerWeek > _base.mgPerWeek,
+    [_hi.mgPerWeek, _base.mgPerWeek, _lo.mgPerWeek].join(' / '));
+
+  // The settling window is now the chosen ester's own, and nothing else's.
+  const _prop = _run({esterId:'propionate'}), _neb2 = _run({esterId:'nebido', cadence:_cadI('1xwk')});
+  // Five half-lives, floored at 12 weeks: propionate (0.8 d) hits the floor,
+  // a 56-day depot needs 40. The exact figure tracks the catalogue's half-life,
+  // so assert the relationship rather than a number that moves with the data.
+  check('the window is the chosen ester\'s settling time alone',
+    _prop.weeks === 12 && _neb2.weeks >= 40 && _neb2.weeks > _prop.weeks,
+    'propionate ' + _prop.weeks + 'w, nebido ' + _neb2.weeks + 'w');
+  check('  …and the card explains a long one as the ester\'s own, not leftovers',
+    /is slow to /.test(_tdI) && /Nothing you have already injected/.test(_tdI));
+
+  // ⚠️ REFUSE ON UNLOADED INPUTS RATHER THAN ANSWER FROM NOTHING.
+  // With neither bloodwork nor the population tables the conversion has nothing
+  // behind it and the solve still returns a number — 4025 mg/week on a blank
+  // profile, which is not a dose, it is an artefact wearing one.
+  G._tcBwEntries = [];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'', shbg:'', totalT:'', birthYear:'1980'});
+  const _sbSave = G._tcShbgBaseline;
+  G._tcShbgBaseline = null;
+  check('with neither bloodwork nor population tables it refuses to answer',
+    _run({}).reason === 'no-basis');
+  G._tcShbgBaseline = {unit:'nmol/L', bands:[{max_age:200, value:38}]};
+  check('  …but the population tables alone are a valid basis',
+    _run({}).ok === true);
+  G._tcShbgBaseline = _sbSave;
+
+  G._tcBwEntries = _sv.bw; G._tcp = _sv.tp; G._tcGhStack = _sv.gh;
+  G._tcShbgBaseline = _sv.sb;
+}
+
+// ── The dose is reported as a RANGE, and the model states its own bias ──────
+// The model is metabolic-clearance arithmetic and lands within a few percent of
+// doing that sum directly from the MCR the backend cites. It STILL reads ~1.5x
+// above Bhasin 2001, the only measured dose-response data, compared like for
+// like (its trough against that study's nadir samples). Both facts are true, and
+// one bold figure on screen tells only the first — so the solved number is the
+// floor of a range, not the middle of one.
+//
+// ⚠️ An earlier reading called this 2x and was WRONG: it compared the model's
+// weekly MEAN against Bhasin's NADIR, which are different quantities. A third of
+// the apparent error was that mistake.
+console.log('\n── Dose Finder: the number carries its own uncertainty ──────');
+if (typeof G._tdModelBias === 'function') {
+  const _svB = {bw:G._tcBwEntries, tp:G._tcp, c:G._tdBiasCache, dr:G._tcDoseResponse};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45',
+                                          totalT:'17', birthYear:'1980'});
+  // SERVED, NOT HARDCODED. The published anchors live in the backend
+  // (/systemic-interactions testosteroneDoseResponse) so two apps cannot quote
+  // different figures for one study. This is the backend's shape.
+  G._tcDoseResponse = {
+    measure:'mean nadir serum total testosterone', unit:'ng/dL',
+    source:"Bhasin S et al., Am J Physiol Endocrinol Metab 2001;281(6):E1172-81",
+    points:[{mg_per_week:25, value:253}, {mg_per_week:50, value:306},
+            {mg_per_week:125, value:542}, {mg_per_week:300, value:1345},
+            {mg_per_week:600, value:2370}]
+  };
+  G._tdBiasCache = null;
+  const _b = G._tdModelBias();
+  check('the model measures its own bias against published data', !!_b && _b.n === 5,
+    JSON.stringify(_b));
+  // If this ever drifts far from ~1.5 the pharmacology has changed underneath —
+  // which is exactly what the check is for. Wide bounds, so it flags a real
+  // shift rather than nagging about noise.
+  check('  …and reads high against it, by roughly half again',
+    _b.mean > 1.2 && _b.mean < 1.9, 'mean ' + _b.mean.toFixed(2) + 'x');
+  check('  …with the spread across dose levels reported, not averaged away',
+    _b.lo < _b.mean && _b.hi > _b.mean);
+
+  // ⚠️ MEASURED AGAINST THE LIVE MODEL, NOT HARDCODED. If the pharmacology is
+  // corrected the stated uncertainty must narrow by itself rather than quietly
+  // becoming a lie. Only the published data — a fixed historical fact — is fixed.
+  const _tdB = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  const _tdBc = _tdB.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …computed from the live model rather than written down',
+    /_tcSolveSeries\(/.test((_tdBc.match(/function _tdModelBias\(\)[\s\S]*?\n\}/)||[''])[0]) &&
+    !/bias\s*[:=]\s*1\.5/.test(_tdBc));
+  // Trough vs nadir is the whole correctness of the comparison.
+  check('  …comparing trough against nadir, not mean against nadir',
+    /st\.trough/.test((_tdBc.match(/function _tdModelBias\(\)[\s\S]*?\n\}/)||[''])[0]));
+  check('  …against a cited, dated source',
+    /Bhasin 2001/.test(_tdB) && /281:E1172/.test(_tdB));
+  // Reference data belongs in the backend; this copy must carry that debt
+  // visibly rather than settling in as a frontend constant.
+  check('  …naming the study it checked against, from the served payload',
+    /Bhasin/.test(_b.source) && /nadir/.test(_b.measure));
+  // No local copy of the published data — a table in each frontend is how two
+  // apps start quoting different numbers for the same study.
+  check('  …with no local copy of that data in the tab',
+    /_tcDoseResponse/.test(_tdB) && !/mg_per_week:\s*25\b/.test(_tdB) &&
+    !/_TD_LIT_ANCHOR/.test(_tdB));
+  // With nothing served it must say nothing, not something stale — a fallback
+  // table would defeat the point of removing it.
+  const _svDr2 = G._tcDoseResponse;
+  G._tcDoseResponse = null; G._tdBiasCache = null;
+  check('  …and states no uncertainty at all rather than a stale one',
+    G._tdModelBias() === null);
+  G._tcDoseResponse = _svDr2; G._tdBiasCache = null;
+
+  check('the solved dose is presented as a floor, not a point estimate',
+    /treat that as the floor/.test(_tdB) && /How far to trust this/.test(_tdB));
+  check('  …and free T is declared calculated rather than measured',
+    /calculated, not measured/.test(_tdB));
+
+  G._tcBwEntries = _svB.bw; G._tcp = _svB.tp; G._tdBiasCache = _svB.c;
+  G._tcDoseResponse = _svB.dr;
+}
+
+// ── One number, one source — the standing rule ──────────────────────────────
+{
+  const _mdR = require('fs').readFileSync(
+    require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
+  check('CLAUDE.md forbids two surfaces disagreeing about the same quantity',
+    /ONE NUMBER, ONE SOURCE/.test(_mdR) && _mdR.indexOf('ONE NUMBER, ONE SOURCE') < 4000);
+  check('  …naming one model and one renderer as the mechanism',
+    /_tcFreeTSeries/.test(_mdR) && /_renderEnhancedGuide/.test(_mdR));
+  check('  …and requiring the fix at the source, not the display',
+    /never at the display/.test(_mdR));
+}
+
+// ── EVERY RECOMMENDATION IS CHECKED AGAINST THE SOLVED TEST DOSE ────────────
+// Reported 2026-09-08: the solver returned 200 mg/week of testosterone and the
+// panel below recommended Masteron at "1:1 TEST:MAST — 400-500 mg/wk". One
+// screen, two numbers, contradicting each other: 1:1 with a 200 mg base is 200
+// mg. The catalogue's absolute ranges are written against an assumed ~450
+// mg/week base and nothing reconciled them with the base actually solved for.
+// That is ONE NUMBER, ONE SOURCE failing in the most visible way there is.
+console.log('\n── Dose Finder: recommendations checked against the base ────');
+if (typeof G._tdValidateAgainstBase === 'function') {
+  const _mast = {id:'mast_e', group:'DHT-Derived', unit:'mg/week'};
+  // The ratio is BACKEND DATA, not prose. `ratio` and `assumes_test_mg_wk` are
+  // served; parsing the label is a fallback for an older backend only, because a
+  // parse cannot recover the assumed base — the half that makes the conflict
+  // message accurate.
+  const _t11  = {label:'1:1 Test:Mast', dose:'400\u2013500 mg/wk',
+                 ratio:{test:1, comp:1}, assumesTest:[400, 500]};
+  const _t21  = {label:'2:1 Test:Mast', dose:'300\u2013400 mg/wk',
+                 ratio:{test:2, comp:1}, assumesTest:[600, 800]};
+
+  const _v200 = G._tdValidateAgainstBase(_mast, _t11, 200);
+  check('a ratio tier is resolved against the solved base',
+    _v200 && _v200.ratio && Math.round(_v200.impliedNative) === 200,
+    JSON.stringify(_v200 && _v200.impliedNative));
+  check('  …and the catalogue disagreeing with its own label is a conflict',
+    _v200.conflict === true);
+
+  // ⚠️ THE SELF-CHECK. At the base the catalogue was written for, its own 1:1
+  // tier must resolve cleanly — otherwise the rule is flagging noise rather than
+  // a real contradiction, and every card would shout.
+  const _v450 = G._tdValidateAgainstBase(_mast, _t11, 450);
+  check('  …while at the base the catalogue assumes, there is no conflict',
+    _v450.conflict === false && Math.round(_v450.impliedNative) === 450);
+  // The 2:1 tier is inconsistent in the catalogue itself: 2:1 of 450 is 225, not
+  // 300-400. Worth surfacing rather than smoothing over.
+  check('  …and a tier inconsistent at ANY base still reports as one',
+    G._tdValidateAgainstBase(_mast, _t21, 450).conflict === true);
+
+  // ⚠️ EXCLUDED BY GROUP, NOT BY UNIT. Anastrozole and finasteride are dosed in
+  // mg like every steroid here, so a unit test lets them through and prints
+  // "0.5 mg/wk = 0.003x your base" — noise dressed as rigour.
+  check('ancillaries are never compared to a testosterone base',
+    G._tdValidateAgainstBase({id:'anastrozole', group:'Estrogen Control', unit:'mg/week'},
+      {label:'Standard', dose:'0.5 mg/wk'}, 200) === null &&
+    G._tdValidateAgainstBase({id:'finasteride', group:'Side-Effect Support', unit:'mg/day'},
+      {label:'Standard', dose:'1 mg/day'}, 200) === null);
+  check('  …nor is anything without a solved base to compare against',
+    G._tdValidateAgainstBase(_mast, _t11, 0) === null);
+
+  // No ratio stated means nothing to derive — but the MULTIPLE of the base is
+  // arithmetic on two known figures, and a 19-nor at twice the base is a
+  // different protocol from the same milligrams beside a heavier one.
+  const _deca = G._tdValidateAgainstBase({id:'deca', group:'19-Nor', unit:'mg/week'},
+    {label:'Anabolic', dose:'300\u2013400 mg/wk'}, 200);
+  check('a tier with no ratio reports its multiple of the base instead',
+    !_deca.ratio && Math.abs(_deca.multipleLo - 1.5) < 0.01 &&
+    Math.abs(_deca.multipleHi - 2.0) < 0.01);
+  // Orals are per-day; the comparison has to be weekly on both sides.
+  const _var = G._tdValidateAgainstBase({id:'anavar', group:'Oral', unit:'mg/day'},
+    {label:'Standard', dose:'40\u201360 mg/day'}, 200);
+  check('  …with a per-day oral converted to weekly before comparing',
+    Math.abs(_var.multipleLo - (40*7/200)) < 0.01);
+
+  // The tab must not do this arithmetic itself — the catalogue owns doses.
+  const _tdV = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  check('the check derives from stated numbers and invents no dose',
+    /THIS INVENTS NO DOSES/.test(_tdV) && /_tdTierRatio\(/.test(_tdV));
+  check('  …taking the ratio from backend data, the label parse only a fallback',
+    /tier\.ratio && tier\.ratio\.test>0/.test(_tdV) && /FALLBACK ONLY/.test(_tdV));
+  check('  …and reading the assumed base rather than reverse-engineering it',
+    G._tdValidateAgainstBase(_mast, _t21, 200).ratio.assumesLo === 600);
+  // ⚠️ BOTH NUMBERS, NOT ONE PICKED. On a conflict the card shows what the
+  // ratio implies at the user's base AND what the catalogue states, plus the
+  // base the catalogue assumed. Choosing between them would be inventing a dose.
+  check('  …and both numbers are shown on a conflict, not one picked',
+    /is <strong>'\+Math\.round\(val\.impliedNative\)/.test(_tdV) &&
+    /_esc\(String\(rec\.dose\|\|''\)\)\+' assumes a '/.test(_tdV) &&
+    /mg\/week testosterone base/.test(_tdV));
+}
+
+// ── DAILY IS SUPPORTED FOR EVERY ESTER ──────────────────────────────────────
+// Henrik, 2026-09-09: "Daily injections must be supported for all esters." The
+// cadence list offered only every-2-days and longer, which for a fast ester
+// cannot answer the question at all: propionate ripples ~90% at every-2-days on
+// this model and ~0% daily.
+console.log('\n── Dose Finder: daily cadence, every ester ──────────────────');
+if (typeof G._tdSolveWeekly === 'function' && Array.isArray(G._TC_CADENCES)) {
+  const _svD = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45',
+                                          totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cD = k => G._TC_CADENCES.find(c => c.key === k);
+
+  check('a daily cadence is offered at all', !!_cD('daily'));
+  check('  …at seven injections a week', _cD('daily').perWeek === 7);
+  // ONE LIST, BOTH SURFACES. A second copy for the Dose Finder is how two
+  // screens start offering different schedules for the same drug.
+  const _tdD = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  const _tdDc = _tdD.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …from the shared list, not a copy in the tab',
+    /_TC_CADENCES/.test(_tdDc) && !/key:\s*'daily'/.test(_tdDc));
+
+  // EVERY ester, not just the convenient ones — that is the whole instruction.
+  const _esters = ['propionate','phenylpropionate','enanthate','testoviron',
+                   'cypionate','sustanon','nebido','topical'];
+  const _run = (e, k) => G._tdSolveWeekly({targetPmol:1000, esterId:e, cadence:_cD(k),
+    startDate:'2026-09-10', concMgPerMl:250, stepMl:0.05});
+  const _failed = _esters.filter(e => { const r = _run(e,'daily'); return !r.ok || !(r.mgPerWeek>0); });
+  check('daily solves for every ester in the catalogue', _failed.length === 0,
+    'failed: ' + _failed.join(','));
+
+  // ⚠️ THE REASON DAILY MATTERS. Ripple is interval / half-life, so for a short
+  // ester the cadence is the whole answer and every-2-days cannot hold a level.
+  const _rip = r => (r.peak - r.trough) / r.achieved;
+  const _pDaily = _run('propionate','daily'), _pE2d = _run('propionate','e2d');
+  check('  …and on a short ester it is dramatically steadier than every-2-days',
+    _rip(_pDaily) < 0.10 && _rip(_pE2d) > 0.50,
+    'daily ' + Math.round(_rip(_pDaily)*100) + '% vs e2d ' + Math.round(_rip(_pE2d)*100) + '%');
+  // A long depot is flat at any interval, so daily buys nothing there — which is
+  // exactly why the transition solver must not RECOMMEND it. Supported, not urged.
+  check('  …while on a 56-day depot it is no steadier, so it wins nothing',
+    Math.abs(_rip(_run('nebido','daily')) - _rip(_run('nebido','e2d'))) < 0.05);
+
+  // ⚠️ AT A SHORT INTERVAL THE SYRINGE SETS THE ERROR, NOT THE MODEL.
+  // A step is a fixed mg, so the finer the cadence the bigger a fraction of each
+  // injection it is: 12.5 mg is 7% of a weekly 175 mg shot and 50% of a daily 25
+  // mg one. The card has to say the vial is the lever, or the number just looks
+  // wrong.
+  check('the card warns when the vial, not the schedule, sets the error',
+    /That step is/.test(_tdD) && /The vial is the limit here/.test(_tdD));
+  check('  …only when the miss is real AND the step is a big share of the dose',
+    /_miss > 0\.10 && r\.stepMg > r\.mgPerInjection\*0\.2/.test(_tdD));
+  // And the advice must actually work: a thinner vial has to close the gap.
+  const _coarse = G._tdSolveWeekly({targetPmol:1000, esterId:'enanthate', cadence:_cD('daily'),
+    startDate:'2026-09-10', concMgPerMl:250, stepMl:0.05});
+  const _fine = G._tdSolveWeekly({targetPmol:1000, esterId:'enanthate', cadence:_cD('daily'),
+    startDate:'2026-09-10', concMgPerMl:50, stepMl:0.05});
+  check('  …and the thinner vial it suggests genuinely lands closer',
+    Math.abs(_fine.achieved-1000) < Math.abs(_coarse.achieved-1000),
+    Math.round(_fine.achieved) + ' vs ' + Math.round(_coarse.achieved));
+
+  G._tcBwEntries = _svD.bw; G._tcp = _svD.tp; G._tcGhStack = _svD.gh;
+}
+
+// ── A LONG PROTOCOL NAME MUST NOT RESIZE THE PROTOCOL GRID ──────────────────
+// Reported 2026-09-09 with a screenshot: "Protocol 4 TRT-HGH-Mast-Reta/GLOW"
+// took most of its row and squeezed the card beside it to a sliver.
+//
+// The subtle part: .stack-card-name has had ellipsis truncation all along, and
+// it never fired. A `1fr` track's minimum is `auto`, which resolves to
+// min-content, so the COLUMN grew to fit the name rather than the name being
+// clipped to the column. Truncation is unreachable while the container will
+// simply widen for it.
+console.log('\n── Protocol cards: a long name cannot break the grid ────────');
+{
+  const _fsG = require('fs'), _pG = require('path');
+  const _idxG = _fsG.readFileSync(_pG.join(__dirname, '../index.html'), 'utf8');
+  const _cssG = _fsG.readFileSync(_pG.join(__dirname, '../css/main.css'), 'utf8');
+  const _buildG = (_idxG.match(/function buildStackStore\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('the protocol grid exists to assert against', _buildG.length > 0);
+
+  // BOTH are needed and NEITHER is sufficient: the track can only shrink if the
+  // item inside it can too, and the item can only shrink if the track lets it.
+  check('the grid tracks can shrink below their content',
+    /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(_buildG));
+  check('  …and the card itself can shrink with them',
+    /\.stack-card\{[^}]*min-width:0;?\}/.test(_cssG));
+  // The truncation that was already there and could not fire.
+  check('  …so the name truncates instead of widening the column',
+    /\.stack-card-name\{[^}]*text-overflow:ellipsis[^}]*\}/.test(_cssG) &&
+    /\.stack-card-name\{[^}]*white-space:nowrap[^}]*\}/.test(_cssG) &&
+    /\.stack-card-name\{[^}]*overflow:hidden[^}]*\}/.test(_cssG));
+  // A plain 1fr anywhere in this grid reintroduces the bug.
+  check('  …with no bare 1fr track left in the protocol grid',
+    !/grid-template-columns:1fr 1fr/.test(_buildG));
+
+  // ⚠️ THE NAME IS CLIPPED FOR DISPLAY, NOT TRUNCATED IN DATA.
+  // Cutting the string in JS would put a shortened name in the DOM and lose the
+  // rest; CSS clipping keeps the whole name there, adapts to any width, and the
+  // full text is one tap away in the detail view.
+  check('the full name is still rendered, only visually clipped',
+    /_esc\(st\.name\|\|'Protocol '\+\(i\+1\)\)/.test(_buildG) &&
+    !/\.slice\(0,\s*\d+\)/.test(_buildG) && !/substring\(/.test(_buildG));
+  // And it is escaped — a protocol name is user input rendered into innerHTML.
+  check('  …and escaped, being user input going into innerHTML',
+    /_esc\(st\.name/.test(_buildG));
+}
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
@@ -12466,10 +13272,16 @@ if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') 
   // Regression: legacy per-tab settings that hid EVERY sub-tab in a group must not
   // leave the primary empty/unreachable — it falls back to the whole group.
   var _svVis = G._tabVis;
-  G._tabVis = { blood:false, tcalc:false, thist:false }; _cap = null; G._lastSub = {};
+  // Derived from PRIMARY_GROUPS, not hardcoded: this asserts the ALL-hidden
+  // fallback, and a hardcoded list stops testing it the moment a sub-tab is added
+  // (the new one stays visible, so nothing falls back and the check passes for the
+  // wrong reason). Adding 'tdose' to Levels is what exposed that.
+  var _lvGroup = G.PRIMARY_GROUPS.levels;
+  var _allHidden = {}; _lvGroup.forEach(function(t){ _allHidden[t] = false; });
+  G._tabVis = _allHidden; _cap = null; G._lastSub = {};
   G.switchPrimary('levels'); check('switchPrimary: all sub-tabs hidden → still opens the group (fallback)', _cap === 'blood');
   if (typeof G._groupVisibleSubs === 'function') {
-    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 3);
+    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === _lvGroup.length);
   }
   G._tabVis = _svVis;
   G.switchTab = _origSwitch;
@@ -14781,22 +15593,54 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   const _delSrc = (_idxSrc3.match(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/) || [''])[0];
 
   check('deleteStack purges the protocol\'s stored plan',
-    /injPurgeCyclePlan\(_goneId/.test(_delSrc));
-  // A T-Calc plan assigned to this protocol is its rows too ('tcalc:<id>'), and is
-  // orphaned by exactly the same delete.
-  check('  …including a T-Calc plan assigned to it',
-    /injPurgeCyclePlan\('tcalc:'\+_goneId/.test(_delSrc));
-  // After the splice there is nothing left to derive the id from, and an empty
+    /injPurgeCyclePlan\(cid/.test(_delSrc) && /_stackOwnedCycleIds\(_userStacks\[idx\]\)/.test(_delSrc));
+  // After the splice there is nothing left to derive the ids from, and an empty
   // cycle_id is not a narrow delete — it is no filter at all.
-  check('  …reading the id off the stack BEFORE it is spliced out',
-    _delSrc.indexOf('var _goneId=') !== -1 &&
-    _delSrc.indexOf('var _goneId=') < _delSrc.indexOf('_userStacks.splice'));
+  check('  …reading the ids off the stack BEFORE it is spliced out',
+    _delSrc.indexOf('var _goneIds=') !== -1 &&
+    _delSrc.indexOf('var _goneIds=') < _delSrc.indexOf('_userStacks.splice'));
+
+  // ── EVERY SPELLING, NOT JUST THE FROZEN ONE ──────────────────────────────
+  // A protocol's rows are split across up to two cycle_ids: the frozen stack.id and
+  // the name_start form derived from its CURRENT name and cycle_start. Purging only
+  // _stackCycleId left the other spelling's rows stored, dated, and owned by an id
+  // that resolves to nothing — which is what T-Calc then drew as "never ticked".
+  // Prod on 2026-09-08 held 768 rows under protocol_4_nostart and 84 more under
+  // protocol_4_2026-09-25, plus 24 + 12 across two hormone_health_trt spellings.
+  const _ownIds = G._stackOwnedCycleIds({id:'protocol_4_nostart', name:'Protocol 4',
+                                         cycle_start:'2026-09-25'});
+  check('a protocol\'s owned ids include the FROZEN stack id',
+    _ownIds.indexOf('protocol_4_nostart') >= 0, JSON.stringify(_ownIds));
+  check('  …and the derived name_start spelling it also wrote rows under',
+    _ownIds.indexOf('protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // A T-Calc plan assigned to this protocol is its rows too, under either spelling.
+  check('  …and the T-Calc namespace of BOTH',
+    _ownIds.indexOf('tcalc:protocol_4_nostart') >= 0 &&
+    _ownIds.indexOf('tcalc:protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // The common case: id frozen to the very form it derives to, so there is only one
+  // spelling and the purge must not ask for it twice.
+  check('  …with no duplicates when the two spellings agree',
+    JSON.stringify(G._stackOwnedCycleIds({id:'p1_nostart', name:'p1'})) ===
+    JSON.stringify(['p1_nostart', 'tcalc:p1_nostart']));
+  // Bare 'tcalc' and 'manual' are shared namespaces owned by no protocol, so no
+  // single protocol's deletion may clear them. injPurgeCyclePlan refuses them too —
+  // this keeps the delete from even asking.
+  check('  …and a shared namespace is never claimed as a protocol\'s own',
+    G._stackOwnedCycleIds({id:'tcalc', name:'tcalc'}).indexOf('tcalc') < 0 &&
+    G._stackOwnedCycleIds({id:'manual', name:'manual'}).indexOf('manual') < 0);
+  check('  …and a missing stack yields no ids at all, never an empty-string filter',
+    G._stackOwnedCycleIds(null).length === 0 &&
+    G._stackOwnedCycleIds({}).every(function(c){ return !!c; }));
   // The stack list is saved first. The other order risks the unrecoverable failure:
   // the plan erased while the protocol it belongs to is still there.
   check('  …and only after the stack list is saved',
     _delSrc.indexOf('await saveStacksToBackend()') < _delSrc.indexOf('injPurgeCyclePlan'));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_delSrc) && /_tlInvalidateInjections/.test(_delSrc));
+  // "Both caches" was itself the bug: there are THREE, and the third — T-Calc's
+  // session-long _tcHistory — is the one that kept the deleted doses on screen
+  // until the app was restarted. _injRowsChanged is the single place that knows
+  // all of them, so asserting the call is stronger than re-listing two by hand.
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_delSrc));
 
   // The purge is scoped by cycle_id ALONE — deliberately, and this is the assertion
   // that says so. A from_date would spare the debris dated in the past (39 of
@@ -14887,11 +15731,14 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   // confirmation every other stored-record delete in the app does.
   check('  …only after confirmGlobalDelete, and with the row count in the prompt',
     _sweepSrc.indexOf('confirmGlobalDelete') < _sweepSrc.indexOf('injPurgeCyclePlan') &&
-    /confirmGlobalDelete\(total\+/.test(_sweepSrc));
+    // The prompt now counts two different kinds of debris — rows from a deleted
+    // protocol, and rows under a live protocol's old id — so it is built from
+    // both totals rather than the single `total`.
+    /_parts\.push\(total\+/.test(_sweepSrc) && /_parts\.push\(staleTotal\+/.test(_sweepSrc));
   check('  …and refuses outright on an unloaded protocol list',
     /if\(!live\)\{say\('protocols not loaded'\);return;\}/.test(_sweepSrc));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_sweepSrc) && /_tlInvalidateInjections/.test(_sweepSrc));
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_sweepSrc));
 
   // That refusal IS driven, because it is the one path that returns before its first
   // await — so the borrowed globals go back with no suspension in between, and the
