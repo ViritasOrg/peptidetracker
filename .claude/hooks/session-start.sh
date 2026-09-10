@@ -44,7 +44,16 @@ cat <<'BANNER'
    inherits that.
    ⚠️ A red model test means REVERT — never rewrite the test to match your change.
 
-4. SCOPE. Fix exactly what was asked. "My fix made it redundant" is not permission
+4. A BLOCKED SANDBOX IS NOT "UNSOURCEABLE". EuropePMC/PubMed/DailyMed fail at
+   CONNECT from here BY DESIGN. The backend's fetch-sources.yml runs on GitHub
+   runners, which reach them, and it is PRE-AUTHORISED — never ask, and never call
+   a value unverifiable before running it. Add the doc to SOURCES in
+   claude-agent-backend/scripts/fetch_sources.py, trigger the workflow, then read
+   docs/enhanced-bodybuilding/sources/. Broken 2026-09-09/10: curl failed, the item
+   was closed as "retrieval blocked", and the search summary used instead contained
+   figures absent from the paper. A retrieval is not a verification — open it.
+
+5. SCOPE. Fix exactly what was asked. "My fix made it redundant" is not permission
    to remove anything. One PR = one requested change.
 
 Henrik runs this as an installed iOS PWA — never give browser hard-reload or
