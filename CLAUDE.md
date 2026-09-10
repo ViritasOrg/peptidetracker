@@ -24,6 +24,54 @@ This rule exists because on 2026-06-16 Claude bypassed the agreed workflow by
 directly hand-editing prod's `index.html` locally instead of working through
 staging and the promotion pipeline. Never repeat that.
 
+## 🔒 ALL DATA LIVES IN THE BACKEND — AND YOU CAN READ IT 🔒
+**Every compound/PK parameter, reference range, baseline, catalogue entry and all user
+data lives in `ViritasOrg/claude-agent-backend` and is served to this app by API at
+runtime. This repo holds almost no data of its own.**
+
+Sessions have repeatedly diagnosed this app from `index.html` alone and concluded a
+number was unexplainable, when the number came from the backend and was readable all
+along (2026-09-09: a whole session spent reverse-engineering a free-T curve before
+discovering both the model constants and Henrik's own bloodwork were one API call away).
+
+- **Attach the backend repo** (`add_repo` → `ViritasOrg/claude-agent-backend`). Research
+  and reference docs live in its `docs/enhanced-bodybuilding/`; served constants live in
+  `routers/systemic_interactions.py`, `citations.py` and `routers/lab_markers.py`.
+- **Henrik's real data is readable.** `API_SECRET_RO` is a read-only admin credential in
+  the session environment; `GET https://claude-agent-api-aged-sun-3616.fly.dev/<endpoint>`
+  with header `x-api-secret: $API_SECRET_RO` serves `/bloodwork`, `/injections`,
+  `/systemic-interactions`, `/trt-catalog` and the rest. **READ-ONLY — never try to
+  widen it, never write with it.**
+- Henrik uses **prod** for real, so prod is where examples and bug reports come from. The
+  data behind them is in the backend regardless of which frontend raised it.
+- **Never hardcode data into this repo.** New data goes to the backend first.
+
+## ⛔ THE FREE-T MODEL AND ITS KNOWN GAP — READ BEFORE TOUCHING THE CURVE ⛔
+**Do NOT "fix" it. Read `docs/enhanced-bodybuilding/17-the-model-vs-measured-gap.md` in
+the backend first.**
+
+The model runs ~1.5× above Bhasin 2001 (PMID 11701431) compared trough-to-nadir.
+**Both sides are sourced** — the model is clearance arithmetic matching the literature
+MCR (1,240 L/day, PMID 6025489) against a 3–10 mg/day production rate — so it is a
+disagreement between published figures, not a bug. The gap is **dose-dependent**
+(1.62× at 25 mg/wk → 1.37× at 300), so **no fixed factor reproduces it**.
+
+⚠️ **Always compare TROUGH to NADIR.** Bhasin reports mean *nadir*. Comparing a weekly
+*mean* against it overstates the disagreement by about a third — a mistake made twice,
+on consecutive days.
+
+⚠️ **The 2026-06-26 bloodwork is NOT a clean baseline.** Henrik disclosed it was
+deliberately depressed (sleep deprivation, alcohol, a one-off opioid) to obtain a higher
+prescribed dose. Anything derived from it inherits that.
+
+**A red model test means REVERT your change — never rewrite the test to match what you
+just did.** If you think a settled value is genuinely wrong, say so in your reply and let
+Henrik decide.
+
+**Staging is ahead of this repo on the model.** As of 2026-09-10 staging uses a
+population dose-response slope with a personal offset; prod still takes the slope from
+the user's own draw. Do not port that by hand — it arrives through the promotion pipeline.
+
 ## ⚠️ UI CONSISTENCY — ALL COMPOUND TIERS MUST BE IDENTICAL ⚠️
 Every compound tier (Peptides, TRT, Enhanced) must have **exactly the same UI features**. If one tier shows dose recommendations, all tiers must show dose recommendations. If one shows an info card, all must. If you add a UI element to one tier, immediately add it to all others in the same session.
 
