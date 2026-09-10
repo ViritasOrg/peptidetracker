@@ -10534,6 +10534,25 @@ function _isProdCheckout(dir) {
   return !!r && !/-(staging|stage)$/.test(r);
 }
 
+// ── A TEST MUST NOT REACH FOR A BARE `localStorage` ────────────────────────
+// This file runs in Node and drives the app inside a vm sandbox. The app's storage is
+// sandbox.localStorage (aliased G.localStorage); the bare name does not exist out here.
+// Written bare it throws ReferenceError, and every such call in this file is wrapped in
+// `try { ... } catch(e){}` — so it fails silently and the test around it quietly stops
+// testing anything. Four calls in the steady-state-average block did exactly that: the
+// "shown by default" check passed only because nothing earlier happened to set the key,
+// and the restore at the end never ran, leaking that block's value into the rest of the
+// suite. A silent no-op is the worst failure mode a test can have, so it is asserted
+// structurally rather than left to review.
+{
+  var _lsSrc = require('fs').readFileSync(__filename, 'utf8');
+  // Skip the bootstrap: it legitimately defines the sandbox's localStorage binding.
+  var _lsBody = _lsSrc.slice(_lsSrc.indexOf('const G = sandbox;'));
+  var _lsBare = (_lsBody.match(/(^|[^.\w'"`])localStorage\s*\./g) || []).length;
+  check('no test reaches for a bare localStorage instead of G.localStorage',
+    _lsBare === 0, _lsBare + ' bare use(s)');
+}
+
 // ── A TEST THAT READS A NON-PROMOTED FILE MUST BE SCOPED TO STAGING ─────────
 // promote-to-prod.yml copies index.html, the modules index.html loads, ci.yml,
 // css/ and `cp -r ../staging/tests .` — the whole test directory — into prod.
@@ -10550,9 +10569,17 @@ function _isProdCheckout(dir) {
   ['../CLAUDE.md', 'promote-to-prod.yml'].forEach(function (f) {
     var idx = -1, unguarded = [];
     while ((idx = _selfSrc.indexOf(f, idx + 1)) !== -1) {
-      // Only actual reads count; the name appears in prose and in this list too.
+      // Only actual reads count; the name appears in prose, and in this scanner's own
+      // list. The discriminator is whether the occurrence sits INSIDE a readFileSync
+      // call's arguments — a statement boundary between the call and the name means it
+      // is something else (this list is preceded by `readFileSync(__filename, 'utf8');`).
+      // The old test was "readFileSync somewhere in the preceding 300 chars", which
+      // matched this list too and only passed because _isProdCheckout(dir) happened to
+      // fall inside the 1200-char lookback — until a block was inserted above and pushed
+      // it out. A heuristic that breaks when unrelated code moves is not a guard.
       var before = _selfSrc.slice(Math.max(0, idx - 1200), idx);
-      if (!/readFileSync[\s\S]*$/.test(before.slice(-300))) continue;
+      var _call = before.lastIndexOf('readFileSync(');
+      if (_call < 0 || before.slice(_call).indexOf(';') >= 0) continue;
       if (!/_isProdCheckout\(dir\)/.test(before)) unguarded.push(idx);
     }
     check('reads of ' + f + ' are scoped to a staging checkout',
@@ -11794,16 +11821,21 @@ if (typeof G._tcFreeTSeries === 'function') {
 // ── Steady-state AVERAGE line: toggle + the pharmacology it communicates ──
 console.log('\n── T-calc: steady-state average line ──');
 if (typeof G._tcShowAvg === 'function' && typeof G._tcToggleAvgLine === 'function') {
-  var _avSaved = null; try { _avSaved = localStorage.getItem('tc-avg-line'); } catch(e){}
+  // G.localStorage, not a bare localStorage: this file runs in Node, where the bare
+  // name is undefined and every one of these calls threw straight into its own catch.
+  // The block then tested nothing — "shown by default" passed only because no earlier
+  // test happened to have set the key, and the restore at the end never ran, so the
+  // value this block wrote leaked into everything after it.
+  var _avSaved = null; try { _avSaved = G.localStorage.getItem('tc-avg-line'); } catch(e){}
   var _avSaveTp = G._tcp; G._tcp = { manualLog: [] };   // make the toggle's redraw a no-op
-  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  try { G.localStorage.removeItem('tc-avg-line'); } catch(e){}
   check('avg line: shown by default', G._tcShowAvg() === true);
   G._tcToggleAvgLine({ checked: false });
   check('avg line: hiding it persists (survives getData\'s ||-default trap)', G._tcShowAvg() === false);
   G._tcToggleAvgLine({ checked: true });
   check('avg line: re-showing it persists', G._tcShowAvg() === true);
   G._tcp = _avSaveTp;
-  try { if (_avSaved === null) localStorage.removeItem('tc-avg-line'); else localStorage.setItem('tc-avg-line', _avSaved); } catch(e){}
+  try { if (_avSaved === null) G.localStorage.removeItem('tc-avg-line'); else G.localStorage.setItem('tc-avg-line', _avSaved); } catch(e){}
 }
 
 // The line's premise: at steady state the MEAN is set by mg/day (dose ÷ interval),
@@ -11839,7 +11871,7 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   G._tcBwEntries = [{date:'2026-06-20', free_t:500}]; G._tcGhStack = [];
   var _awS = G._tcFreeTSeries(_awLog.slice(), {});
   function _awWinMean(a,b){ var s=0,n=0; for(var t=a;t<=b;t++){ s+=_awS.total[t]*(_awS.calFT_arr?_awS.calFT_arr[t]:_awS.scale); n++; } return n?s/n:0; }
-  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  try { G.localStorage.removeItem('tc-avg-line'); } catch(e){}
   var _awThrew=false, _awWhole=null, _awMonth=null;
   try {
     _awCap=null; G._tcDrawManualChart('tc-main-chart', _awLog, 'whole'); _awWhole=_awCap;
@@ -14015,13 +14047,19 @@ if(typeof G._piCat==='function'){
 // ── Compound-aware macros (Batch 2) ────────────────────────────────────────
 console.log('\n── Compound-aware macros ──────────────────────────────────');
 if(typeof G.calcMacros==='function'){
-  var _mOff=G.calcMacros(90,'recomp',false);
-  var _mOn =G.calcMacros(90,'recomp',true);
+  // Since 2026-09-09 a calorie target needs a profile to compute a BMR from; these
+  // phase/androgen checks are about the macro split, so they pass one and stay on topic.
+  var _mProf={bodyFatPct:18, trainKcal:0, includeTraining:true};
+  var _mOff=G.calcMacros(90,'recomp',false,_mProf);
+  var _mOn =G.calcMacros(90,'recomp',true,_mProf);
   check('calcMacros protein = 2.2 g/kg in a non-cut phase', _mOff.protein===Math.round(90*2.2), String(_mOff.protein));
   check('calcMacros fat lower on injected androgens', _mOn.fat < _mOff.fat, _mOn.fat+' vs '+_mOff.fat);
-  check('calcMacros carbs energy-balanced & non-negative', _mOn.carbs>=0 && _mOff.carbs>=0);
-  check('calcMacros cut < recomp kcal', G.calcMacros(90,'cut',true).kcal < G.calcMacros(90,'recomp',true).kcal);
-  check('calcMacros flags onAndrogens through', G.calcMacros(90,'recomp',true).onAndrogens===true && _mOff.onAndrogens===false);
+  check('calcMacros carbs energy-balanced & non-negative',
+    _mOn.carbs>0 && _mOff.carbs>0 &&
+    Math.abs(_mOn.kcal-(_mOn.protein*4+_mOn.carbs*4+_mOn.fat*9))<=4,
+    _mOn.kcal+' vs '+(_mOn.protein*4+_mOn.carbs*4+_mOn.fat*9));
+  check('calcMacros cut < recomp kcal', G.calcMacros(90,'cut',true,_mProf).kcal < G.calcMacros(90,'recomp',true,_mProf).kcal);
+  check('calcMacros flags onAndrogens through', G.calcMacros(90,'recomp',true,_mProf).onAndrogens===true && _mOff.onAndrogens===false);
   // Phase-aware protein: a cut raises protein (deficit preserves muscle — Helms 2014),
   // and being on androgens does NOT raise it further (nitrogen retention is already better).
   check('calcMacros cut protein = 2.5 g/kg (raised for the deficit)', G.calcMacros(90,'cut',false).protein===Math.round(90*2.5), String(G.calcMacros(90,'cut',false).protein));
@@ -14031,14 +14069,152 @@ if(typeof G.calcMacros==='function'){
     check('_macrosFatNote cut mentions the raised protein + Helms', /2\.5 g\/kg/.test(G._macrosFatNote(false,'cut')) && /Helms 2014/.test(G._macrosFatNote(false,'cut')));
     check('_macrosFatNote non-cut keeps 2.2 g/kg', /2\.2 g\/kg/.test(G._macrosFatNote(false,'recomp')));
   }
-  // Calorie target is intake-only: ~31 kcal/kg ± phase, and NOT affected by the
-  // measured training burn (which is presented separately).
-  check('calcMacros recomp kcal = 31 kcal/kg + 100 (training not folded in)', G.calcMacros(90,'recomp',false).kcal===Math.round(90*31)+100, String(G.calcMacros(90,'recomp',false).kcal));
-  check('calcMacros returns no maintenance/train fields (target is training-independent)', G.calcMacros(90,'recomp',false).trainKcal===undefined && G.calcMacros(90,'recomp',false).maint===undefined);
-  // Training burn is shown separately via _macrosBurnCard, driven by _macrosTrainKcal.
+  // ── THE CALORIE TARGET ───────────────────────────────────────────────────
+  // It used to be `bodyweight × 31` — a constant that appeared in no source, here or
+  // in the backend docs that cite every other number on this screen. Against Bhasin
+  // 1996's standardised maintenance of 36 kcal/kg it ran ~14% low before the phase
+  // deficit was applied, and the deficit then landed entirely on carbohydrate, which
+  // is the residual. Replaced 2026-09-09 with a real energy model.
+  var _emKatch = {bodyFatPct:18, trainKcal:0, includeTraining:true};
+  var _emMiff  = {heightCm:180, age:45, sex:'male', trainKcal:0, includeTraining:true};
+
+  // 1. NOTHING IS INVENTED. Without the profile to compute a BMR there is no target.
+  var _emNone = G.calcMacros(90,'recomp',false,{});
+  check('no body-fat and no height/age → NO calorie target rather than a guess',
+    _emNone.kcal===null && _emNone.carbs===null && _emNone.bmr===null);
+  check('  …and it says what is missing', _emNone.missing.length>0, _emNone.missing.join(' '));
+  check('  …while protein and fat, which need only bodyweight, are still given',
+    _emNone.protein>0 && _emNone.fat>0);
+  check('the 31 kcal/kg constant is gone from the source',
+    !/\bbw\s*\*\s*31\b/.test(_macSrc) && !/kcalBase/.test(_macSrc));
+
+  // 2. Katch-McArdle when body fat is known — the lean-mass equation.
+  var _emK = G.calcMacros(90,'recomp',false,_emKatch);
+  var _ffm90 = 90*0.82;
+  check('body fat on file → Katch-McArdle (370 + 21.6 × FFM)',
+    _emK.bmrMethod==='katch' && _emK.bmr===Math.round(370+21.6*_ffm90), String(_emK.bmr));
+  // 3. Mifflin-St Jeor otherwise — and it is where AGE enters the calorie target.
+  var _emM = G.calcMacros(90,'recomp',false,_emMiff);
+  check('no body fat but height+age → Mifflin-St Jeor',
+    _emM.bmrMethod==='mifflin' && _emM.bmr===Math.round(10*90+6.25*180-5*45+5), String(_emM.bmr));
+  // Henrik, 2026-09-09: "age should be a part of this". In the calorie half it is
+  // literally a term in the equation — assert it moves the answer.
+  var _emOld = G.calcMacros(90,'recomp',false,{heightCm:180, age:70, sex:'male'});
+  check('  …so age lowers the target: 70 vs 45 differs by exactly 5 kcal/yr of BMR',
+    _emM.bmr - _emOld.bmr === 5*25, String(_emM.bmr-_emOld.bmr));
+  check('  …and female uses the −161 constant, not +5',
+    G.calcMacros(90,'recomp',false,{heightCm:180,age:45,sex:'female'}).bmr
+      === Math.round(10*90+6.25*180-5*45-161));
+
+  // 4. BMR → maintenance via PAL, then the phase offset.
+  check('maintenance = BMR × PAL 1.40 (+ training)',
+    _emK.tdee===Math.round(_emK.bmr*G.MACROS_PAL_BASE), _emK.tdee+' vs '+Math.round(_emK.bmr*1.40));
+  check('  …recomp adds 100, cut takes 300, reset sits at maintenance',
+    _emK.kcal===_emK.tdee+100 &&
+    G.calcMacros(90,'cut',false,_emKatch).kcal===Math.round(G.calcMacros(90,'cut',false,_emKatch).tdee-300) &&
+    G.calcMacros(90,'reset',false,_emKatch).kcal===G.calcMacros(90,'reset',false,_emKatch).tdee);
+
+  // 5. TRAINING IS COUNTED NOW, and the toggle is the only thing that changes it.
+  // Excluding it silently is what made the real deficit on a training day 300 + burn.
+  var _emT  = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:true});
+  var _emNT = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:false});
+  check('training energy is added to the target by default',
+    _emT.kcal - _emNT.kcal === 400, String(_emT.kcal-_emNT.kcal));
+  check('  …and excluding it deepens the real deficit by exactly the burn',
+    _emNT.kcal === _emT.kcal - _emT.trainKcal);
+  check('  …with the choice reported, not hidden',
+    _emT.includeTraining===true && _emNT.includeTraining===false && _emT.trainKcal===400);
+
+  // 6. PROTEIN AND AGE. The age effect is real but it is a FLOOR on the per-meal dose,
+  // not a multiplier on the daily total — see the note in tab-macros.js. Assert both
+  // halves, because getting this wrong in the other direction (scaling the daily target
+  // by Moore's 1.67×) would put a 45-year-old at 3.3 g/kg, above every published bound.
+  check('per-meal protein threshold matches Moore 2015 at both measured endpoints',
+    Math.abs(G._macrosPerMealProtein(22)-0.24)<1e-9 && Math.abs(G._macrosPerMealProtein(71)-0.40)<1e-9,
+    G._macrosPerMealProtein(22)+' / '+G._macrosPerMealProtein(71));
+  check('  …rises with age between them, and is flat outside',
+    G._macrosPerMealProtein(45)>G._macrosPerMealProtein(30) &&
+    G._macrosPerMealProtein(18)===G._macrosPerMealProtein(22) &&
+    G._macrosPerMealProtein(90)===G._macrosPerMealProtein(71));
+  check('age does NOT inflate the daily protein target — 2.5 g/kg already saturates every meal',
+    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).protein===Math.round(90*2.5) &&
+    G.calcMacros(90,'cut',false,{age:25,heightCm:180}).protein===Math.round(90*2.5));
+  check('  …the floor is reported so the UI can say where age actually applies',
+    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).proteinFloorBound===false &&
+    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).perMealProteinPerKg>0.39);
+  if(typeof G._macrosFatNote==='function'){
+    var _fn=G._macrosFatNote(false,'cut',G.calcMacros(90,'cut',false,{age:45,heightCm:180}));
+    check('  …and the note tells the user the per-meal dose, citing Moore',
+      /g\/kg<\/b> to maximally stimulate/.test(_fn) && /Moore 2015/.test(_fn));
+  }
+
+  // 7. ENERGY AVAILABILITY — the check that says whether the deficit is survivable.
+  var _emEA = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:true});
+  check('energy availability = (intake − training) ÷ FFM',
+    _emEA.ea && Math.abs(_emEA.ea.value-((_emEA.kcal-400)/_ffm90))<1e-9,
+    _emEA.ea?String(_emEA.ea.value):'null');
+  check('  …tiered on the published thresholds (≤30 low, <45 suboptimal, else adequate)',
+    G.macrosEnergyAvailability(2000,0,80).tier==='low' &&
+    G.macrosEnergyAvailability(3000,0,80).tier==='suboptimal' &&
+    G.macrosEnergyAvailability(4000,0,80).tier==='adequate');
+  check('  …and is not reported at all without a measured FFM, never estimated',
+    G.calcMacros(90,'cut',false,{heightCm:180,age:45}).ea===null);
+
+  // ── THE PHASE OFFSET: FIXED kcal OR % OF MAINTENANCE ─────────────────────
+  // Henrik, 2026-09-09: "Give user a choice between % or standard numbers. If you want
+  // to loose 1kg fat per month the absolute number is probably more correct and
+  // consistent." Absolute stays the default for exactly that reason — a constant gap
+  // is a constant RATE, which is the thing being aimed at.
+  var _dmAbs={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'absolute'};
+  var _dmPct={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'percent'};
+  var _dmA=G.calcMacros(90,'cut',false,_dmAbs), _dmP=G.calcMacros(90,'cut',false,_dmPct);
+  check('absolute mode is the default when none is asked for',
+    G.calcMacros(90,'cut',false,{bodyFatPct:18}).deficitMode==='absolute');
+  check('  …and takes a flat 300 off maintenance whatever the maintenance is',
+    _dmA.phaseOffset===-300 && G.calcMacros(70,'cut',false,_dmAbs).phaseOffset===-300);
+  check('percent mode takes 15% of maintenance instead',
+    _dmP.phaseOffset===-Math.round(_dmP.tdee*G.MACROS_PCT_CUT), _dmP.phaseOffset+' of '+_dmP.tdee);
+  check('  …so it scales with the person and absolute does not',
+    G.calcMacros(70,'cut',false,_dmPct).phaseOffset !== _dmP.phaseOffset);
+  check('  …surplus is the small one, and reset is neither',
+    G.calcMacros(90,'recomp',false,_dmPct).phaseOffset===Math.round(_dmP.tdee*G.MACROS_PCT_SURPLUS) &&
+    G.calcMacros(90,'reset',false,_dmPct).phaseOffset===0 &&
+    G.calcMacros(90,'reset',false,_dmAbs).phaseOffset===0);
+  check('  …recomp is still +100 in absolute mode',
+    G.calcMacros(90,'recomp',false,_dmAbs).phaseOffset===100);
+
+  // THE RATE IS THE POINT. A deficit means nothing until it is kg per month.
+  check('the offset is reported as an expected rate of fat change',
+    _dmA.rate && Math.abs(_dmA.rate.kgPerMonth-(-300/G.MACROS_KCAL_PER_KG_FAT*30.44))<1e-9,
+    _dmA.rate?_dmA.rate.kgPerMonth.toFixed(3):'null');
+  check('  …a fixed 300 kcal/day is ~1.19 kg/month, near the 1 kg/month it is aimed at',
+    Math.abs(Math.abs(_dmA.rate.kgPerMonth)-1.186)<0.01, Math.abs(_dmA.rate.kgPerMonth).toFixed(3));
+  check('  …and the SAME absolute offset gives the SAME rate at any bodyweight',
+    Math.abs(G.calcMacros(70,'cut',false,_dmAbs).rate.kgPerMonth-_dmA.rate.kgPerMonth)<1e-9);
+  check('  …which percent mode does not — that is the trade-off the choice is about',
+    Math.abs(G.calcMacros(70,'cut',false,_dmPct).rate.kgPerMonth-_dmP.rate.kgPerMonth)>0.05);
+  check('  …reset has no rate at all', G.calcMacros(90,'reset',false,_dmAbs).rate===null);
+  // Helms 2014: 0.5–1% bodyweight per week preserves lean mass; past that it does not.
+  check('a rate past 1% of bodyweight per week is flagged, not silently served',
+    G.macrosRate(-1200,60).tooFast===true && G.macrosRate(-300,90).tooFast===false,
+    G.macrosRate(-1200,60).pctBwPerWeek.toFixed(2)+'%/wk vs '+G.macrosRate(-300,90).pctBwPerWeek.toFixed(2)+'%/wk');
+
+  if(typeof G._macrosEnergyCard==='function'){
+    var _ecP=G._macrosEnergyCard(_dmP), _ecA=G._macrosEnergyCard(_dmA);
+    check('the energy card offers both modes and marks the active one',
+      /setMacrosDeficitMode\('absolute'\)/.test(_ecA) && /setMacrosDeficitMode\('percent'\)/.test(_ecA));
+    check('  …shows the expected kg/month next to the target',
+      /Expected rate/.test(_ecA) && /kg\/month/.test(_ecA));
+    check('  …and labels the offset as fixed or as a percentage',
+      /fixed/.test(_ecA) && /15%/.test(_ecP));
+  }
+
+  // Training burn card: driven by _macrosTrainKcal, and now says whether it counts.
   if(typeof G._macrosBurnCard==='function'){
     G._macrosTrainKcal=270;
-    check('_macrosBurnCard shows the burn kcal and marks it separate from the target', /270/.test(G._macrosBurnCard()) && /not added to the calorie target/i.test(G._macrosBurnCard()));
+    check('_macrosBurnCard shows the burn kcal and offers the include/exclude toggle',
+      /270/.test(G._macrosBurnCard()) && /setMacrosIncludeTraining/.test(G._macrosBurnCard()));
+    G._macrosTrainKcal=0;
     G._macrosTrainKcal=0;
     check('_macrosBurnCard with no data prompts to log workouts, not zero-burn scare', /log your workouts/i.test(G._macrosBurnCard()));
   }
@@ -16869,6 +17045,55 @@ console.log('\n── zoom strip: offered levels are styled levels ──');
     G.document.getElementById = _zsSaveGet;
     try { G._tcSetChartZoom(_zsSaveZoom || 'whole'); } catch (e) {}
   }
+}
+
+// ── ONE SOURCE FOR THE MACRO NUMBERS ────────────────────────────────────────
+// The Macros tab and the protocol wizard render the same four figures. They used to
+// call calcMacros separately, each assembling its own inputs — which is how two
+// surfaces come to disagree about one quantity. macrosForUser is now the only path
+// that reads the profile, and both call it.
+console.log('\n── Macros: the tab and the wizard read one model ───────────');
+if(typeof G.macrosForUser==='function'){
+  var _mfSave={w:G.localStorage.getItem('user_weight'), h:G.localStorage.getItem('user_height'),
+               a:G.localStorage.getItem('user_age'), s:G.localStorage.getItem('user_sex'),
+               t:G.localStorage.getItem('macros-include-training'), tk:G._macrosTrainKcal};
+  G.localStorage.setItem('user_weight','90');
+  G.localStorage.setItem('user_height','180');
+  G.localStorage.setItem('user_age','45');
+  G.localStorage.setItem('user_sex','male');
+  G.localStorage.removeItem('macros-include-training');
+  G._macrosTrainKcal=400;
+
+  var _mf=G.macrosForUser('cut',true);
+  check('macrosForUser reads the stored profile', _mf.kcal>0 && _mf.protein===Math.round(90*2.5));
+  check('  …and counts training by default', _mf.includeTraining===true && _mf.trainKcal===400);
+  G.localStorage.setItem('macros-include-training','false');
+  var _mfOff=G.macrosForUser('cut',true);
+  check('  …the toggle is what removes it, and removes exactly it',
+    _mfOff.includeTraining===false && _mf.kcal-_mfOff.kcal===400, String(_mf.kcal-_mfOff.kcal));
+  G.localStorage.removeItem('macros-include-training');
+
+  var _stkSrc=require('fs').readFileSync(
+    require('path').join(require('path').dirname(require('path').resolve(htmlPath)),'tab-stack.js'),'utf8');
+  var _wizStep=_stkSrc.slice(_stkSrc.indexOf('function wizStepNutrition'),
+                             _stkSrc.indexOf('function wizSetMacroPhase'));
+  check('the wizard step resolves its numbers through macrosForUser',
+    /macrosForUser\(_macrosPhase,onAndrogens\)/.test(_wizStep));
+  check('  …and reports the same maintenance and EA the Macros tab shows',
+    /m\.tdee/.test(_wizStep) && /m\.ea/.test(_wizStep));
+  check('  …and says what is missing rather than showing a number it cannot compute',
+    /m\.kcal==null/.test(_wizStep) && /m\.missing/.test(_wizStep));
+  // The old copy asserted the burn was deliberately excluded. It is included now, and
+  // the wizard must not still be telling the user the opposite.
+  check('  …no longer claims the training burn is not added',
+    !/not<\/b> added to the target/.test(_wizStep));
+
+  G.localStorage.setItem('user_weight',_mfSave.w==null?'':_mfSave.w);
+  if(_mfSave.h==null) G.localStorage.removeItem('user_height'); else G.localStorage.setItem('user_height',_mfSave.h);
+  if(_mfSave.a==null) G.localStorage.removeItem('user_age'); else G.localStorage.setItem('user_age',_mfSave.a);
+  if(_mfSave.s==null) G.localStorage.removeItem('user_sex'); else G.localStorage.setItem('user_sex',_mfSave.s);
+  if(_mfSave.t==null) G.localStorage.removeItem('macros-include-training'); else G.localStorage.setItem('macros-include-training',_mfSave.t);
+  G._macrosTrainKcal=_mfSave.tk;
 }
 
 // ── PER-ESTER ATTRIBUTION ON THE T-CALC CURVE ───────────────────────────────
