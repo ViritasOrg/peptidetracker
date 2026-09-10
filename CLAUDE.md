@@ -60,9 +60,9 @@ disagreement between published figures, not a bug. The gap is **dose-dependent**
 *mean* against it overstates the disagreement by about a third — a mistake made twice,
 on consecutive days.
 
-⚠️ **The 2026-06-26 bloodwork is NOT a clean baseline.** Henrik disclosed it was
-deliberately depressed (sleep deprivation, alcohol, a one-off opioid) to obtain a higher
-prescribed dose. Anything derived from it inherits that.
+⚠️ **The 2026-06-26 bloodwork is NOT a clean baseline.** It was taken under acute
+conditions that depress testosterone, so it understates the true unmedicated level by an
+unknown amount. Anything derived from it inherits that.
 
 **A red model test means REVERT your change — never rewrite the test to match what you
 just did.** If you think a settled value is genuinely wrong, say so in your reply and let
