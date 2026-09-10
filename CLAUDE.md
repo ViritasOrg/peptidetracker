@@ -68,9 +68,10 @@ unknown amount. Anything derived from it inherits that.
 just did.** If you think a settled value is genuinely wrong, say so in your reply and let
 Henrik decide.
 
-**Staging is ahead of this repo on the model.** As of 2026-09-10 staging uses a
-population dose-response slope with a personal offset; prod still takes the slope from
-the user's own draw. Do not port that by hand — it arrives through the promotion pipeline.
+**The model here is the population dose-response slope with a personal offset**, promoted
+from staging on 2026-09-10 (#369, v1.314). It is no longer anchored on the user's own
+draw. See `TCALC_TT_PER_MGD` in `tab-tcalc.js` for why, and backend doc 17 for what that
+change did NOT fix.
 
 ## ⚠️ UI CONSISTENCY — ALL COMPOUND TIERS MUST BE IDENTICAL ⚠️
 Every compound tier (Peptides, TRT, Enhanced) must have **exactly the same UI features**. If one tier shows dose recommendations, all tiers must show dose recommendations. If one shows an info card, all must. If you add a UI element to one tier, immediately add it to all others in the same session.
