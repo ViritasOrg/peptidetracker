@@ -9156,8 +9156,10 @@ console.log('\n── T-Calc simple planner ────────────
       /openPastInjection\(/.test(_tcSrc) && !/function _tcShowAddSheet/.test(_tcSrc));
   }
   // The curve reads stored rows only now — no planner can drive it invisibly.
+  // Matched on the call site, not its full argument list — _add gained an isRecord
+  // flag on 2026-09-13 and this guard is about WHERE the future comes from.
   check('the curve takes its future from the protocol alone',
-    /_add\(_tcProtocolInjections\(\)\);/.test(_tcSrc) &&
+    /_add\(_tcProtocolInjections\(\)/.test(_tcSrc) &&
     !/function _tcSimplePlanInjections/.test(_tcSrc));
 
   // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
@@ -15715,8 +15717,13 @@ console.log('\n── Drafts cannot exist: the planner is gone ─────�
     !/function _tcUnsavedDraftBanner/.test(_dfSrc) && !/draft:true/.test(_dfSrc));
   check('  …and the save-to-protocol route is gone with it',
     !/function _tcOpenSaveToStack/.test(_dfSrc) && !/function _tcSaveToExistingStack/.test(_dfSrc));
+  // Exactly two sources, and these two. Matched on the call sites themselves rather
+  // than their full text: _add gained an isRecord flag on 2026-09-13, and a test that
+  // pins the argument list breaks on a change that does not alter what it is guarding.
   check('the curve is built from the record and the protocol only',
-    /_add\(_tcLoggedHistory\(\)\);/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)\);/.test(_dfSrc));
+    /_add\(_tcLoggedHistory\(\)/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)/.test(_dfSrc) &&
+    (_dfSrc.match(/\n  _add\(/g) || []).length === 2,
+    'call sites: ' + (_dfSrc.match(/\n  _add\(/g) || []).length);
 }
 
 // ── T-History: the "as of" readout follows the series end ────────────────────
@@ -17420,6 +17427,378 @@ if(typeof G.macrosForUser==='function'){
   if(_mfSave.s==null) G.localStorage.removeItem('user_sex'); else G.localStorage.setItem('user_sex',_mfSave.s);
   if(_mfSave.t==null) G.localStorage.removeItem('macros-include-training'); else G.localStorage.setItem('macros-include-training',_mfSave.t);
   G._macrosTrainKcal=_mfSave.tk;
+}
+
+// ── ONE DAY'S ROWS, TWO SCREENS, ONE ANSWER ─────────────────────────────────
+// Today and the T-Calc curve read the same stored rows through two different
+// de-duplicators, written months apart and for different reasons:
+//   _dedupInjectionSlots (Today)  — collapses the dose-edit doubling within a protocol
+//   _tcCurveLog          (curve)  — collapses one injection stored under two spellings
+// Nothing held them to the same answer, and on 2026-09-13 they disagreed in the same
+// direction on the same day: an extra 75 mg Nebido was dropped by BOTH, so Today showed
+// 6 doses where 7 were taken and the curve integrated 100 mg where 175 went in. Two
+// independent fixes, and still nothing asserting the two agree.
+//
+// This is the ONE NUMBER, ONE SOURCE rule made structural for the pair that matters
+// most: what the user ticked off, and what the model integrated.
+console.log('\n── T-calc: the curve and Today agree on one day ────────────');
+if (typeof G._dedupInjectionSlots === 'function' && typeof G._tcCurveLog === 'function') {
+  var _agSaveH = G._tcLoggedHistory, _agSaveP = G._tcProtocolInjections;
+  // One day, as the backend stores it: the protocol's own Nebido and an extra by hand.
+  var _agDay = '2026-09-13';
+  var _agStored = [
+    {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true,  active:true,
+     cycle_id:'protocol_4_2026-09-11', id:'row-a', tier:'trt'},
+    {compound_id:'nebido', time_of_day:'AM', dose:'75',  logged:true,  active:true,
+     cycle_id:'manual', source:'manual', id:'row-b', tier:'trt'}
+  ];
+  // Today's view of it.
+  var _agToday = G._dedupInjectionSlots(_agStored.map(function(e){
+    return Object.assign({}, e, {date:_agDay});
+  })).filter(function(e){ return e.compound_id === 'nebido'; });
+  // The curve's view of the same rows, in the shape _tcLoggedHistory produces.
+  G._tcLoggedHistory = function(){
+    return _agStored.map(function(e){
+      return {compId:e.compound_id, doseMg:e.dose, date:_agDay,
+              injId:e.id, cycleId:e.cycle_id, source:'logged'};
+    });
+  };
+  G._tcProtocolInjections = function(){ return []; };
+  var _agCurve = G._tcCurveLog().filter(function(e){ return e.compId === 'nebido'; });
+
+  check('the curve and Today count the same number of Nebido doses that day',
+    _agToday.length === _agCurve.length,
+    'Today ' + _agToday.length + ' vs curve ' + _agCurve.length);
+  var _agSum = function(rows, k){ return rows.reduce(function(a, r){ return a + parseFloat(r[k]); }, 0); };
+  check('  …and the same total mg — what was ticked is what gets integrated',
+    _agSum(_agToday, 'dose') === _agSum(_agCurve, 'doseMg'),
+    _agSum(_agToday, 'dose') + ' mg vs ' + _agSum(_agCurve, 'doseMg') + ' mg');
+  check('  …which is the 175 mg actually administered',
+    _agSum(_agCurve, 'doseMg') === 175, String(_agSum(_agCurve, 'doseMg')));
+
+  // The other direction: one administration stored under both tiers is ONE dose on
+  // both screens. Today keys on the origin, the curve on the amount — different rules,
+  // and they still have to land on the same count.
+  var _agDual = [
+    {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true, active:true,
+     cycle_id:'c1', id:'dual-a', tier:'trt'},
+    {compound_id:'test_u', time_of_day:'AM', dose:'100', logged:true, active:true,
+     cycle_id:'c1', id:'dual-b', tier:'enhanced'}
+  ];
+  G._tcLoggedHistory = function(){
+    return _agDual.map(function(e){
+      return {compId:e.compound_id, doseMg:e.dose, date:_agDay,
+              injId:e.id, cycleId:e.cycle_id, source:'logged'};
+    });
+  };
+  var _agDualCurve = G._tcCurveLog();
+  var _agDualToday = G._dedupInjectionSlots(_agDual.map(function(e){
+    return Object.assign({}, e, {date:_agDay});
+  }));
+  check('one injection stored under both tiers is one dose on the curve',
+    _agDualCurve.length === 1, String(_agDualCurve.length));
+  // …and Today says one too, since 2026-09-13. It used to key on the raw compound_id
+  // and list the two tier rows separately — the same day shown as two injections on one
+  // screen and one on the other. Closed in the direction that keeps the arithmetic
+  // right: Today canonicalises like the curve, rather than the curve double-counting.
+  check('  …and Today says one as well, on the same rows',
+    _agDualToday.length === 1, String(_agDualToday.length));
+  check('  …so the two screens agree on the count for a dual-tier day',
+    _agDualToday.length === _agDualCurve.length);
+  // A dose ticked under either tier must show as ticked. The surviving row is the
+  // logged one whichever tier carried it, or the checklist would offer to re-take a
+  // dose the user has already had.
+  check('  …and the logged row survives whichever tier it came from', (function(){
+    var pick = function(loggedTier){
+      return G._dedupInjectionSlots([
+        {compound_id:'nebido', time_of_day:'AM', dose:'100', date:_agDay, cycle_id:'c1',
+         tier:'trt',      id:'t-row', logged:loggedTier === 'trt'},
+        {compound_id:'test_u', time_of_day:'AM', dose:'100', date:_agDay, cycle_id:'c1',
+         tier:'enhanced', id:'e-row', logged:loggedTier === 'enhanced'}
+      ]);
+    };
+    var a = pick('trt'), b = pick('enhanced');
+    return a.length === 1 && a[0].logged === true && a[0].id === 't-row'
+        && b.length === 1 && b[0].logged === true && b[0].id === 'e-row';
+  })());
+  // Only testosterone esters have aliases — nothing else may be merged by this.
+  check('  …while two genuinely different compounds are never merged by canonicalising',
+    G._dedupInjectionSlots([
+      {compound_id:'hgh',  time_of_day:'AM', dose:'3',   date:_agDay, cycle_id:'c1'},
+      {compound_id:'glow', time_of_day:'AM', dose:'0.1', date:_agDay, cycle_id:'c1'}
+    ]).length === 2);
+
+  G._tcLoggedHistory = _agSaveH; G._tcProtocolInjections = _agSaveP;
+}
+
+// ── THE RECOMMENDATION MUST NOT SWING ON NOISE ──────────────────────────────
+// The solver scores several candidate schedules and presents the winner as THE answer.
+// Nothing asserted that the answer moves smoothly with its inputs — and it has to,
+// because the inputs are noisy by nature: the calibration anchor is a lab value the
+// user typed, and the model behind it has been recalibrated twice.
+//
+// WHAT THE SWEEP ACTUALLY SHOWS (measured across measuredFT 888-942, ±3% either side
+// of 915, with the outgoing ester still scheduled — the case that stresses it most):
+//
+//   anchor | cadence      | time-wtd mg/wk | settled level
+//      888 | e2d          |             74 | 1329-1391
+//      897 | daily-dither |             79 | 1382-1407
+//      906 | e2d          |             74 | 1348-1411
+//      915 | e2d          |             74 | 1358-1421
+//      924 | daily-dither |             73 | 1366-1397
+//      933 | daily-dither |             71 | 1402-1429
+//      942 | daily-dither |             68 | 1386-1417
+//
+// The CADENCE FAMILY flips — three times across a 6% sweep. That is real: the gap
+// between the top two straddles the _TIE band in the ranker, so below it "fewer
+// injections" picks every-2-days and above it "holds the target better" picks daily
+// dithering. Both are defensible plans; the ranking rule is sound.
+//
+// What must NOT move is the DOSE and the LEVEL, and they do not: the time-weighted
+// weekly load drifts 79 → 68 smoothly as the anchor rises, and every winner lands on
+// the target whichever family it comes from. That is what these assertions pin.
+//
+// ⚠️ DO NOT ASSERT THE PHASE-MEAN. An unweighted mean over phase entries is not a
+// weekly load — a plan with more ramp phases has more small early entries dragging it
+// down, so comparing two families on it manufactures a 27% "swing" that is an artefact
+// of the metric, not of the solver. Weight by how long each phase runs.
+console.log('\n── T-calc: the solve is stable under a noisy anchor ────────');
+if (typeof G.tcSolveTransition === 'function') {
+  var _ssSave = {bw:G._tcBwEntries, tp:G._tcp, by:G._tcp.birthYear, ft:G._tcp.measuredFT,
+                 sh:G._tcp.shbg, cd:G._tcp.currentDoseMgWk};
+  var _ssSeq = function(n, every, mg, first, back){
+    var o=[], F=new Date(first+'T12:00:00');
+    for(var i=0;i<n;i++){ var d=new Date(F.getTime()+(back?-1:1)*i*every*86400000);
+      o.push({compId:'nebido', doseMg:String(mg),
+              date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}); }
+    return o;
+  };
+  G._tcp.birthYear='1981'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+  var _ssHist = _ssSeq(33,2,100,'2026-08-26',true);
+  var _ssSolve = function(ft){
+    G._tcp.measuredFT = String(ft);
+    G._tcBwEntries = [{date:'2026-08-18', free_t:String(ft), total_t:'32', shbg:'25', unit:'pmol/L'}];
+    var r = G.tcSolveTransition({history:_ssHist, scheduled:_ssSeq(35,2,100,'2026-08-28',false),
+      incomingId:'enanthate', startDate:'2026-08-28', targetPmol:1400,
+      concMgPerMl:250, stepMl:0.05, weeks:16});
+    if (!r || !r.best) return null;
+    var ph = r.best.phases || [], W = 16, tw = 0, wk = 0;
+    ph.forEach(function(p, i){
+      var span = ((i+1 < ph.length ? ph[i+1].w : W) - p.w);
+      tw += span; wk += p.perWeek * span;
+    });
+    var weekly = r.best.weekly || [];
+    var tail = weekly.slice(r.best.settleWeeks || 0).map(function(x){ return x.mean; });
+    return {cad:(r.best.cadence||{}).key, load: tw ? wk/tw : 0,
+            lo: Math.min.apply(null, tail), hi: Math.max.apply(null, tail)};
+  };
+  var _ssRun = [888,897,906,915,924,933,942].map(_ssSolve);
+  check('every anchor in a ±3% sweep still solves', _ssRun.every(function(r){ return !!r; }));
+  if (_ssRun.every(function(r){ return !!r; })) {
+    // THE DOSE MOVES SMOOTHLY. A step here means the recommendation is chattering.
+    var _ssJump = 0, _ssAt = '';
+    for (var i = 1; i < _ssRun.length; i++) {
+      var j = Math.abs(_ssRun[i].load - _ssRun[i-1].load) / _ssRun[i-1].load;
+      if (j > _ssJump) { _ssJump = j; _ssAt = _ssRun[i-1].load.toFixed(0) + '→' + _ssRun[i].load.toFixed(0); }
+    }
+    check('the recommended weekly load never jumps between adjacent anchors',
+      _ssJump < 0.15, 'worst jump ' + (_ssJump*100).toFixed(1) + '% (' + _ssAt + ')');
+    // …AND IT TRACKS THE ANCHOR IN THE RIGHT DIRECTION. A higher measured free T means
+    // the same schedule already reaches further, so LESS incoming ester is needed.
+    check('  …and a higher measured free T asks for less, not more',
+      _ssRun[_ssRun.length-1].load < _ssRun[0].load,
+      _ssRun[0].load.toFixed(0) + ' → ' + _ssRun[_ssRun.length-1].load.toFixed(0) + ' mg/wk');
+    // THE ONE THAT MATTERS. Whichever family wins, the plan must hold the target.
+    var _ssMiss = _ssRun.filter(function(r){ return r.lo < 1400*0.94 || r.hi > 1400*1.06; });
+    check('every winner holds the target, whichever solver family produced it',
+      _ssMiss.length === 0,
+      _ssMiss.map(function(r){ return r.cad + ' ' + Math.round(r.lo) + '-' + Math.round(r.hi); }).join(' | '));
+    // The cadence family IS allowed to flip — the ranker breaks a near-tie on fewer
+    // injections, and which side of the tie band a candidate falls on moves with the
+    // anchor. Recorded, not forbidden: if this ever stops flipping the note above is
+    // stale and the ranking has changed.
+    var _ssFams = {};
+    _ssRun.forEach(function(r){ _ssFams[r.cad] = 1; });
+    check('  …even though the cadence family legitimately changes across the sweep',
+      Object.keys(_ssFams).length >= 2, Object.keys(_ssFams).join(','));
+  }
+  G._tcBwEntries = _ssSave.bw; G._tcp = _ssSave.tp;
+  G._tcp.birthYear = _ssSave.by; G._tcp.measuredFT = _ssSave.ft;
+  G._tcp.shbg = _ssSave.sh; G._tcp.currentDoseMgWk = _ssSave.cd;
+}
+
+// ── EVERY SOLVER EMITS THE SAME PHASE CONTRACT ──────────────────────────────
+// Three solver families produce the dose plan — fixed-cadence, variable-interval and
+// daily-dithered — and the scoring picks whichever wins. Downstream code reads the
+// winner's phases without knowing which family produced it, so a field one of them
+// forgets is a latent break that only appears when that family happens to win.
+//
+// That is not hypothetical. The fixed-cadence solver omitted `perWeek` while the other
+// two set it, so the debug dump rendered "w0=undefined mg/wk" whenever it won. It rarely
+// won, so it went unseen until recalibrating the HPTA model on 2026-09-12 shifted the
+// scoring enough to make it win a covered case.
+//
+// REQUIRED means every phase from every family. OPTIONAL fields carry meaning by their
+// absence and must NOT be forced: no `iv` means "use the compound's cadence" (see the
+// dose_phases mapping in tcSolveTransition), `pattern` belongs to the dithered family
+// alone, and overshoot/unreachable are fixed-cadence diagnostics.
+console.log('\n── T-calc: the solver phase contract ───────────────────────');
+if (typeof G.tcSolveTransition === 'function' && typeof G._tcSolveDailyDither === 'function') {
+  // ⚠️ SNAPSHOT THE FIELDS, NOT THE OBJECT. This block mutates _tcp in place, so
+  // stashing the reference and assigning it back restores nothing — it hands back the
+  // object it just changed. That left birthYear/measuredFT/shbg/currentDoseMgWk set for
+  // every test after this one and broke eleven of them, all in the Dose Finder and the
+  // exposure card, which read those fields as the user's own profile.
+  var _pcSave = {bw:G._tcBwEntries, tp:G._tcp,
+                 by:G._tcp.birthYear, ft:G._tcp.measuredFT,
+                 sh:G._tcp.shbg, cd:G._tcp.currentDoseMgWk};
+  var _pcHist = function(n, every, mg, last){
+    var o=[], L=new Date(last+'T12:00:00');
+    for(var i=0;i<n;i++){ var d=new Date(L.getTime()-i*every*86400000);
+      o.push({compId:'nebido', doseMg:String(mg),
+              date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}); }
+    return o;
+  };
+  G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+  G._tcBwEntries=[{date:'2026-08-18', free_t:'915', total_t:'32', shbg:'25', unit:'pmol/L'}];
+  var _pcOpts = {incomingId:'enanthate', startDate:'2026-08-28', targetPmol:1400,
+                 concMgPerMl:250, stepMl:0.05, weeks:16};
+  var _pcRes = G.tcSolveTransition(Object.assign({history:_pcHist(33,2,100,'2026-08-26')}, _pcOpts));
+  // …and the dithered family, which does not win this scenario, called directly.
+  G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+  G._tcp.measuredFT='1300';
+  var _pcDith = G._tcSolveDailyDither(Object.assign({history:_pcHist(60,2,100,'2026-08-20')},
+                  {incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
+                   concMgPerMl:250, stepMl:0.05, weeks:16}), {iters:10});
+
+  var _pcCands = (_pcRes.alternatives || []).slice();
+  if (_pcDith && _pcDith.phases) _pcCands.push(_pcDith);
+  check('the solve returns candidates from more than one solver family',
+    _pcCands.length >= 3 &&
+    _pcCands.some(function(c){ return (c.cadence||{}).key === 'variable'; }) &&
+    _pcCands.some(function(c){ return (c.cadence||{}).dithered; }),
+    _pcCands.map(function(c){ return (c.cadence||{}).key; }).join(','));
+
+  var _pcNum = function(v){ return typeof v === 'number' && isFinite(v); };
+  var _pcBad = [];
+  _pcCands.forEach(function(c){
+    (c.phases || []).forEach(function(p, i){
+      var who = ((c.cadence||{}).key || '?') + '#' + i;
+      if (!_pcNum(p.w) || p.w < 0)              _pcBad.push(who + '.w');
+      if (!_pcNum(p.mg) || p.mg < 0)            _pcBad.push(who + '.mg');
+      if (!_pcNum(p.ml) || p.ml < 0)            _pcBad.push(who + '.ml');
+      if (!_pcNum(p.perWeek) || p.perWeek < 0)  _pcBad.push(who + '.perWeek');
+      if (p.iv !== undefined && !(p.iv > 0))    _pcBad.push(who + '.iv');
+      if (p.pattern !== undefined &&
+          !(Array.isArray(p.pattern) && p.pattern.length === 7 && p.pattern.every(_pcNum)))
+        _pcBad.push(who + '.pattern');
+    });
+  });
+  check('every phase from every solver carries w, mg, ml and perWeek as finite numbers',
+    _pcBad.length === 0, _pcBad.join(' '));
+
+  // THE SUBSTANTIVE ONE. perWeek must be the weekly mg that phase actually delivers,
+  // computed from the phase's OWN fields. This catches a missing field and a wrong
+  // formula alike — the fixed-cadence solver was first given mg*7/days, which is the
+  // variable-interval rule and produced roughly double the real weekly load, because
+  // its cadence carries INJECTIONS per week rather than an interval in days.
+  var _pcWrong = [];
+  _pcCands.forEach(function(c){
+    var perWk = (c.cadence || {}).perWeek;
+    (c.phases || []).forEach(function(p, i){
+      var expect = null;
+      if (p.pattern && p.pattern.length) expect = p.pattern.reduce(function(a,b){ return a+b; }, 0);
+      else if (p.iv > 0)                 expect = p.mg * 7 / p.iv;
+      else if (perWk > 0)                expect = p.mg * perWk;
+      if (expect === null) return;
+      if (Math.abs(p.perWeek - expect) > 1.01)
+        _pcWrong.push(((c.cadence||{}).key||'?') + '#' + i + ' says ' + p.perWeek + ' want ' + Math.round(expect));
+    });
+  });
+  check('  …and perWeek is the weekly load that phase actually delivers',
+    _pcWrong.length === 0, _pcWrong.join(' | '));
+
+  // The absence of `iv` is MEANING, not an omission — do not "fix" it by forcing the
+  // field on. tcSolveTransition only copies it through when it is set, and the ramp
+  // generator reads a phase without one as "use the compound's cadence".
+  check('an absent iv is preserved as "use the compound cadence", not defaulted',
+    /if\(p\.iv>0\)e\.iv=p\.iv;/.test(_tcSrc) &&
+    (_pcRes.dose_phases || []).every(function(e){ return e.iv === undefined || e.iv > 0; }));
+
+  G._tcp = _pcSave.tp; G._tcBwEntries = _pcSave.bw;
+  G._tcp.birthYear = _pcSave.by; G._tcp.measuredFT = _pcSave.ft;
+  G._tcp.shbg = _pcSave.sh; G._tcp.currentDoseMgWk = _pcSave.cd;
+}
+
+// ── MASS BALANCE: EVERY mg ADMINISTERED REACHES THE MODEL, EXACTLY ONCE ─────
+// THE test for T-Calc. Every other number the tab produces — the plotted level, the
+// peak, the steady-state average, the solved dose recommendation, the Dose Finder — is
+// an integral over _tcCurveLog. If a dose is missing from that input, nothing downstream
+// can be right and nothing downstream will complain.
+//
+// Both directions have now bitten in production:
+//   TOO FEW — 2026-09-13: keyed on compound|date, the log allowed one dose of a compound
+//     per day. An extra 75 mg Nebido on a day the protocol already had 100 mg never
+//     reached the model. 175 mg went in; the curve integrated 100.
+//   TOO MANY — 2026-08-15: one injection stored under BOTH tiers (test_u/enhanced and
+//     nebido/trt, different row ids) was counted twice and doubled the forward curve.
+// The rule that satisfies both: same canonical compound, same day, same AMOUNT is one
+// administration recorded more than once. A different amount is a different injection.
+console.log('\n── T-calc: mass balance of the curve input ─────────────────');
+if (typeof G._tcCurveLog === 'function') {
+  var _mbSaveHist = G._tcLoggedHistory, _mbSaveProto = G._tcProtocolInjections;
+  var _mbRun = function(hist, proto){
+    G._tcLoggedHistory      = function(){ return hist || []; };
+    G._tcProtocolInjections = function(){ return proto || []; };
+    return G._tcCurveLog();
+  };
+  var _mbSum = function(rows){ return (rows||[]).reduce(function(a,r){ return a + parseFloat(r.doseMg); }, 0); };
+
+  // ── The reported case, with the real prod rows for 2026-09-13. ──
+  var _mbReported = [
+    {compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'protocol_4_2026-09-11', injId:'5c5e9971'},
+    {compId:'nebido', doseMg:'75',  date:'2026-09-13', cycleId:'manual',                injId:'67a9989a'}
+  ];
+  var _mbOut = _mbRun(_mbReported, []);
+  check('an extra dose of the same compound on the same day reaches the model',
+    _mbOut.length === 2, String(_mbOut.length));
+  check('  …so the curve integrates 175 mg, which is what went in',
+    _mbSum(_mbOut) === 175, _mbSum(_mbOut) + ' mg of 175');
+
+  // ── And the opposite failure stays fixed. ──
+  check('one injection stored under both tiers still counts ONCE',
+    _mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'c1', injId:'a'},
+            {compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'c2', injId:'b'}], []).length === 1);
+  check('  …even though they are different stored rows — the DOSE is the discriminator',
+    _mbSum(_mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'a'},
+                   {compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'b'}], [])) === 100);
+  // The record outranks the plan on the same compound and day — a logged dose and a
+  // leftover unlogged row for it are one administration.
+  check('a recorded dose still outranks the protocol row for that day',
+    (function(){
+      var r = _mbRun([{compId:'enanthate', doseMg:'150', date:'2026-10-01', injId:'x'}],
+                     [{compId:'enanthate', doseMg:'125', date:'2026-10-01', cycleId:'stack1'}]);
+      return r.length === 1 && parseFloat(r[0].doseMg) === 150;
+    })());
+
+  // ── THE INVARIANT. Distinct amounts on one day are distinct injections, all of them. ──
+  check('mass balance: three different doses on one day all reach the model',
+    (function(){
+      var rows = [50, 75, 100].map(function(mg, i){
+        return {compId:'nebido', doseMg:String(mg), date:'2026-09-13', injId:'i'+i, cycleId:'c'+i};
+      });
+      var out = _mbRun(rows, []);
+      return out.length === 3 && _mbSum(out) === 225;
+    })());
+  check('  …and a day with one dose is unchanged',
+    _mbSum(_mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'a'}], [])) === 100);
+  // Two spellings of one compound are still one injection — that is what the canonical
+  // id is for, and undoing it is what doubled the curve in the first place.
+  check('  …while two spellings of one compound remain a single dose',
+    _mbRun([{compId:'test_u', doseMg:'100', date:'2026-09-13', injId:'a'},
+            {compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'b'}], []).length === 1);
+
+  G._tcLoggedHistory = _mbSaveHist; G._tcProtocolInjections = _mbSaveProto;
 }
 
 // ── PER-ESTER ATTRIBUTION ON THE T-CALC CURVE ───────────────────────────────
