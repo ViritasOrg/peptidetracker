@@ -332,16 +332,64 @@ if (typeof G._dedupInjectionSlots === 'function') {
         return seen[k] && seen[k].logged;
       });
     })());
-  // A T-Calc testosterone plan and a protocol dose are different origins too.
-  check('dedup slots: a T-Calc dose is not merged into a protocol dose',
-    G._dedupInjectionSlots([
-      {compound_id:'enanthate', time_of_day:'AM', dose:'50',  cycle_id:'protocol_9'},
-      {compound_id:'enanthate', time_of_day:'AM', dose:'100', cycle_id:'tcalc'}
-    ]).length === 2);
-  check('dedup slots: two protocols dosing the same compound both show',
+  // ── TWO PROTOCOLS ON ONE SLOT IS A TRANSITION, NOT TWO INJECTIONS ────────
+  // ⚠️ THESE TWO ASSERTIONS USED TO SAY THE OPPOSITE, AND THEY WERE WRONG.
+  // Written 2026-09-13 alongside the cycle_id key, on the reasoning that a different
+  // origin means a different administration. Reality answered on 2026-09-14: with
+  // protocol_4 and protocol_5 both live, Today listed Glow twice and HGH twice in each
+  // slot — 8 rows for 5 doses, and the user takes ONE of each. Overlapping protocols
+  // are how a schedule is revised; the old rows linger until they are cleaned up.
+  //
+  // Same for a T-Calc plan beside a protocol row: T-Calc is the only thing that
+  // schedules testosterone (_genInjBatches suppresses the whole TRT tier), so those two
+  // rows are one planned dose under two mechanisms, never two injections.
+  check('dedup slots: two protocols dosing the same compound collapse to one',
     G._dedupInjectionSlots([
       {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_a'},
       {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_b'}
+    ]).length === 1);
+  check('  …even when the revision changed the dose',
+    G._dedupInjectionSlots([
+      {compound_id:'hgh', time_of_day:'AM', dose:'3', cycle_id:'protocol_4'},
+      {compound_id:'hgh', time_of_day:'AM', dose:'2', cycle_id:'protocol_5'}
+    ]).length === 1);
+  check('  …and a T-Calc plan beside a protocol row is still one dose',
+    G._dedupInjectionSlots([
+      {compound_id:'enanthate', time_of_day:'AM', dose:'50',  cycle_id:'protocol_9'},
+      {compound_id:'enanthate', time_of_day:'AM', dose:'100', cycle_id:'tcalc'}
+    ]).length === 1);
+
+  // THE REPORTED DAY, verbatim from prod for 2026-09-14. Two protocols, 8 stored rows,
+  // 5 doses to take.
+  var _ovDay = [
+    {compound_id:'glow',   time_of_day:'AM', dose:'0.09', logged:true,  cycle_id:'protocol_4_2026-09-11', id:'8b249b47'},
+    {compound_id:'glow',   time_of_day:'AM', dose:'0.09', logged:true,  cycle_id:'protocol_5_2026-09-15', id:'c387c668'},
+    {compound_id:'hgh',    time_of_day:'AM', dose:'3',    logged:true,  cycle_id:'protocol_4_2026-09-11', id:'b34b7b03'},
+    {compound_id:'hgh',    time_of_day:'AM', dose:'2',    logged:true,  cycle_id:'protocol_5_2026-09-15', id:'d244e179'},
+    {compound_id:'hgh',    time_of_day:'PM', dose:'3',    logged:false, cycle_id:'protocol_4_2026-09-11', id:'6584e72a'},
+    {compound_id:'hgh',    time_of_day:'PM', dose:'2',    logged:false, cycle_id:'protocol_5_2026-09-15', id:'8605aabb'},
+    {compound_id:'mast_e', time_of_day:null, dose:'100',  logged:false, cycle_id:'protocol_5_2026-09-15', id:'f2be2a92'},
+    {compound_id:'nebido', time_of_day:'AM', dose:'100',  logged:false, cycle_id:'protocol_4_2026-09-11', id:'ca93f1b7'}
+  ];
+  var _ovOut = G._dedupInjectionSlots(_ovDay);
+  check('dedup slots: the reported overlapping-protocol day renders 5 doses, not 8',
+    _ovOut.length === 5, _ovOut.length + ': ' + _ovOut.map(function(e){return e.compound_id+'/'+(e.time_of_day||'-');}).join(' '));
+  check('  …one Glow, one HGH per slot, plus Nebido and Masteron',
+    _ovOut.filter(function(e){return e.compound_id==='glow';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='hgh' && e.time_of_day==='AM';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='hgh' && e.time_of_day==='PM';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='nebido';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='mast_e';}).length === 1);
+  // …and the hand-added extra that started all this still survives beside the plan.
+  check('  …while a hand-added extra dose is still its own row',
+    G._dedupInjectionSlots([
+      {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true, cycle_id:'protocol_4_2026-09-11', id:'r1'},
+      {compound_id:'nebido', time_of_day:'AM', dose:'75',  logged:true, cycle_id:'manual', source:'manual', id:'r2'}
+    ]).length === 2);
+  check('  …and two hand-added extras are two rows, not one',
+    G._dedupInjectionSlots([
+      {compound_id:'nebido', time_of_day:'AM', dose:'50', logged:true, cycle_id:'manual', source:'manual', id:'m1'},
+      {compound_id:'nebido', time_of_day:'AM', dose:'50', logged:true, cycle_id:'manual', source:'manual', id:'m2'}
     ]).length === 2);
 }
 
@@ -3980,6 +4028,175 @@ console.log('\n── Hidden doses: counted, explained, never deleted ───�
 
   G.fetch = _hdSave.f; G._userStacks = _hdSave.us; G._activeStackIndices = _hdSave.ai;
   G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
+}
+
+// ── ONLY A TAKEN DOSE SURVIVES ITS PROTOCOL ─────────────────────────────────
+// Henrik, 2026-09-14: "only taken injections from deleted or inactivated protocols can
+// be shown."
+//
+// A logged row is the record of something that went into the user, and deactivating a
+// protocol cannot unmake that — so it bypasses all three gates in refreshInjectionsCache
+// (the T-Calc stack binding, the active-cycle check, the orphan-compound check) whatever
+// its date. An UNTAKEN row is only ever a plan, and a plan belongs to whoever owns the
+// schedule; retire the protocol and its untaken doses go with it.
+//
+// ⚠️ NARROWER THAN THE RULE SHIPPED EARLIER THE SAME DAY. That one let every past row
+// through regardless of whether it was taken. An untaken past dose from the ACTIVE
+// protocol still reaches Today through the ordinary gates — it never needed an
+// exception. The exception is only about outliving deactivation.
+console.log('\n── Today: only a taken dose outlives its protocol ──────────');
+{
+  const _pvSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, hid:G._injHidden};
+  const _pv = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const PAST = _pv(-7), TODAY = _pv(0), FUTURE = _pv(7);
+
+  const ACTIVE = {id:'ACT', name:'Active', cycle_start:_pv(-50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}], trt:{}, enhanced:{}};
+  const DEAD = {id:'DEAD', name:'Retired', cycle_start:_pv(-200), cycle_length:12,
+                peptides:[], trt:{}, enhanced:{}};
+  // Each gate gets a TAKEN and an UNTAKEN row in the past, so the two halves of the
+  // rule are separated everywhere it applies.
+  const ROWS = [
+    {id:'act-past-untaken', compound_id:'glow', tier:'peptide', cycle_id:'ACT',  date:PAST, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'act-fut',          compound_id:'glow', tier:'peptide', cycle_id:'ACT',  date:FUTURE,dose:'2',unit:'mg', active:true, logged:false},
+    {id:'dead-past-taken',  compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:PAST, dose:'2', unit:'mg', active:true, logged:true},
+    {id:'dead-past-untaken',compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:PAST, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'dead-today-taken', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:TODAY,dose:'2', unit:'mg', active:true, logged:true},
+    {id:'dead-fut-untaken', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:FUTURE,dose:'2',unit:'mg', active:true, logged:false},
+    {id:'orph-past-taken',  compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',  date:PAST, dose:'1', unit:'IU', active:true, logged:true},
+    {id:'orph-past-untaken',compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',  date:PAST, dose:'1', unit:'IU', active:true, logged:false},
+    {id:'tc-past-taken',    compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD', date:PAST, dose:'100', unit:'mg', active:true, logged:true},
+    {id:'tc-past-untaken',  compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD', date:PAST, dose:'100', unit:'mg', active:true, logged:false}
+  ];
+  G._userStacks = [ACTIVE, DEAD]; G._activeStackIndices = [0];
+  G._stacksLoaded = true; G._stacksNormalized = true;
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') return {ok:true, status:200, json:async()=>({})};
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? ROWS : []};
+  };
+  await G.refreshInjectionsCache();
+  const has = (d, id) => (G._injectionsCache[d] || []).some(e => e.id === id);
+
+  // TAKEN outlives the protocol, at every gate and every date.
+  check('a TAKEN dose from a retired protocol is still shown', has(PAST, 'dead-past-taken'));
+  check('  …including one taken today, the moment the protocol is retired',
+    has(TODAY, 'dead-today-taken'));
+  check('  …one whose compound the active protocol does not configure',
+    has(PAST, 'orph-past-taken'));
+  check('  …and a taken T-Calc dose bound to a retired stack', has(PAST, 'tc-past-taken'));
+
+  // UNTAKEN does not. It was never administered and never will be, so offering it for
+  // ticking would invite logging a dose from a protocol already walked away from.
+  check('an UNTAKEN past dose from a retired protocol is gone with it',
+    !has(PAST, 'dead-past-untaken'));
+  check('  …as is an untaken past dose the active protocol does not configure',
+    !has(PAST, 'orph-past-untaken'));
+  check('  …and an untaken past T-Calc dose on a retired stack',
+    !has(PAST, 'tc-past-untaken'));
+  check('  …and the retired protocol\'s untaken future is still gone', !has(FUTURE, 'dead-fut-untaken'));
+
+  // The ACTIVE protocol needs no exception — the ordinary gates already pass it, past
+  // and future alike. This is the case the earlier, wider rule was really protecting.
+  check('the active protocol\'s own untaken past dose still shows, via the normal gates',
+    has(PAST, 'act-past-untaken'));
+  check('  …and its future dose', has(FUTURE, 'act-fut'));
+
+  // A row on screen is not a hidden one; a row correctly withheld is.
+  check('hidden counts the withheld untaken rows and nothing else',
+    (G._injHidden||{}).count === 4, 'hidden=' + ((G._injHidden||{}).count) + ' (expected 4)');
+
+  G.fetch = _pvSave.f; G._userStacks = _pvSave.us; G._activeStackIndices = _pvSave.ai;
+  G._stacksLoaded = _pvSave.sl; G._injectionsCache = _pvSave.c; G._injHidden = _pvSave.hid;
+}
+
+// ── OVERLAPPING PROTOCOLS ARE DETECTED, EXPLAINED, AND CUTTABLE ─────────────
+// Henrik, 2026-09-14: "Overlapping protocols need a warning when activated explaining
+// the issue, also offer to cut one of them and let user decide which conflicting
+// protocols stay intact."
+//
+// The reported case: protocol 4 ran 11-14 Sep, protocol 5 began 14 Sep, and both booked
+// Glow and HGH on the 14th — Today listed each twice, 8 rows for 5 doses.
+//
+// ⚠️ COMPARED ON THE SCHEDULED DAYS, NOT THE DECLARED DATES. _chainFromActive already
+// refuses to chain a protocol whose cycle_start precedes the previous one's end, so a
+// declared-date check stays silent on exactly this case: the two protocols do not
+// overlap by their stored boundaries, they overlap because one had its start moved and
+// its rows now land on days the other still covers.
+console.log('\n── Protocols: an overlap is warned about, and cuttable ─────');
+if (typeof G._detectStackOverlap === 'function') {
+  const _osSave = {us:G._userStacks, c:G._injectionsCache};
+  const D = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const P4 = {id:'P4', name:'Protocol 4', cycle_start:D(-3)};
+  const P5 = {id:'P5', name:'Protocol 5', cycle_start:D(0)};
+  G._userStacks = [P4, P5];
+  // The overlap day carries the same compounds in the same slots from both protocols;
+  // the days on either side belong to one protocol each.
+  const row = (id, stack, comp, slot, day, logged) =>
+    ({id:id, compound_id:comp, compound_name:comp, time_of_day:slot, date:day,
+      // _stackCycleId returns stack.id, and prod rows carry exactly that
+      // (protocol_4_2026-09-11 is both the protocol's id and its rows' cycle_id).
+      cycle_id:stack, dose:'1', unit:'mg', active:true, logged:!!logged});
+  G._injectionsCache = {
+    [D(-1)]: [row('p4-solo','P4','glow','AM',D(-1))],
+    [D(0)]:  [row('p4-glow','P4','glow','AM',D(0)),  row('p5-glow','P5','glow','AM',D(0)),
+              row('p4-hgh', 'P4','hgh', 'PM',D(0)),  row('p5-hgh', 'P5','hgh', 'PM',D(0)),
+              row('p4-taken','P4','nebido','AM',D(0), true), row('p5-neb','P5','nebido','AM',D(0))],
+    [D(1)]:  [row('p5-solo','P5','glow','AM',D(1))]
+  };
+  const _osOv = G._detectStackOverlap(1);   // activating Protocol 5
+  check('activating a protocol that shares days with another is detected',
+    _osOv.length === 1 && _osOv[0].id === 'P4', JSON.stringify(_osOv.map(o=>o.id)));
+  check('  …naming the day', _osOv[0].days.length === 1 && _osOv[0].days[0] === D(0),
+    _osOv[0].days.join(','));
+  check('  …and the compounds that clash', _osOv[0].compounds.sort().join(',') === 'glow,hgh',
+    _osOv[0].compounds.join(','));
+  // A dose already taken is history, not a scheduling conflict to resolve.
+  check('  …while a dose already ticked is not counted as a clash',
+    _osOv[0].compounds.indexOf('nebido') < 0, _osOv[0].compounds.join(','));
+  // Days only one protocol covers are not a conflict.
+  check('  …and days only one protocol covers are left out',
+    _osOv[0].days.indexOf(D(-1)) < 0 && _osOv[0].days.indexOf(D(1)) < 0);
+  // Symmetry: it is the same clash seen from the other side.
+  check('the same overlap is found when activating the other protocol',
+    (G._detectStackOverlap(0)[0]||{}).id === 'P5');
+  // No overlap at all is the normal case and must stay silent.
+  G._injectionsCache = { [D(0)]: [row('p5-only','P5','glow','AM',D(0))] };
+  check('a protocol with the days to itself raises nothing',
+    G._detectStackOverlap(1).length === 0);
+
+  // THE CUT. It removes the untaken overlapping rows of ONE protocol and nothing else.
+  if (typeof G._overlapRowIds === 'function') {
+    G._injectionsCache = {
+      [D(-1)]: [row('p4-solo','P4','glow','AM',D(-1))],
+      [D(0)]:  [row('p4-glow','P4','glow','AM',D(0)),  row('p5-glow','P5','glow','AM',D(0)),
+                row('p4-taken','P4','nebido','AM',D(0), true)]
+    };
+    const cutP4 = G._overlapRowIds('P4', [D(0)]);
+    check('cutting a protocol removes its untaken rows on the overlap day',
+      cutP4.indexOf('p4-glow') >= 0, cutP4.join(','));
+    check('  …never a dose already ticked', cutP4.indexOf('p4-taken') < 0, cutP4.join(','));
+    check('  …never a row the other protocol owns', cutP4.indexOf('p5-glow') < 0);
+    check('  …and never a day outside the overlap', cutP4.indexOf('p4-solo') < 0);
+    check('  …so the user can cut either side', G._overlapRowIds('P5', [D(0)]).join(',') === 'p5-glow');
+  }
+  // The cut must go through inj-writer, which owns every write to the record.
+  const _ohSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'index.html'),'utf8');
+  check('the cut deletes through inj-writer, not a raw fetch',
+    /injDeleteOne\(ids\[j\]/.test(_ohSrc) && !/DELETE[\s\S]{0,80}cutOverlap/.test(_ohSrc));
+  // And activation actually asks.
+  check('activation checks for an overlap and shows the warning',
+    /_detectStackOverlap\(idx\)/.test(_ohSrc) && /_showOverlapModal\(idx,_ovl\)/.test(_ohSrc));
+  // The handlers sit inside a JS string that builds the modal, so the quotes are
+  // backslash-escaped in the source. Match the call and the argument, not the quoting.
+  check('  …offering to cut either protocol, or keep both',
+    /_resolveOverlap\(\\?'cut-other/.test(_ohSrc) && /_resolveOverlap\(\\?'cut-mine/.test(_ohSrc) &&
+    /_resolveOverlap\(\\?'keep/.test(_ohSrc));
+
+  G._userStacks = _osSave.us; G._injectionsCache = _osSave.c;
 }
 
 // ── Rebuild schedule: refills a gap without disturbing the record ────────────
