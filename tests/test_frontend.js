@@ -13645,9 +13645,100 @@ if (typeof G._labSafetyFindings === 'function') {
 } else {
   check('tab-labs.js Phase 5 helpers present', false, '_labSafetyFindings missing');
 }
+
+// ── A DRAW IS LOGGED WHEN IT HAPPENS, NOT WHEN THE RESULTS ARRIVE ───────────
+// Henrik, 2026-09-14: "Need to be able to log time of blood test, it matters during
+// cycle for t-calc since it might be many days before test results are added."
+//
+// The draw date IS the calibration anchor: _tcFreeTSeries solves TT_base as
+// TT_at_draw * P / total[anchorDay], so the anchor DAY sets the scale of the whole
+// curve. A lab that takes a week to report means the date typed in with the results is
+// a week late, and on a loaded protocol that is a week of accumulation charged to the
+// wrong day.
+console.log('\n── Labs: a blood draw is logged before its results ─────────');
+if (typeof G._labDrawStatus === 'function') {
+  // THE STATUS IS DERIVED, NOT STORED — no new backend field, and no way for a stored
+  // status to disagree with the data it describes.
+  check('an entry with only a date reads as DRAWN', G._labDrawStatus({date:'2026-09-14'}) === 'drawn');
+  check('  …and any result at all makes it DONE',
+    G._labDrawStatus({date:'d', markers:{total_t:{value:20}}}) === 'done' &&
+    G._labDrawStatus({date:'d', total_t:20}) === 'done' &&
+    G._labDrawStatus({date:'d', free_t:400}) === 'done' &&
+    G._labDrawStatus({date:'d', shbg:30}) === 'done' &&
+    G._labDrawStatus({date:'d', extra:[{name:'x', value:1}]}) === 'done');
+  check('  …an empty markers map is still just a draw',
+    G._labDrawStatus({date:'d', markers:{}, extra:[]}) === 'drawn');
+  if (typeof G._labStatusChip === 'function') {
+    check('the chip names both states',
+      /DRAWN/.test(G._labStatusChip({date:'d'})) && /DONE/.test(G._labStatusChip({date:'d', total_t:20})));
+  }
+  // ⚠️ A PENDING DRAW MUST NOT BLANK THE SAFETY SUMMARY. It is the newest entry by date
+  // and has no results; reading the newest entry blindly would wipe the card.
+  const _ldSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+  check('the safety card skips a pending draw and reads the latest resulted one',
+    /_latestDone\s*=\s*entries\.filter\(function\s*\(e\)\s*\{\s*return _labDrawStatus\(e\) === 'done'/.test(_ldSrc));
+  // ⚠️ ONE RENDERER, NOT TWO COPIES OF THE SAME STYLES.
+  // Henrik, 2026-09-14: "same feature must look identical in UI", which CLAUDE.md makes a
+  // standing rule. These used to pin the literal markup on each surface, which is exactly
+  // how the two drifted in the first place — Labs got a pill and Today a full-width
+  // reset-btn, both passing. Asserting the SHARED renderer is the structural version: two
+  // call sites cannot look different if neither writes its own styles.
+  const _ldHtml = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('there is exactly one renderer for the LOG DRAW button',
+    (_ldSrc.match(/function _labLogDrawButtonHtml/g) || []).length === 1);
+  check('  …Labs renders through it', /_labLogDrawButtonHtml\(\)/.test(_ldSrc));
+  check('  …Today renders through it too', /_labLogDrawButtonHtml\(\{wide:true/.test(_ldSrc) &&
+    /renderTodayLogDraw/.test(_ldSrc));
+  check('  …and Today no longer hand-rolls its own button',
+    !/logBloodDrawFromToday\(this\)[^>]*reset-btn/.test(_ldHtml) &&
+    /id="today-log-draw"/.test(_ldHtml));
+  // The button's markup exists once. (accent4 itself is shared with the DRAWN chip — a
+  // different control — so the colour is not the thing to count; the button is.)
+  check('  …with the button markup written in one place only',
+    (_ldSrc.match(/>LOG DRAW</g) || []).length === 1 &&
+    (_ldHtml.match(/>LOG DRAW</g) || []).length === 0);
+  check('  …both going through the same recorder', /async function logBloodDraw\(dateStr\)/.test(_ldSrc) &&
+    /async function logBloodDrawFromToday/.test(_ldSrc));
+
+  // ── THE LIST IS TWO LINES PER DRAW, DETAIL BEHIND A TAP ──────────────────
+  // "each lab test on a single line (can be two rows but no more) ... Clicking a line
+  // opens a detailed view". With 10+ draws and a growing marker set, rendering every
+  // result inline is unusable.
+  check('the list renders compact rows, not a card per entry',
+    /_labListRow\(e, i\)/.test(_ldSrc) && !/_labEntryCard\(e, entries, i, !!_labExpanded\[i\]\)/.test(_ldSrc));
+  check('  …and a row opens the detail sheet', /_labOpenDetail\(/.test(_ldSrc) &&
+    /function _labOpenDetail\(idx\)/.test(_ldSrc));
+  check('  …which reuses the full card rather than re-rendering the results',
+    /_labEntryCard\(entry, entries, idx, true\)/.test(_ldSrc));
+  if (typeof G._labRowSummary === 'function') {
+    check('a pending draw says it is waiting',
+      G._labRowSummary({date:'d'}) === 'Waiting for results');
+    check('  …a clean draw reports how many results it holds',
+      /all in range/.test(G._labRowSummary({date:'d', markers:{total_t:{value:20}}})),
+      G._labRowSummary({date:'d', markers:{total_t:{value:20}}}));
+    check('  …and an out-of-range one names the marker instead',
+      /Haematocrit|Hematocrit/i.test(G._labRowSummary({date:'d', markers:{hematocrit:{value:58}}})),
+      G._labRowSummary({date:'d', markers:{hematocrit:{value:58}}}));
+  }
+  check('deleting from the detail sheet closes it',
+    /_labDeleteEntry\(id\) \{[\s\S]{0,200}_labCloseDetail\(\)/.test(_ldSrc));
+  // One draw per day: a second tap is a mis-tap, and two entries on one date would give
+  // the curve two anchors for the same measurement.
+  check('a second draw on a day that already has one is refused',
+    /filter\(function\(e\)\{ return e && e\.date === d; \}\)\[0\]/.test(_ldSrc) &&
+    /if\(existing\)\{/.test(_ldSrc));
+  // A pending draw offers the one action that moves it forward, prefilled with ITS date
+  // so the results stay tied to the day of the draw.
+  check('a pending draw offers Add results, prefilled with the draw date',
+    /Add results/.test(_ldSrc) && /_labOpenAddSheet\([^)]*_esc\(entry\.date/.test(_ldSrc));
+}
 {
   const labs = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
-  check('Labs renders a derived safety card',   labs.includes('_labSafetyCard(entries[0])'));
+  // Not entries[0] any more. A logged-but-unreported draw is the newest entry by date and
+  // carries no results, so reading the first entry blindly blanked the safety summary the
+  // moment a draw was logged. It now reads the latest draw that actually HAS results.
+  check('Labs renders a derived safety card from the latest RESULTED draw',
+    /_latestDone\s*=\s*entries\.filter/.test(labs) && labs.includes('_labSafetyCard(_latestDone)'));
   check('Labs marker rows include a sparkline',  labs.includes('_labSparkline(entries, key)'));
   check('safety guidance uses backend note→meaning', labs.includes('m.note || m.meaning'));
 }
