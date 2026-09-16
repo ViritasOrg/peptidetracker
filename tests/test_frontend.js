@@ -2103,6 +2103,301 @@ console.log('\n── Today tick ⇄ T-Calc history ─────────�
 }
 
 
+// ── When a dose was taken, not just that it was ──────────────────────────────
+// `date` is a calendar day and `time_of_day` is a three-value slot, so the record
+// said WHICH DAY a dose was administered and never WHEN. `logged_at` has been in
+// the schema since it was written (routers/injections.py, InjectionEntry line 84
+// and PatchPayload line 139) and no writer in this app ever filled it: a live read
+// of the record on 2026-09-16 found 57 logged rows in the first half of September,
+// 53 carrying a slot and 0 carrying a timestamp.
+//
+// A schema field that nothing populates reads, to anyone downstream, exactly like
+// a dose whose time is unknown. These assertions exist so the tick keeps filling
+// it — and so an untick keeps CLEARING it, which is the half that silently does
+// not happen if the backend patch ever goes back to exclude_none.
+console.log('\n── Injection timestamps ───────────────────────────────────');
+{
+  const _atSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate, tf:G._tcFetchHistory};
+  const _puts = [];
+  G._tcFetchHistory = async () => {};            // the curve re-read is another test's subject
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
+    return {ok:true, status:200, json:async()=>({})};
+  };
+  const _day = '2026-09-16';
+  G._viewDate = null;
+  G._injectionsCache = {};
+  G._injectionsCache[_day] = [{id:'at1', compound_id:'nebido', compound_name:'Nebido', tier:'trt',
+                               cycle_id:'c1', date:_day, dose:'100', unit:'mg', logged:false,
+                               active:true, time_of_day:'AM'}];
+  const _row = () => G._injectionsCache[_day][0];
+
+  await (async () => {
+    await G.toggleInjection('at1', false);       // tick
+    check('ticking a dose sends a logged_at with it',
+      _puts.length === 1 && _puts[0].body.logged === true &&
+      typeof _puts[0].body.logged_at === 'string',
+      JSON.stringify(_puts[0] && _puts[0].body));
+    const _stamp = _puts[0].body.logged_at;
+    // Local time with the offset spelled out. A bare UTC instant read back in
+    // another season disagrees with the local `date` sitting beside it.
+    check('  …a local timestamp carrying its UTC offset, not a bare instant',
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(_stamp), _stamp);
+    check('  …whose date half is the day the dose belongs to',
+      _stamp.slice(0,10) === G.dateKey(new Date()), _stamp);
+    check('  …and the cache carries it without waiting for a refetch',
+      _row().logged_at === _stamp, String(_row().logged_at));
+
+    await G.toggleInjection('at1', true);        // untick
+    check('unticking clears the timestamp rather than leaving a stale one',
+      _puts.length === 2 && _puts[1].body.logged === false &&
+      _puts[1].body.logged_at === null, JSON.stringify(_puts[1] && _puts[1].body));
+    check('  …in the cache too — an untaken dose has no time',
+      _row().logged_at === null, String(_row().logged_at));
+
+    // The failure path must put back what was there, not a null. A row logged
+    // yesterday that fails to untick today is still logged, at yesterday's time.
+    _row().logged = true; _row().logged_at = '2026-09-15T08:30:00+03:00';
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G.toggleInjection('at1', true);
+    check('a failed untick restores the timestamp it was about to clear',
+      _row().logged === true && _row().logged_at === '2026-09-15T08:30:00+03:00',
+      String(_row().logged_at));
+
+    G.fetch = _atSave.f; G._injectionsCache = _atSave.c;
+    G._viewDate = _atSave.vd; G._tcFetchHistory = _atSave.tf;
+  })();
+
+  // ── BACK-FILLING A DOSE ──────────────────────────────────────────────────
+  // Henrik, 2026-09-16: "Cant tick doses in Stage, I try and they just blink … Back
+  // filling doses must work, suggest using the AM/PM setting to just fabricate a time
+  // and still allow edit if needed (uncommon)."
+  await (async () => {
+    const _bfSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate, tf:G._tcFetchHistory};
+    const _bfPuts = [];
+    G._viewDate = null;
+    G._tcFetchHistory = async () => {};
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _bfPuts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    const _today = G.dateKey(new Date());
+    const _past = (n) => { const t = new Date(); t.setDate(t.getDate()-n); return G.dateKey(t); };
+
+    // ⚠️ STAMPED ON THE DOSE'S OWN DAY. The first cut used the wall clock at the moment
+    // of the tick, so a dose dated the 14th ticked on the 16th recorded the 16th — the
+    // stamp's date half contradicting the row's own `date`, two fields describing one
+    // event and disagreeing.
+    G._injectionsCache = {};
+    G._injectionsCache[_past(2)] = [{id:'bf1', compound_id:'hgh', cycle_id:'c1',
+      date:_past(2), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf1', false);
+    check('back-filling a past dose stamps it on that day, not on today',
+      _bfPuts.length === 1 && _bfPuts[0].body.logged_at.slice(0,10) === _past(2),
+      _bfPuts[0] && _bfPuts[0].body.logged_at);
+    // The slot is the only timing information that exists for a dose nobody wrote a
+    // time down for, so it is what the fabricated clock time comes from.
+    check('  …at the hour its AM/MID/PM slot stands for',
+      /T20:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+    check('  …and the tick still lands in the cache',
+      G._injectionsCache[_past(2)][0].logged === true);
+
+    G._injectionsCache[_past(3)] = [{id:'bf2', compound_id:'hgh', cycle_id:'c1',
+      date:_past(3), dose:'3', unit:'IU', time_of_day:'AM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf2', false);
+    check('  …a morning slot gives a morning time', /T08:00:00/.test(_bfPuts[0].body.logged_at),
+      _bfPuts[0].body.logged_at);
+
+    // No slot means "this day, time unknown" — midday, rather than claiming a morning
+    // or an evening the record cannot support.
+    G._injectionsCache[_past(4)] = [{id:'bf3', compound_id:'mast_e', cycle_id:'c1',
+      date:_past(4), dose:'100', unit:'mg', time_of_day:null, active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf3', false);
+    check('  …and a dose with no slot is stamped midday, not morning',
+      /T12:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+
+    // Today's doses keep the real wall clock — that is a record, not a reconstruction.
+    G._injectionsCache[_today] = [{id:'bf4', compound_id:'hgh', cycle_id:'c1',
+      date:_today, dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf4', false);
+    check('  …while a dose ticked on its own day keeps the real clock time',
+      _bfPuts[0].body.logged_at.slice(0,10) === _today &&
+      !/T20:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+
+    // ⚠️ THE BLINK. A throw in the _tcFetchHistory re-read that follows a SUCCESSFUL PUT
+    // used to land in the catch and roll the tick back, so a dose saved correctly
+    // appeared to un-tick itself — tap, blink, gone, with the server holding the
+    // opposite of what the screen showed until the next reload.
+    G._injectionsCache[_past(5)] = [{id:'bf5', compound_id:'hgh', cycle_id:'c1',
+      date:_past(5), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    G._tcFetchHistory = async () => { throw new Error('curve rebuild blew up'); };
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf5', false);
+    check('a failed curve re-read does not undo a tick that was saved',
+      _bfPuts.length === 1 && G._injectionsCache[_past(5)][0].logged === true,
+      'logged=' + G._injectionsCache[_past(5)][0].logged);
+    // …and the rollback still happens for the thing it exists for: a failed write.
+    G._tcFetchHistory = async () => {};
+    G._injectionsCache[_past(6)] = [{id:'bf6', compound_id:'hgh', cycle_id:'c1',
+      date:_past(6), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    G.fetch = async () => { throw new Error('offline'); };
+    await G.toggleInjection('bf6', false);
+    check('  …but a write that never landed is still rolled back',
+      G._injectionsCache[_past(6)][0].logged === false);
+
+    G.fetch = _bfSave.f; G._injectionsCache = _bfSave.c;
+    G._viewDate = _bfSave.vd; G._tcFetchHistory = _bfSave.tf;
+  })();
+
+  // The bulk untick is the same event sixteen times over; it must clear too.
+  const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  check('Reset Today clears the stamps along with the flags',
+    /body:JSON\.stringify\(\{logged:false,logged_at:null\}\)/.test(_todayJs) &&
+    /e\.logged=false;e\.logged_at=null;/.test(_todayJs));
+
+  // ⚠️ THE CURVE STILL WORKS IN WHOLE DAYS. Nebido ~56 d and enanthate ~4.5 d put a
+  // few hours far inside the uncertainty of the anchor draw, so feeding this field
+  // to the PK model would claim a precision the inputs do not have. Giving the
+  // curve sub-day resolution has to be a deliberate change with its own
+  // justification — not something that arrives because the field now has values.
+  const _tcJs = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('T-Calc does not quietly start reading injection times',
+    !/logged_at/.test(_tcJs));
+}
+
+
+// ── The administered time is editable ────────────────────────────────────────
+// The tick stamps the moment you TICK, which is the right default and the wrong
+// record for a dose ticked the next morning — and for every row already logged,
+// which has no time at all. So the stamp is editable and a missing one can be
+// filled in. Henrik, 2026-09-16, asked for both halves ("Both").
+console.log('\n── Editing when a dose was taken ──────────────────────────');
+{
+  const _etJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+
+  // One renderer, called by both checklists. Today and the day-inline view build the
+  // same rows from the same cache and each used to carry its own copy of this cell;
+  // a dose must not show its clock time on one screen and its AM/MID/PM slot on the
+  // other. Asserting on the CALLS, because the old inline block is what drifted.
+  check('both checklists render the time column from one function',
+    (_etJs.match(/_todayTimeCell\(item,dose\)/g) || []).length === 2 &&
+    !/timeEl\.textContent=\(typeof _slotLabel/.test(_etJs));
+
+  const _mk = (o) => Object.assign({id:'et1', compound_id:'nebido', compound_name:'Nebido',
+    tier:'trt', cycle_id:'c1', date:'2026-09-14', dose:'100', unit:'mg',
+    time_of_day:'AM', active:true, logged:true,
+    logged_at:'2026-09-14T08:42:00+03:00'}, o || {});
+  // The suite's shared mock element swallows className and textContent (both are
+  // no-op setters), which is fine for code that only builds markup and fatal for
+  // assertions about what the cell says. This block gets elements that remember.
+  const _etDoc = G.document;
+  const _etEl = () => ({style:{}, className:'', textContent:'', title:'', onclick:null});
+  G.document = Object.assign({}, _etDoc, {createElement:() => _etEl()});
+  const _cell = (dose) => {
+    const kids = [];
+    G._todayTimeCell({appendChild:(el)=>kids.push(el)}, dose);
+    return kids[0] || null;
+  };
+
+  check('a taken dose shows the clock time it went in, not the plan slot',
+    _cell(_mk()).textContent === '08:42', String((_cell(_mk())||{}).textContent));
+  check('  …and says so by being tappable',
+    /check-time-set/.test(_cell(_mk()).className) &&
+    typeof _cell(_mk()).onclick === 'function');
+  // An untaken dose has no administration time because it has not been administered.
+  // This is the row the old cell rendered, and it must not have changed.
+  const _due = _cell(_mk({logged:false, logged_at:null}));
+  check('an untaken dose still shows its slot, unchanged and not editable',
+    _due.textContent === G._slotLabel('AM') && !/check-time-set/.test(_due.className) &&
+    !_due.onclick, String(_due.textContent) + '/' + _due.className);
+  // Ticked before the app kept a time: editable, so it can be filled in.
+  const _old = _cell(_mk({logged_at:null}));
+  check('a dose logged before timestamps existed shows its slot and can still be set',
+    _old.textContent === G._slotLabel('AM') && /check-time-set/.test(_old.className));
+  // The legacy peptide-log fallback rows showDayInline builds have synthetic ids and
+  // no cycle_id. There is no record row behind them; an edit would 404 in silence.
+  const _synth = _cell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', logged:true,
+                        time_of_day:'AM'});
+  check('a legacy log row with no record behind it is not offered an edit',
+    !/check-time-set/.test(_synth.className) && !_synth.onclick);
+  check('a taken dose with neither a time nor a slot renders no cell at all',
+    _cell(_mk({time_of_day:null, logged_at:null})) === null);
+
+  G.document = _etDoc;              // the redraws below go through the real stub
+
+  // The write.
+  const _etSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate};
+  const _etPuts = [];
+  G._viewDate = null;
+  G._injectionsCache = {'2026-09-14': [_mk()]};
+  const _row = () => G._injectionsCache['2026-09-14'][0];
+
+  await (async () => {
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _etPuts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    await G._setInjectionTime('et1', '19:05');
+    check('saving a time PUTs logged_at and nothing else',
+      _etPuts.length === 1 && Object.keys(_etPuts[0].body).length === 1 &&
+      typeof _etPuts[0].body.logged_at === 'string',
+      JSON.stringify(_etPuts[0] && _etPuts[0].body));
+    // Built on the DOSE's date. Stamping it onto today's date would move the dose to
+    // another day in every reader that trusts the timestamp.
+    check('  …on the day the dose belongs to, not today',
+      _etPuts[0].body.logged_at.slice(0, 16) === '2026-09-14T19:05',
+      _etPuts[0].body.logged_at);
+    check('  …and the row shows it immediately',
+      G._injClockLabel(_row().logged_at) === '19:05', String(_row().logged_at));
+
+    await G._setInjectionTime('et1', '');
+    check('clearing a time sends an explicit null, which the backend now honours',
+      _etPuts.length === 2 && 'logged_at' in _etPuts[1].body &&
+      _etPuts[1].body.logged_at === null, JSON.stringify(_etPuts[1].body));
+
+    // The edit must never touch `logged`. A dose does not become untaken because its
+    // time was wrong, and a PUT that carried logged:false would untake it.
+    check('no edit path ever sends a logged flag',
+      _etPuts.every(p => !('logged' in p.body)));
+
+    _row().logged_at = '2026-09-14T08:42:00+03:00';
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G._setInjectionTime('et1', '23:59');
+    check('a failed save puts the old time back rather than keeping the new one',
+      _row().logged_at === '2026-09-14T08:42:00+03:00', String(_row().logged_at));
+
+    G.fetch = _etSave.f; G._injectionsCache = _etSave.c; G._viewDate = _etSave.vd;
+  })();
+
+  // Only the TIME is editable. Offering the date here would be offering to move the
+  // dose to another day — a different operation, with consequences for the schedule,
+  // the curve and the overlap rules.
+  check('the editor offers a time and not a date',
+    /type="time" id=|id="inj-time-input" type="time"/.test(_etJs) &&
+    !/inj-date-input|type="date"/.test(_etJs.slice(_etJs.indexOf('function openInjectionTimeEditor'),
+                                                  _etJs.indexOf('async function saveInjectionTime'))));
+  // iOS gives no way to empty a native time wheel, so clearing needs its own button.
+  check('  …and a way to clear a time that should not be there',
+    /function clearInjectionTime/.test(_etJs) && /CLEAR TIME/.test(_etJs));
+  // The field is read before the close removes it from the document.
+  check('  …reading the field before the modal is torn down',
+    /var v=inp\?String\(inp\.value\|\|''\):'';\s*\n\s*_closeInjectionTimeEditor\(\);/.test(_etJs));
+  // The dotted rule is the only thing telling the user the cell is tappable.
+  const _cssSrc = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+  check('  …and the tappable cell is marked as such in the stylesheet',
+    /\.check-time-set\{[^}]*cursor:pointer/.test(_cssSrc));
+
+  // Still true after all of the above: the curve reads days, not clocks.
+  const _tcJs2 = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('editing a time does not give T-Calc sub-day resolution',
+    !/logged_at/.test(_tcJs2));
+}
+
+
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
 // as its USP." So a dose recommendation must never render without (a) how well
@@ -6431,6 +6726,447 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
   }
 
 
+// ── An injection is not free ─────────────────────────────────────────────────
+// Henrik, 2026-09-16, on a plan asking for a 25 mg jab every day: "I do loose oil since
+// the syringe and needle head still contains some oil that gets wasted. Also cost of
+// syringes and needles becomes wasteful."
+//
+// The ranking could not see any of that. It scored target-holding, then ripple, and used
+// injection count ONLY to break a tie in both — which for a 4.5-day ester never happens:
+// daily enanthate ripples ~7% against ~14% every-2-days, a gap far outside the 0.03 tie
+// band, so daily won on ripple outright and the count key never fired. Seven injections a
+// week cost nothing to propose.
+console.log('\n── The price of an injection ──────────────────────────────');
+{
+  const ih=[]; const il=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<60;i++){const d=new Date(il.getTime()-i*2*86400000);
+    ih.push({compId:'nebido',doseMg:'100',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const solve=(extra)=>G.tcSolveTransition(Object.assign({history:ih,incomingId:'enanthate',
+    startDate:'2026-08-27',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:12}, extra||{}));
+  const perWeek=(r)=>{ if(!r||!r.best) return null; const c=r.best.cadence||{};
+    if(c.dithered) return 7;
+    if(c.perWeek) return c.perWeek;
+    if(c.days&&c.days.length) return c.days.length;
+    if(c.freqVal>0) return 7/(c.freqUnit==='weeks'?c.freqVal*7:c.freqVal);
+    return 3.5; };
+
+  // ⚠️ A PRICE, NOT A VETO. It is compared only after worstSettled has decided, so it
+  // can never buy fewer injections at the cost of missing the target.
+  check('an injection costs ripple, and the price is small',
+    G._TC_INJ_COST > 0 && G._TC_INJ_COST <= 0.05, String(G._TC_INJ_COST));
+
+  // The term is wired and directional: charge a lot for injections and the solver
+  // reaches for a longer interval. Asserted as a comparison rather than against a
+  // named cadence — which cadence wins depends on the ester, and the claim here is
+  // only that the price moves the answer in the direction of fewer jabs.
+  const free=solve({injCost:0}), dear=solve({injCost:0.5});
+  check('pricing injections moves the solver toward fewer of them',
+    !!(free&&dear&&free.best&&dear.best) && perWeek(dear)<=perWeek(free),
+    (free&&free.best?free.best.cadence.label:'?')+' -> '+(dear&&dear.best?dear.best.cadence.label:'?'));
+
+  // The hard cap. "At most 3 a week" is not "prefer 3" — a capped candidate is removed,
+  // never discounted, or a high-scoring daily plan would simply outscore the limit.
+  const capped=solve({maxInjPerWeek:3});
+  check('a cap on injections per week is obeyed, not merely preferred',
+    !!(capped&&capped.best) && perWeek(capped)<=3+1e-9,
+    capped&&capped.best?(capped.best.cadence.label+' = '+perWeek(capped)+'/wk'):'no result');
+  check('  …and every alternative offered respects it too',
+    !!(capped) && (capped.alternatives||[]).every(r=>{
+      const c=r.cadence||{};
+      const pw=c.dithered?7:(c.perWeek||(c.days&&c.days.length)||(c.freqVal>0?7/(c.freqUnit==='weeks'?c.freqVal*7:c.freqVal):3.5));
+      return pw<=3+1e-9;
+    }));
+
+  // ⚠️ A CAP NOTHING CAN MEET IS NOT A REASON TO ANSWER NOTHING. Refusing outright, or
+  // obeying silently and returning an empty list, are both worse than saying so.
+  const impossible=solve({maxInjPerWeek:0.01});
+  check('a cap no schedule can meet is dropped and said out loud',
+    !!(impossible&&impossible.best) &&
+    (impossible.notes||[]).some(n=>/was not applied/.test(n)),
+    impossible?JSON.stringify((impossible.notes||[]).slice(0,1)):'no result');
+
+  // The bill is shown. Without this the frequency is a number on a card and the trade
+  // behind it — the whole of the question that prompted this — stays invisible.
+  check('the plan says how often it asks you to inject',
+    (free.notes||[]).some(n=>/injections a week/.test(n)) ||
+    (free.alternatives||[]).length===0,
+    JSON.stringify((free.notes||[]).filter(n=>/injection/.test(n)).slice(0,1)));
+
+  // ⚠️ THE PRICE MAY NEVER BUY A PLAN THAT MISSES THE TARGET.
+  // This is the guard that broke first and it broke twice. Charging for injections let
+  // the solver reach past every-2-days to every-3-days, which held 1267-1361 against a
+  // 1400 target and won on being cheaper to administer — a 9.5% miss bought with
+  // convenience. The first gate measured worstSettled, which folds RIPPLE in and so
+  // made every interval longer than daily inadmissible by construction; the second
+  // measures where the weekly means SIT, which is the actual claim. And it has to be
+  // re-checked after refinement, because the ranking runs on the cheap 4-iteration
+  // pass and the winner is re-solved at 12 before being accepted.
+  const holds=(r)=>{
+    if(!r||!r.best) return false;
+    const wk=(r.best.weekly||[]).slice(r.best.settleWeeks||0).map(x=>x.mean);
+    if(!wk.length) return false;
+    return Math.min(...wk)>=1400*0.94 && Math.max(...wk)<=1400*1.06;
+  };
+  check('even a steep injection price cannot buy a plan that misses target',
+    holds(dear), dear&&dear.best
+      ? (dear.best.cadence.label+' '+(dear.best.weekly||[]).slice(dear.best.settleWeeks||0)
+          .map(x=>Math.round(x.mean)).join(','))
+      : 'no result');
+  check('  …nor can a cap on injections per week',
+    holds(capped), capped&&capped.best?capped.best.cadence.label:'no result');
+
+  // The default must not have quietly become the cap: no cap is still no cap.
+  check('no cap is the default, and it excludes nothing',
+    !(solve().notes||[]).some(n=>/were excluded for needing/.test(n)));
+
+  // ── THE SMALLEST DRAW WORTH SCHEDULING ───────────────────────────────────
+  // Henrik, 2026-09-16: "Also set min injection to 0,1ml." Below about a tenth of a
+  // millilitre the syringe stops being the instrument the plan assumes: dead space is
+  // ~0.07-0.10 ml, so the hub keeps more than the muscle gets.
+  const drawOf=(r)=>{
+    if(!r||!r.best) return null;
+    const d=(r.best.doses||[]).filter(x=>x>0);
+    return d.length?d[d.length-1]:null;
+  };
+  // ⚠️ MET BY INJECTING LESS OFTEN, NEVER BY ROUNDING THE DOSE UP. Rounding 0.06 ml to
+  // 0.1 would be a 67% overdose applied to satisfy a convenience rule.
+  const floored=solve({minMl:0.2, concMgPerMl:250});
+  check('a draw floor is honoured by the schedule that wins',
+    floored && floored.best && drawOf(floored)>=50-1e-9,
+    floored&&floored.best?(drawOf(floored)+' mg = '+(drawOf(floored)/250)+' ml'):'no result');
+  check('  …and it holds the target rather than rounding a dose up to clear the floor',
+    (function(){
+      if(!floored||!floored.best) return false;
+      const wk=(floored.best.weekly||[]).slice(floored.best.settleWeeks||0).map(x=>x.mean);
+      return wk.length && Math.min(...wk)>=1400*0.90 && Math.max(...wk)<=1400*1.10;
+    })(),
+    floored&&floored.best?(floored.best.weekly||[]).slice(floored.best.settleWeeks||0)
+      .map(x=>Math.round(x.mean)).join(','):'no result');
+  // A floor nothing can meet is dropped and said out loud, same as the cap.
+  const impossibleFloor=solve({minMl:5});
+  check('a draw floor no schedule can meet is dropped and said out loud',
+    !!(impossibleFloor&&impossibleFloor.best) &&
+    (impossibleFloor.notes||[]).some(n=>/floor was not applied/.test(n)),
+    impossibleFloor?JSON.stringify((impossibleFloor.notes||[]).slice(0,1)):'no result');
+  // Explicitly asking for no floor must actually mean none.
+  check('  …and no floor can be asked for explicitly',
+    !(solve({minMl:0}).notes||[]).some(n=>/asking for a draw under/.test(n)));
+  check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
+    String(G._TC_MIN_ML));
+
+  // ── THE TEMPORARY REPAIR TOOL ────────────────────────────────────────────
+  // Henrik, 2026-09-16: "I am on my phone, so add this as a temporary feature under
+  // settings." The CLI repair script is no use from a phone; this drives the same
+  // reconstruction (backend #276) from Settings ▸ Data.
+  {
+    const _rpSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+    // ⚠️ THE SCAN MUST BE A DRY RUN. It is the step that shows the list to be checked
+    // against memory, and a scan that wrote would make the check pointless.
+    check('the repair scan is a dry run and the restore is a separate press',
+      /_repairCall\(true\)/.test(_rpSrc) && /_repairCall\(false,/.test(_rpSrc) &&
+      /function repairScanLostDoses/.test(_rpSrc) &&
+      /function repairApplyGroup/.test(_rpSrc));
+    check('  …and writing asks first', /repairApplyGroup[\s\S]{0,500}?confirm\(/.test(_rpSrc));
+    // ⚠️ ONE BUTTON PER GROUP, NEVER ONE FOR EVERYTHING.
+    // The first cut listed every row it found and offered a single RESTORE for all of
+    // them. On a real record that is dozens of rows across several retired protocols,
+    // and only one group had evidence behind it. "Scheduled once and later pruned" is
+    // not "administered" — most of a scan is superseded plan, which is exactly what
+    // SHOULD have been pruned, and restoring it as taken invents doses.
+    check('  …restoring a group at a time, not all of it at once',
+      /function _repairGroupCard\(g\)/.test(_rpSrc) &&
+      /repairApplyGroup\(g, b\)/.test(_rpSrc) &&
+      !/function repairApplyLostDoses/.test(_rpSrc));
+    check('  …naming the compound and slot in the write',
+      /compoundId: g\.compound_id, slot: g\.time_of_day/.test(_rpSrc));
+    // The reader is told what most of the list actually is, or the count reads as loss.
+    check('  …and says most of what it found is old plans, not missed doses',
+      /MOST OF THESE ARE OLD PLANS/.test(_rpSrc));
+    // ⚠️ AND THE REQUEST ITSELF LIVES IN inj-writer.js. The first cut built it in
+    // index.html and the write-invariant test caught it on the first run — one module
+    // owns every write to the injection record. Widening the exception list would have
+    // been the easy answer and the wrong one.
+    const _iwSrc4 = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+    check('  …with the request in inj-writer, not the page',
+      /async function injRepairPruned\(/.test(_iwSrc4) &&
+      /injRepairPruned\(!!dry/.test(_rpSrc) &&
+      !/fetch\(AGENT_URL \+ '\/injections\/repair-pruned'/.test(_rpSrc));
+    // Scoped by the session, so there is no app or namespace argument to get wrong from
+    // a phone — staging repairs staging, prod repairs prod.
+    check('  …with no namespace to pick, because the session decides it',
+      /'\/injections\/repair-pruned'/.test(_iwSrc4) &&
+      !/repair-pruned[^\n]*app=/.test(_iwSrc4));
+    // The record changed under every view that reads it.
+    check('  …and a restore refreshes the views that read the record',
+      /repairApplyGroup[\s\S]{0,1400}?refreshInjectionsCache[\s\S]{0,300}?buildToday/.test(_rpSrc));
+    // ⚠️ TEMPORARY, AND SAYING SO IN BOTH PLACES. A standing "restore my data" button
+    // invites being pressed at random; this one is for one historical incident.
+    check('  …and is labelled temporary in the UI and marked for deletion in the source',
+      /Temporary \u2014 for the 2026-09 prune|Temporary — for the 2026-09 prune/.test(_rpSrc) &&
+      /DELETE THIS WHEN THE REPAIR IS DONE/.test(_rpSrc));
+    // Rows come from stored records and are rendered as text, not markup — the same rule
+    // the diagnostics card follows, and for the same reason.
+    // Rows come from stored records and are rendered as text, not markup — the same rule
+    // the diagnostics card follows, and for the same reason.
+    //
+    // ⚠️ ASSERTED ON THE FUNCTION BODY, NOT A CHARACTER WINDOW. The first cut matched
+    // `_repairGroupCard[\s\S]{0,1600}?…`, which both under- and over-reaches: the body is
+    // longer than the window, and the window spills into the next function, so the
+    // no-innerHTML half was reading a different function's markup. A distance is not a
+    // scope.
+    const _rgc = (function(){
+      const i = _rpSrc.indexOf('function _repairGroupCard(g){');
+      if (i < 0) return '';
+      const j = _rpSrc.indexOf('\nfunction ', i + 1);
+      return _rpSrc.slice(i, j < 0 ? _rpSrc.length : j);
+    })();
+    check('  …rendering restored rows as text rather than markup',
+      _rgc.length > 0 && /dates\.textContent/.test(_rgc) && !/\.innerHTML/.test(_rgc),
+      _rgc.length ? 'body ' + _rgc.length + ' chars' : 'function not found');
+  }
+
+  // ── SAVING WARNS BEFORE IT REPLACES A DOSE YOU MAY HAVE TAKEN ────────────
+  // Henrik, 2026-09-16, after 19 past PM HGH rows were pruned by a protocol rewrite:
+  // "Add a warning that saving a new protocol might prune unchecked doses."
+  if (typeof G._injAtRiskOnSave === 'function') {
+    const _wSave = {c:G._injectionsCache, cf:G.confirm, us:G._userStacks};
+    // ⚠️ NOT G.NOW. `NOW` is `const NOW=new Date()` in index.html, and the suite only
+    // rewrites a named list of consts to var — so NOW stays a lexical binding the
+    // sandbox never exposes, G.NOW is undefined, and new Date(undefined) is an Invalid
+    // Date whose dateKey is "NaN-NaN-NaN". The fixture keys silently stopped matching
+    // the real dates the app computes, and the helper correctly found nothing in them.
+    const t0=new Date(); t0.setHours(0,0,0,0);
+    const today=G.dateKey(t0), yest=G.dateKey(new Date(t0.getTime()-86400000));
+    const older=G.dateKey(new Date(t0.getTime()-5*86400000));
+    const soon=G.dateKey(new Date(t0.getTime()+3*86400000));
+    const stack={id:'wp1', name:'P', cycle_start:older};
+    const cid=G._stackCycleId(stack);
+
+    G._injectionsCache={};
+    G._injectionsCache[today]=[
+      {id:'w1',cycle_id:cid,date:today,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true},
+      {id:'w2',cycle_id:cid,date:today,compound_id:'hgh',compound_name:'HGH',time_of_day:'AM',logged:true,active:true}];
+    G._injectionsCache[yest]=[
+      {id:'w3',cycle_id:cid,date:yest,compound_id:'glow',compound_name:'Glow',time_of_day:'PM',logged:false,active:true}];
+    G._injectionsCache[older]=[
+      {id:'w4',cycle_id:cid,date:older,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+    G._injectionsCache[soon]=[
+      {id:'w5',cycle_id:cid,date:soon,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+
+    const at=G._injAtRiskOnSave(stack).map(r=>r.date+'/'+r.name);
+    check('the save warning counts unchecked doses from today and yesterday',
+      at.length===2 && at.some(x=>x.startsWith(today)) && at.some(x=>x.startsWith(yest)),
+      at.join(','));
+    // ⚠️ NOT THE FORWARD PLAN. A 13-week protocol has ninety unchecked doses in it by
+    // definition — they ARE the plan, and replacing them is what saving means. A dialog
+    // announcing that on every save is noise, and noise gets clicked through.
+    check('  …and not the forward plan, which is what saving is for',
+      !at.some(x=>x.startsWith(soon)), at.join(','));
+    // Past rows are safe already (backend #274), so warning about them would be a lie.
+    check('  …nor rows further back, which the backend no longer prunes',
+      !at.some(x=>x.startsWith(older)), at.join(','));
+    check('  …and never a dose already ticked',
+      !G._injAtRiskOnSave(stack).some(r=>r.name==='HGH'&&r.slot==='AM'));
+    // Another protocol's doses are not this save's business.
+    G._injectionsCache[today].push({id:'w6',cycle_id:'other',date:today,compound_id:'hgh',
+      compound_name:'HGH',time_of_day:'MID',logged:false,active:true});
+    check('  …and only this protocol\'s own rows',
+      G._injAtRiskOnSave(stack).length===2);
+
+    // The dialog decides whether the save proceeds — and declining must stop it.
+    let asked=0;
+    G.confirm=(msg)=>{ asked++; return false; };
+    check('a save with doses at risk asks before rewriting them',
+      G.confirmSavePrune(stack)===false && asked===1);
+    G.confirm=()=>true;
+    check('  …and proceeds when confirmed', G.confirmSavePrune(stack)===true);
+    // Nothing at risk must not interrupt an ordinary save.
+    asked=0; G.confirm=()=>{ asked++; return false; };
+    G._injectionsCache={};
+    G._injectionsCache[soon]=[{id:'w7',cycle_id:cid,date:soon,compound_id:'hgh',
+      compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+    check('  …and an ordinary save is never interrupted',
+      G.confirmSavePrune(stack)===true && asked===0, 'asked ' + asked);
+
+    // ⚠️ THE SAVE IS GATED ON IT, or the warning is decoration.
+    const _wpSrc=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …and both protocol-save paths are gated on the answer',
+      (_wpSrc.match(/confirmSavePrune\(/g)||[]).length>=3);
+
+    G._injectionsCache=_wSave.c; G.confirm=_wSave.cf; G._userStacks=_wSave.us;
+  }
+
+  // ── A CAP COUNTS THE DOSES ALREADY TAKEN ─────────────────────────────────
+  // Henrik, 2026-09-16: "Still setting injections to max 3 per week adds 3 more this
+  // week even though I already done 2." The cap chose the cadence and nothing else, so
+  // a plan applied mid-week laid its full opening quota on top of what was already in
+  // the record. The steady state was right all along; only the opening double-counted.
+  {
+    const ms=(d)=>new Date(d+'T12:00:00').getTime();
+    const dk=(d)=>d.toISOString().slice(0,10);
+    const every2=[];
+    for(let i=0;i<10;i++){const t=new Date(ms('2026-09-17')); t.setDate(t.getDate()+i*2); every2.push(t);}
+
+    // Nothing taken: a cap of 3 leaves an every-2-days grid alone for the first week
+    // (17, 19, 21 is three in seven days) and only bites after.
+    const clean=G._injCapTrim(every2, [], 3).map(dk);
+    check('with nothing already taken the cap leaves the opening week alone',
+      clean.slice(0,3).join(',')==='2026-09-17,2026-09-19,2026-09-21', clean.slice(0,4).join(','));
+
+    // The reported case: two taken on the 15th and 16th.
+    const taken=[ms('2026-09-15'), ms('2026-09-16')];
+    const trimmed=G._injCapTrim(every2, taken, 3).map(dk);
+    check('two already taken leave room for one more, not three',
+      trimmed[0]==='2026-09-17' && trimmed[1]!=='2026-09-19',
+      trimmed.slice(0,4).join(','));
+    // ⚠️ NO 7-DAY WINDOW MAY EXCEED THE CAP, counting the taken ones. Asserted directly
+    // rather than by naming the dates it happens to pick, so the rule is what is pinned.
+    check('  …and no 7-day window ever holds more than the cap',
+      (function(){
+        const all=taken.concat(trimmed.map(d=>ms(d))).sort((a,b)=>a-b);
+        for(const t of all){
+          if(all.filter(x=>x>=t-6*86400000&&x<=t).length>3) return false;
+        }
+        return true;
+      })(), trimmed.join(','));
+    // It thins, it never invents: every surviving date came from the input grid.
+    check('  …and it only ever removes days, never adds them',
+      trimmed.every(d=>every2.map(dk).indexOf(d)>=0) && trimmed.length<=every2.length);
+    check('  …while no cap leaves the grid untouched',
+      G._injCapTrim(every2, taken, 0).length===every2.length);
+
+    // ⚠️ ONE RULE, BOTH SIDES. Trimming in the generator alone would write rows the
+    // solver never scored — the plan and the curve describing different schedules.
+    const _tcSrc3=fs.readFileSync(path.join(__dirname,'../tab-tcalc.js'),'utf8');
+    const _stSrc3=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('the solver and the generator trim through the same function',
+      /function _injCapTrim\(/.test(_tcSrc3) &&
+      /_injCapTrim\(out, opts\.takenMs, opts\.cap\)/.test(_tcSrc3) &&
+      /_injCapTrim\(_cand,_taken,_capW\)/.test(_stSrc3) &&
+      !/function _injCapTrim\(/.test(_stSrc3));
+    check('  …and the cap travels with the plan so the generator can honour it',
+      /comp\.max_inj_week=String\(_cap\)/.test(_stSrc3) &&
+      /parseDec\(c\.max_inj_week\)/.test(_stSrc3));
+  }
+}
+
+// ── The loading dose ─────────────────────────────────────────────────────────
+// Henrik, 2026-09-16: "I am currently at 1100pmol/l and raising to 2200. Why is the
+// initial raise done with daily micro injections? Wouldn't a single bigger just bring
+// me to the new level in days instead of weeks?"
+//
+// It would, and the app was refusing for the wrong reason. Both iterative solvers carry
+// a note reading "NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY … that is the week-0
+// loading spike and the overshoot behind it". Correct about its own bug — the old code
+// divided week 0's whole gap by week 0's sensitivity, demanding a dose big enough to
+// close the gap INSIDE week 0, which is several times a loading dose — but the fix
+// clamped loading off entirely rather than computing it properly, and nothing
+// downstream could tell the two calculations apart.
+console.log('\n── The loading dose ───────────────────────────────────────');
+{
+  // A TAIL LIGHT ENOUGH TO LEAVE A GAP. With a heavy outgoing tail there is nothing to
+  // load — the level already opens at target, which is its own assertion further down.
+  const lh=[]; const ll=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<6;i++){const d=new Date(ll.getTime()-i*14*86400000);
+    lh.push({compId:'nebido',doseMg:'250',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const lr=G.tcSolveTransition({history:lh,incomingId:'enanthate',startDate:'2026-08-27',
+    targetPmol:2200,concMgPerMl:250,stepMl:0.05,weeks:12});
+  const L=lr&&lr.loading;
+
+  check('a solve with a real opening gap reports a loading dose', !!(L&&L.mg>0),
+    L?JSON.stringify(L):'none');
+
+  if(L){
+    // ⚠️ IT MUST NOT MAKE THE OVERSHOOT WORSE. This is the entire reason loading was
+    // clamped off in 2026-08 and the guard that version never had. Above the ceiling is
+    // allowed ONLY when the plan without a loading dose overshot further — the ramp
+    // climbing to close the opening gap is itself an overshoot, and replacing a worse
+    // one with a better one is not a breach.
+    check('  …that never overshoots more than the plan without it',
+      L.peakOver<=G._TC_LOAD_TOL*100+0.5 || L.peakOver<=L.peakOverWithout+0.5,
+      L.peakOver+'% vs '+L.peakOverWithout+'% unloaded');
+    // It holds the target better across the WHOLE plan — arriving sooner and holding
+    // steadier are the same objective, and scoring only the opening would buy a fast
+    // start with a worse tail.
+    check('  …and holds the target closer than the schedule alone',
+      L.missWith<L.missWithout, L.missWith+' vs '+L.missWithout+' pmol/L mean miss');
+    check('  …reaching target no later than without it',
+      L.weeksWithout===0 || (L.weeksWith>0 && L.weeksWith<=L.weeksWithout),
+      L.weeksWith+' vs '+L.weeksWithout);
+    // ⚠️ ONE BIGGER INJECTION, NOT AN EXTRA ONE.
+    check('  …carried by the first dose rather than added beside it',
+      L.firstDoseMg>L.maintenanceMg &&
+      Math.abs(L.firstDoseMg-(L.maintenanceMg+L.mg))<0.2,
+      L.maintenanceMg+'+'+L.mg+'='+L.firstDoseMg);
+    // BOUNDED BY PHYSIOLOGY. Filling a depot to its steady-state contents is
+    // (mg/day)/k; far past that is the old overshoot returning by another route.
+    check('  …and sized like a depot fill, not a spike', (function(){
+      const wk=lr.best.weekly||[];
+      const settled=wk.length?wk[wk.length-1]:null;
+      if(!settled) return false;
+      const perDay=(settled.mg||0)*((lr.best.cadence||{}).perWeek||7)/7;
+      return L.mg<=(perDay*4.5/Math.LN2)*2.2;
+    })(), L.mg+' mg');
+    check('  …and is stated in the plan notes',
+      (lr.notes||[]).some(n=>/Loading dose/.test(n)));
+    // ⚠️ THE RAMP SHOWN MUST BE THE ONE THAT ASSUMES THE LOADING DOSE.
+    // Displaying a schedule solved for a gap the front-load has already closed, and
+    // then telling the user to add the front-load, is precisely the overshoot this
+    // feature exists to avoid. The plan is re-solved around the dose and replaces it.
+    check('  …and the schedule shown was re-solved around it', (function(){
+      const wk=(lr.best.weekly||[]).map(x=>x.mean);
+      if(!wk.length) return false;
+      return wk[0]>=2200*0.90;        // opens at target, not climbing toward it
+    })(), (lr.best.weekly||[]).slice(0,4).map(x=>Math.round(x.mean)).join(','));
+  }
+
+  // ⚠️ NO FRONT-LOAD WHERE THERE IS NOTHING TO LOAD. A heavy outgoing tail already
+  // holds the level; a bigger first needle for nothing is not an improvement.
+  const heavy=[]; const hl0=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<60;i++){const d=new Date(hl0.getTime()-i*2*86400000);
+    heavy.push({compId:'nebido',doseMg:'100',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const flat=G.tcSolveTransition({history:heavy,incomingId:'nebido',startDate:'2026-08-27',
+    targetPmol:700,concMgPerMl:250,stepMl:0.05,weeks:12});
+  check('a plan that already opens at or above target gets no loading dose',
+    !flat||!flat.loading||!(flat.loading.mg>0),
+    flat&&flat.loading?JSON.stringify(flat.loading):'none');
+
+  // ── It reaches the record as ONE bigger first injection ───────────────────
+  // Stored as a plain mg on the compound, applied by the generator to the compound's
+  // first scheduled day.
+  {
+    const gen=(c,extra)=>G._genInjBatches(Object.assign({cycle_start:'2026-09-01',
+      cycle_length:4, trt:{enabled:true,compounds:[c]}}, extra||{}),'cyc-load')
+      .filter(b=>b.compound_id===c.id).flatMap(b=>b.entries);
+    const comp={id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+                cadence:'interval',freqVal:2,freqUnit:'days',load_mg:'150'};
+    const rows=gen(comp);
+    check('the loading dose lands on the first scheduled injection',
+      rows.length>1 && parseFloat(rows[0].dose)===200 && parseFloat(rows[1].dose)===50,
+      rows.slice(0,3).map(r=>r.date+':'+r.dose).join(' '));
+    check('  …and on no other',
+      rows.slice(1).every(r=>parseFloat(r.dose)===50),
+      rows.map(r=>r.dose).join(','));
+    // ⚠️ A FORWARD REGENERATION MUST NOT FRONT-LOAD AGAIN. The first day is computed
+    // from the PROTOCOL start, never from where the rewrite resumes — otherwise every
+    // edit would add a second loading dose on whatever day it happened to restart.
+    const later=G._genInjBatches({cycle_start:'2026-09-01',cycle_length:4,
+      trt:{enabled:true,compounds:[comp]}},'cyc-load',new Date('2026-09-10T12:00:00'))
+      .filter(b=>b.compound_id==='enanthate').flatMap(b=>b.entries);
+    check('  …and a regeneration from mid-plan does not load a second time',
+      later.every(r=>parseFloat(r.dose)===50), later.map(r=>r.date+':'+r.dose).join(' '));
+    // No load_mg is the ordinary case and must be untouched.
+    const plain=gen({id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+                     cadence:'interval',freqVal:2,freqUnit:'days'});
+    check('  …and a compound with no loading dose generates exactly as before',
+      plain.every(r=>parseFloat(r.dose)===50), plain.map(r=>r.dose).join(','));
+  }
+}
+
+
   // ── Typing must not tear out the field being typed into ───────────────────
   // Reported 2026-08-27: "entering a target level hides the keyboard for each
   // character entered". trtSolveSet re-rendered the whole panel from the input's
@@ -6847,25 +7583,41 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     const today=ev('dateKey(NOW)');
     const nextStart=()=>ev('_nextFreeStartDate()');
     const save=ev('_userStacks.slice()');
+    // ⚠️ DATES RELATIVE TO NOW, NEVER LITERALS FOR A PROTOCOL THAT IS STILL RUNNING.
+    // This block was written on 2026-08-28 against Henrik's live protocol — "ending
+    // September 13 … should default to 14 September" — and hardcoded both. On
+    // 2026-09-16 the fixture protocol had finished, `_nextFreeStartDate` correctly
+    // returned today, and two assertions went red on `main` claiming a bug that was
+    // not there. A test that rots on a wall clock reports the calendar, not the code.
+    // The RULE under test is "one day after the last protocol ends, and never into the
+    // past", which has no calendar in it — so neither do the fixtures.
+    const off=(n)=>ev('(function(n){var d=new Date(NOW);d.setDate(d.getDate()+n);return dateKey(d);})('+n+')');
 
     setStacks([]);
     check('with no protocols the default is today', nextStart()===today, nextStart());
-    // The reported case.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'}]);
-    check('  …a protocol ending 13 Sep defaults the next one to 14 Sep',
-      nextStart()==='2026-09-14', nextStart());
+    // The reported case, in the shape it was reported: a protocol still running, whose
+    // last day is a fortnight out, hands the next one the day after.
+    setStacks([{id:'p1',cycle_start:off(-90),end_date:off(14)}]);
+    check('  …a protocol ending in a fortnight defaults the next one to the day after',
+      nextStart()===off(15), nextStart());
     // An end derived from cycle_length counts too, not just an explicit end_date.
-    setStacks([{id:'p1',cycle_start:'2026-08-28',cycle_length:12}]);
+    // 12 weeks from a week ago = 77 days out.
+    setStacks([{id:'p1',cycle_start:off(-7),cycle_length:12}]);
     check('  …a length-derived end counts the same as an explicit one',
-      nextStart()==='2026-11-21', nextStart());
+      nextStart()===off(78), nextStart());
     // ⚠️ NEVER INTO THE PAST. A finished protocol must not drag the default backwards.
-    setStacks([{id:'p1',cycle_start:'2026-01-01',end_date:'2026-03-01'}]);
+    // Both dates are behind NOW by construction, so this one cannot rot forward.
+    setStacks([{id:'p1',cycle_start:off(-260),end_date:off(-200)}]);
     check('  …but a protocol that already ended yields today', nextStart()===today, nextStart());
+    // …including one that ended yesterday, the boundary the rule turns on.
+    setStacks([{id:'p1',cycle_start:off(-60),end_date:off(-1)}]);
+    check('  …and one that ended yesterday yields today, not yesterday+1',
+      nextStart()===today, nextStart());
     // The protocol being created has no cycle_start, so it contributes no end date and
     // cannot push its own default forward.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'},{id:'new'}]);
+    setStacks([{id:'p1',cycle_start:off(-90),end_date:off(14)},{id:'new'}]);
     check('  …and the protocol being created does not count itself',
-      nextStart()==='2026-09-14', nextStart());
+      nextStart()===off(15), nextStart());
 
     setStacks(save);
     check('  …and the wizard first-injection follows the same default',
@@ -13767,6 +14519,175 @@ if (typeof G._labDrawStatus === 'function') {
   check('  …both going through the same recorder', /async function logBloodDraw\(dateStr\)/.test(_ldSrc) &&
     /async function logBloodDrawFromToday/.test(_ldSrc));
 
+  // ── ADDING RESULTS FILLS IN THE DRAW, IT DOES NOT MAKE A SECOND TEST ──────
+  // Reported 2026-09-16, with a screenshot: "I added results but app kept the Draw
+  // waiting for results as well as the added results" — 15 Sep listed twice, one row
+  // reading DRAWN and one carrying the results.
+  //
+  // Both surfaces have to answer "is there already an entry for this day", and they
+  // answered it in different places: LOG DRAW refused a second tap, the ADD sheet did
+  // not look at all. Beyond the duplicate in the list, two rows on one date give the
+  // free-T curve two candidate anchors for one measurement — and the pending one has no
+  // values, so which wins is decided by ordering rather than by data.
+  check('one helper decides whether a date already has a blood test',
+    /function _labEntryOnDate\(d\)/.test(_ldSrc) &&
+    (_ldSrc.match(/_labEntryOnDate\(/g) || []).length >= 3);
+  check('  …and the draw recorder asks it rather than filtering its own',
+    /var existing = _labEntryOnDate\(d\);/.test(_ldSrc));
+
+  if (typeof G._labConfirmAdd === 'function') {
+    // ⚠️ ASSERTED SYNCHRONOUSLY, AND THIS BLOCK CANNOT `await`.
+    // It sits in the suite's synchronous section, so there is no await available here —
+    // and none is needed: _labConfirmAdd builds the entry and ISSUES the request before
+    // its first await, so the stub has recorded the call by the time the promise is
+    // returned. The continuation (refresh, re-render) is what the promise is for and is
+    // not what is under test. .catch absorbs it so a floating rejection cannot take the
+    // run down after the stubs are put back.
+    const _caSave = {f:G.fetch, bw:G._tcBwEntries, add:G._labAdd, al:G.alert,
+                     fetchBw:G._tcFetchBwEntries, bl:G.buildLabs, close:G._labCloseAddSheet};
+    const _sent = [];
+    G.alert = () => {};
+    G._tcFetchBwEntries = async () => {};
+    G.buildLabs = () => {};
+    G._labCloseAddSheet = () => {};
+    G.fetch = async (url, opt) => {
+      _sent.push({url:String(url), method:(opt||{}).method,
+                  body:(opt&&opt.body)?JSON.parse(opt.body):null});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    const _run = (entries, d) => {
+      _sent.length = 0;
+      G._tcBwEntries = entries;
+      G._labAdd = {date:d, dose:'', values:{free_t:{value:'1180', unit:''}}};
+      const p = G._labConfirmAdd();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+      return _sent.map(x => x.method + ' ' + x.url).join(' | ');
+    };
+
+    // A draw is pending on that date → fill it in. This is the reported bug.
+    let _got = _run([{id:'draw-1', date:'2026-09-15'}], '2026-09-15');
+    check('adding results to a logged draw updates it instead of creating a second row',
+      _sent.length === 1 && _sent[0].method === 'PUT' && /\/bloodwork\/draw-1$/.test(_sent[0].url),
+      _got);
+    check('  …carrying the results into that same row',
+      !!(_sent[0] && _sent[0].body && _sent[0].body.free_t === 1180),
+      JSON.stringify(_sent[0] && _sent[0].body));
+
+    // No entry on that date → an ordinary new test.
+    _got = _run([{id:'other', date:'2026-06-26', free_t:217}], '2026-09-15');
+    check('  …while a date with no draw logged still creates one',
+      _sent.length === 1 && _sent[0].method === 'POST' && /\/bloodwork$/.test(_sent[0].url), _got);
+
+    // ⚠️ ONLY A PENDING ENTRY IS FILLED IN. An entry that already HAS results is a
+    // different situation, and silently overwriting real numbers would be worse than
+    // the duplicate this fixes.
+    _got = _run([{id:'done-1', date:'2026-09-15', free_t:1180,
+                  markers:{free_t:{value:1180}}}], '2026-09-15');
+    check('  …and a date whose results are already in is never overwritten',
+      _sent.length === 1 && _sent[0].method === 'POST', _got);
+
+    // An entry with no id cannot be addressed; fall back rather than PUT to /bloodwork/.
+    _got = _run([{date:'2026-09-15'}], '2026-09-15');
+    check('  …and a draw with no id is posted, not PUT to a missing path',
+      _sent.length === 1 && _sent[0].method === 'POST' && /\/bloodwork$/.test(_sent[0].url), _got);
+
+    G.fetch = _caSave.f; G._tcBwEntries = _caSave.bw; G._labAdd = _caSave.add;
+    G.alert = _caSave.al; G._tcFetchBwEntries = _caSave.fetchBw;
+    G.buildLabs = _caSave.bl; G._labCloseAddSheet = _caSave.close;
+  }
+
+  // ── WHAT WAS ON BOARD AT A DRAW IS DERIVED, NOT TYPED ────────────────────
+  // Henrik, 2026-09-16: "App knows exactly how much testosterone I been taking, and the
+  // current ramp up is impossible for an end user to just say a weekly dosage, its a
+  // combination of slow Test U already injected and the ramp up using Test E. The app
+  // needs to answer this question NOT the user."
+  //
+  // He is right, and the blank proves it: the 15 Sep 2026 draw carried dose_at_bw null,
+  // which is the one field that turns a measurement into a calibration.
+  if (typeof G._tcRateAtDate === 'function') {
+    const _drSave = {hist:G._tcHistory, hs:G._tcHistoryState, c:G._injectionsCache,
+                     us:G._userStacks, ai:G._activeStackIndices, memo:G._TC_RATE_MEMO};
+    // A transition in the shape that prompted this: an undecanoate depot injected weeks
+    // ago, still releasing, with an enanthate schedule ramping under it.
+    const _drD = (o) => { const t=new Date('2026-09-15T12:00:00'); t.setDate(t.getDate()+o);
+      return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+    const _drLog = [];
+    for (let i = 8; i >= 1; i--) _drLog.push({compId:'nebido', doseMg:'250', date:_drD(-i*14)});
+    for (let i = 20; i >= 0; i--) _drLog.push({compId:'enanthate', doseMg:'30', date:_drD(-i)});
+    G._tcHistory = _drLog.map(e => ({compId:e.compId, doseMg:e.doseMg, date:e.date, source:'logged'}));
+    G._tcHistoryState = 'ready';
+    G._injectionsCache = {}; G._userStacks = []; G._activeStackIndices = [];
+    G._TC_RATE_MEMO = null;
+
+    const _r = G._tcRateAtDate('2026-09-15');
+    check('the app computes what was on board at a draw', !!(_r && _r.mgPerDay > 0),
+      _r ? JSON.stringify({mgPerDay:_r.mgPerDay, n:_r.parts.length}) : 'null');
+
+    if (_r && _r.mgPerDay > 0) {
+      // ⚠️ BOTH ESTERS, BECAUSE THAT IS THE WHOLE POINT. A single weekly number is
+      // exactly what cannot be given during a transition.
+      check('  …split across every ester still releasing, not one number',
+        _r.parts.length === 2 &&
+        _r.parts.some(p => /nebido|undecanoate/i.test(p.id + p.label)) &&
+        _r.parts.some(p => /enanth/i.test(p.id + p.label)),
+        _r.parts.map(p => p.label + ' ' + p.pct + '%').join(', '));
+      check('  …whose shares sum to the whole',
+        Math.abs(_r.parts.reduce((a, p) => a + p.mgPerDay, 0) - _r.mgPerDay) < 1e-6);
+      // ⚠️ mg TESTOSTERONE, NOT mg OF ESTER. Undecanoate carries 0.6315 and enanthate
+      // 0.7199 testosterone by mass, so adding their milligrams adds two different
+      // substances. The rate is below the raw ester mg/day for that reason, and a test
+      // that accepted the ester sum would be blessing the error.
+      const _rawMgPerDay = 250/14 + 30;        // what the labels on the vials say
+      check('  …measured as testosterone delivered, not as milligrams of ester',
+        _r.mgPerDay < _rawMgPerDay * 0.85,
+        _r.mgPerDay.toFixed(1) + ' vs ' + _rawMgPerDay.toFixed(1) + ' raw ester mg/day');
+      check('  …and the weekly figure is just that rate times seven',
+        Math.abs(_r.mgPerWeek - _r.mgPerDay * 7) < 1e-6);
+      // Own production is a separate line; folding it in would inflate the denominator
+      // of every dose-response figure computed from this.
+      check('  …with endogenous production reported apart, never counted as dose',
+        _r.endogMgPerDay != null && _r.parts.every(p => p.id !== '__endog__'));
+    }
+
+    // Outside what the record covers is UNKNOWN, which is not the same as zero — a zero
+    // would be read downstream as "measured on no drug" and calibrate against it.
+    check('  …and a date the record does not reach is unknown, not zero',
+      G._tcRateAtDate(_drD(-400)) === null, JSON.stringify(G._tcRateAtDate(_drD(-400))));
+
+    if (typeof G._tcRateLabel === 'function' && _r) {
+      check('the label names the esters rather than hiding them in one figure',
+        /mg\/wk T/.test(G._tcRateLabel(_r)) && /%/.test(G._tcRateLabel(_r)),
+        G._tcRateLabel(_r));
+    }
+    // Labs reads it through one helper, and still falls back to a stored figure for
+    // entries predating this — a draw whose dosing was never logged has nothing to
+    // derive from, and that is the reason the typed field is kept rather than deleted.
+    if (typeof G._labDoseContext === 'function') {
+      G._TC_RATE_MEMO = null; G._tcHistory = []; G._tcHistoryState = 'ready';
+      check('a draw with nothing in the record falls back to the stored figure',
+        G._labDoseContext({date:'2020-01-01', dose_at_bw:150}) === '150 mg/wk',
+        G._labDoseContext({date:'2020-01-01', dose_at_bw:150}));
+    }
+    const _dsSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+    check('the add sheet states what it computed before offering the box',
+      /_labDoseAtDrawHtml\(_labAdd\.date\)/.test(_dsSrc) && /Override \(mg\/wk\)/.test(_dsSrc));
+    // ⚠️ IN PLACE, NEVER A RE-RENDER. Redrawing the sheet from the date field's oninput
+    // tears out the control being used and closes the iOS date picker mid-interaction —
+    // the lesson trtSolveSet already carries.
+    check('  …and changing the date refreshes that panel without redrawing the sheet',
+      /getElementById\('lab-dose-derived'\)/.test(_dsSrc) &&
+      !/function _labSetDate\(v\) \{[\s\S]{0,240}?_labRenderAddSheet/.test(_dsSrc));
+    // The curve and Labs must not be able to disagree about what was on board.
+    const _tcSrc2 = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+    check('  …and the profile reads the derived rate before any typed one',
+      /_dr && _dr\.mgPerDay > 0\)\s*_tcp\.currentDoseMgWk/.test(_tcSrc2) &&
+      /else if \(latest\.dose_at_bw != null\)/.test(_tcSrc2));
+
+    G._tcHistory = _drSave.hist; G._tcHistoryState = _drSave.hs;
+    G._injectionsCache = _drSave.c; G._userStacks = _drSave.us;
+    G._activeStackIndices = _drSave.ai; G._TC_RATE_MEMO = _drSave.memo;
+  }
+
   // ── THE LIST IS TWO LINES PER DRAW, DETAIL BEHIND A TAP ──────────────────
   // "each lab test on a single line (can be two rows but no more) ... Clicking a line
   // opens a detailed view". With 10+ draws and a growing marker set, rendering every
@@ -16416,11 +17337,16 @@ console.log('\n── One writer for injections ──────────�
   check('nothing outside inj-writer.js writes an injection', _offenders.length === 0,
         _offenders.join(' | '));
 
-  // …and the exception is still exactly two ticks, not a door left open.
+  // …and the exception is still exactly the three record-writes, not a door left
+  // open. Each one PUTs a field that describes a dose the user has already taken —
+  // the tick, the Reset Today bulk untick, and the administration-time edit. None of
+  // them POSTs, DELETEs, or otherwise plans. Raise this number only for another
+  // write of that same kind, and name it here.
   const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
   check('  …except Today\'s tick, which records rather than plans',
-    (_todaySrc.match(/method:'PUT'/g) || []).length === 2 &&
-    /body:JSON.stringify\(\{logged:newLogged\}\)/.test(_todaySrc));
+    (_todaySrc.match(/method:'PUT'/g) || []).length === 3 &&
+    /body:JSON.stringify\(\{logged:newLogged,logged_at:_stamp\}\)/.test(_todaySrc) &&
+    /body:JSON.stringify\(\{logged_at:stamp\}\)/.test(_todaySrc));
 
   // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
   // immediately before each call — this block runs after the synchronous suite, and

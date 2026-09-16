@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="protocol-icon.png">
 <link rel="apple-touch-icon" href="protocol-icon.png">
-<title>Henrik's Protocol v1.325</title>
+<title>Henrik's Protocol v1.192</title>
 <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -176,6 +176,7 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Protocol format</span><button id="s-migrate-tier-btn" onclick="migrateProtocolsToCompounds()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Merge tiers</button></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Orphaned doses</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;" id="s-orphan-doses">—</span><button id="s-orphan-btn" onclick="cleanupOrphanDoses()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Clean up</button></span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Local dose logs → backend</span><button id="peptide-sync-btn" onclick="pushAllPeptideToBackend()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Sync</button></div>
+      <div style="padding:12px 16px;border-top:1px solid var(--border);"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span style="font-size:13px;color:var(--muted2)">Repair lost doses<span style="display:block;font-size:10px;color:var(--muted2);opacity:0.75;margin-top:2px">Temporary — for the 2026-09 prune</span></span><button id="repair-scan-btn" onclick="repairScanLostDoses(this)" style="background:var(--surface2);color:var(--accent4);border:1px solid var(--accent4);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit;flex-shrink:0">SCAN</button></div><div id="repair-out" style="margin-top:10px"></div></div>
       </div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
@@ -732,6 +733,112 @@ var _lsDbgKeys=[];
 // and it has to keep working while the backend is unreachable, which is exactly when
 // it matters. A backend-backed error log would be empty in the one case it is for.
 var DIAG_KEY='pep-diag-log', DIAG_MAX=60;
+// ── TEMPORARY: REPAIR THE DOSES A PROTOCOL REWRITE PRUNED ───────────────────
+// ⚠️ DELETE THIS WHEN THE REPAIR IS DONE. It exists for one historical incident and has
+// no business being a permanent feature — a standing "restore my data" button invites
+// being pressed at random. The backend endpoint is idempotent and dry-runs by default,
+// so leaving it a while is safe; leaving it forever is clutter with a write behind it.
+//
+// Background: until 2026-09-16 a protocol rewrite pruned UNLOGGED rows from the plan's
+// start date forward, past ones included. An unlogged row means one of two things the
+// record cannot tell apart — not taken, or taken and not ticked yet — so 19 PM HGH doses
+// Henrik had taken were deleted when the protocol's HGH changed. The rule is fixed
+// (backend #274); this recovers what was already gone.
+//
+// The scan is a DRY RUN and writes nothing. It shows every row it would restore, and
+// which backup each came from, so the list can be checked against memory before anything
+// is written. Restoring needs a second, explicit press.
+// The request itself lives in inj-writer.js — one module owns every write to the
+// injection record, and the suite enforces it. This is the UI around it.
+async function _repairCall(dry, group){
+  if(typeof injRepairPruned !== 'function') return null;
+  return await injRepairPruned(!!dry, group || {}, 'repairPruned');
+}
+// ⚠️ THE SCAN IS A SURVEY, NOT A SHOPPING LIST WITH ONE BUTTON.
+// The first cut listed every row it found and offered a single RESTORE for all of them.
+// On a real record that is dozens of rows across several retired protocols, and only one
+// group of them had any evidence behind it. "Scheduled once and later pruned" is not
+// "administered": most of what a scan turns up is a superseded plan, which is exactly
+// what SHOULD have been pruned. Restoring it as taken would put doses in the record that
+// never went into anyone, and the free-T curve reads that record.
+//
+// So each GROUP — one compound, one slot — gets its own button and its own date range,
+// and the reader decides group by group. A count alone is not a decision; "19 HGH in the
+// evening slot, 6 Aug to 13 Sep" is a claim that can be checked against memory, and
+// memory is the only thing that can tell a lost dose from a retired plan.
+function _repairGroupCard(g){
+  var card = document.createElement('div');
+  card.style.cssText = 'background:var(--surface2);border:1px solid var(--border);'
+    + 'border-radius:8px;padding:10px 12px;margin-bottom:8px';
+  var t = document.createElement('div');
+  t.style.cssText = 'font-size:12px;font-weight:700;color:var(--text)';
+  t.textContent = (g.compound_name || g.compound_id) + '  ' + (g.dose||'') + ' ' + (g.unit||'')
+    + (g.time_of_day ? ('  (' + g.time_of_day + ')') : '  (no slot)');
+  card.appendChild(t);
+  var sub = document.createElement('div');
+  sub.style.cssText = 'font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5';
+  sub.textContent = g.count + ' dose' + (g.count===1?'':'s') + ', ' + g.first
+    + (g.first===g.last ? '' : (' \u2192 ' + g.last));
+  card.appendChild(sub);
+  var dates = document.createElement('div');
+  dates.style.cssText = 'font-size:10px;color:var(--muted2);opacity:0.8;margin-top:4px;line-height:1.5';
+  dates.textContent = (g.dates || []).join(', ');
+  card.appendChild(dates);
+  var b = document.createElement('button');
+  b.style.cssText = 'width:100%;margin-top:8px;background:var(--surface);color:var(--accent4);'
+    + 'border:1px solid var(--accent4);border-radius:8px;padding:9px;font-size:11px;'
+    + 'font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit';
+  b.textContent = 'RESTORE THESE ' + g.count + ' AS TAKEN';
+  b.onclick = function(){ repairApplyGroup(g, b); };
+  card.appendChild(b);
+  return card;
+}
+function _repairRender(res){
+  var host = document.getElementById('repair-out');
+  if(!host) return;
+  host.innerHTML = '';
+  if(!res){ host.textContent = 'Could not reach the backend. Nothing was changed.'; return; }
+  var groups = res.groups || [];
+  if(!groups.length){
+    host.innerHTML = '<div style="font-size:12px;color:var(--muted2);line-height:1.5">'
+      + 'Nothing to repair \u2014 every dose your backups hold is already in the record.</div>';
+    return;
+  }
+  var lead = document.createElement('div');
+  lead.style.cssText = 'font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:10px';
+  lead.textContent = res.count + ' dose' + (res.count===1?'':'s') + ' in your backups are not in '
+    + 'the record. MOST OF THESE ARE OLD PLANS, not missed doses \u2014 a protocol that '
+    + 'changed correctly drops the doses it no longer schedules. Restore only a group you '
+    + 'recognise as something you actually took.';
+  host.appendChild(lead);
+  groups.forEach(function(g){ host.appendChild(_repairGroupCard(g)); });
+}
+async function repairScanLostDoses(btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'SCANNING\u2026'; }
+  var res = await _repairCall(true);
+  if(btn){ btn.disabled = false; btn.textContent = 'SCAN'; }
+  _repairRender(res);
+}
+async function repairApplyGroup(g, btn){
+  var label = (g.compound_name || g.compound_id) + (g.time_of_day ? (' ' + g.time_of_day) : '');
+  if(typeof confirm === 'function' && !confirm('Restore ' + g.count + ' ' + label
+      + ' dose(s) as TAKEN?\n\n' + g.first + ' to ' + g.last
+      + '\n\nOnly do this if you actually took them \u2014 doses that were merely '
+      + 'scheduled and later dropped are supposed to be gone. Anything wrong can be '
+      + 'unticked in Today afterwards.')) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'RESTORING\u2026'; }
+  var res = await _repairCall(false, {compoundId: g.compound_id, slot: g.time_of_day});
+  if(btn){
+    btn.disabled = false;
+    btn.textContent = res ? ('RESTORED ' + (res.count||0)) : 'FAILED \u2014 nothing written';
+  }
+  // The record changed underneath every view that reads it.
+  if(typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
+  if(typeof _tcFetchHistory === 'function'){ try{ await _tcFetchHistory(true); }catch(e){} }
+  if(typeof buildToday === 'function') buildToday();
+  if(typeof buildWeekStrip === 'function') buildWeekStrip();
+}
+
 function _diagPush(rec){
   // Called from the error handlers themselves, so it must never throw.
   try{
@@ -3111,21 +3218,21 @@ function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
 </script>
-<script src="inj-writer.js?v=1.324"></script>
-<script src="tab-cycles.js?v=1.324"></script>
-<script src="tab-macros.js?v=1.324"></script>
-<script src="tab-stack.js?v=1.324"></script>
-<script src="tab-today.js?v=1.324"></script>
-<script src="tab-schedule.js?v=1.324"></script>
-<script src="tab-timeline.js?v=1.324"></script>
-<script src="tab-body.js?v=1.324"></script>
-<script src="tab-recon.js?v=1.324"></script>
-<script src="tab-blood.js?v=1.324"></script>
-<script src="tab-labs.js?v=1.324"></script>
-<script src="tab-tcalc.js?v=1.324"></script>
-<script src="tab-thist.js?v=1.324"></script>
-<script src="tab-tdose.js?v=1.324"></script>
-<script src="tab-supplements.js?v=1.324"></script>
+<script src="inj-writer.js?v=1.325"></script>
+<script src="tab-cycles.js?v=1.325"></script>
+<script src="tab-macros.js?v=1.325"></script>
+<script src="tab-stack.js?v=1.325"></script>
+<script src="tab-today.js?v=1.325"></script>
+<script src="tab-schedule.js?v=1.325"></script>
+<script src="tab-timeline.js?v=1.325"></script>
+<script src="tab-body.js?v=1.325"></script>
+<script src="tab-recon.js?v=1.325"></script>
+<script src="tab-blood.js?v=1.325"></script>
+<script src="tab-labs.js?v=1.325"></script>
+<script src="tab-tcalc.js?v=1.325"></script>
+<script src="tab-thist.js?v=1.325"></script>
+<script src="tab-tdose.js?v=1.325"></script>
+<script src="tab-supplements.js?v=1.325"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}
