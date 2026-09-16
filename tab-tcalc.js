@@ -2074,6 +2074,81 @@ function _tcAttrRows(log) {
   return rows;
 }
 
+// ── WHAT WAS ON BOARD AT A BLOOD DRAW — DERIVED, NEVER ASKED ────────────────
+// Henrik, 2026-09-16: "App knows exactly how much testosterone I been taking, and the
+// current ramp up is impossible for an end user to just say a weekly dosage, its a
+// combination of slow Test U already injected and the ramp up using Test E. The app
+// needs to answer this question NOT the user."
+//
+// `dose_at_bw` was a typed number in mg/week, and during an ester transition there is no
+// such number to type. On 15 Sep 2026 the honest answer was "a decaying undecanoate
+// depot injected weeks ago, plus a ramping enanthate schedule" — no weekly figure
+// describes that. Asking for one gets a guess or a blank, and that draw carried null,
+// which is the field that turns a measurement into a calibration.
+//
+// The record already holds every logged injection and the model already integrates them.
+// This reads the answer out of the same series the curve is drawn from, so the number in
+// Labs and the number under the chart cannot disagree.
+//
+// ⚠️ THE UNIT IS mg TESTOSTERONE PER DAY, NOT mg OF ESTER PER WEEK. Esters carry
+// different testosterone mass fractions — undecanoate 0.6315, enanthate 0.7199 — so
+// adding their milligrams together adds two different substances and lands between the
+// two answers, wrong for both. The appearance rate is what the model actually works in
+// (`total[]`), and it is the same number whichever ester delivered it. A mg/week figure
+// is offered alongside it as mg of TESTOSTERONE per week, which is a conversion of the
+// rate and not a prescription: it is not the mg of ester to draw up.
+//
+// ENDOGENOUS PRODUCTION IS EXCLUDED. "What dose were you on" asks about administered
+// drug. The model's own-production term is a separate line, already reported separately
+// by the attribution chart, and folding it in here would inflate the denominator of
+// every dose-response figure computed from this.
+var _TC_RATE_MEMO = null;
+function _tcRateAtDate(dateStr) {
+  if (!dateStr) return null;
+  var log = (typeof _tcCurveLog === 'function') ? _tcCurveLog() : null;
+  if (!log || !log.length) return null;
+  // Memoised on the shape of the log, because Labs asks this once per row and the
+  // series is the same for all of them. Any change to the record changes the key.
+  var sig = log.length + '|' + log[0].date + '|' + log[log.length - 1].date;
+  if (!_TC_RATE_MEMO || _TC_RATE_MEMO.sig !== sig) {
+    var sorted = log.slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    var S = null;
+    try { S = _tcFreeTSeries(sorted, {}); } catch (e) { return null; }
+    if (!S || !S.byComp) return null;
+    _TC_RATE_MEMO = { sig: sig, S: S, rows: _tcAttrRows(sorted) };
+  }
+  var S = _TC_RATE_MEMO.S;
+  // Local noon on both sides — see the note at the top of _tcFreeTSeries. Mixing a bare
+  // new Date('YYYY-MM-DD') (UTC midnight) with this series' local-noon origin leaves a
+  // half-day remainder that Math.round promotes to a whole day, and the draw reads the
+  // rate from the day next to the one it happened on.
+  var t = Math.round((new Date(dateStr + 'T12:00:00').getTime() - S.firstDate.getTime()) / 86400000);
+  if (!(t >= 0) || t > S.totalDays) return null;     // outside what the record covers
+  var parts = [], drug = 0;
+  (_TC_RATE_MEMO.rows || []).forEach(function(r) {
+    if (r.id === _TC_ATTR_ENDOG_ID) return;
+    var arr = S.byComp[r.id];
+    if (!arr) return;
+    var v = arr[t] || 0;
+    if (!(v > 0)) return;
+    drug += v;
+    parts.push({ id: r.id, label: r.label, mgPerDay: v });
+  });
+  parts.sort(function(a, b){ return b.mgPerDay - a.mgPerDay; });
+  if (drug > 0) parts.forEach(function(p){ p.pct = Math.round(100 * p.mgPerDay / drug); });
+  return { date: dateStr, mgPerDay: drug, mgPerWeek: drug * 7, parts: parts,
+           endogMgPerDay: (S.endog && S.endog[t]) || 0 };
+}
+// One sentence for the surfaces that show it. Names the esters when more than one is on
+// board, because "78 mg/wk" during a transition hides the thing that makes it hard.
+function _tcRateLabel(r) {
+  if (!r) return '';
+  if (!(r.mgPerDay > 0)) return 'nothing on board';
+  var head = Math.round(r.mgPerWeek) + ' mg/wk T';
+  if (r.parts.length < 2) return head;
+  return head + ' (' + r.parts.map(function(p){ return p.label + ' ' + p.pct + '%'; }).join(', ') + ')';
+}
+
 // Split the PLOTTED free-T curve into one line per component.
 //
 // EXACT, not an approximation. At each day the model turns a single appearance rate
@@ -2203,7 +2278,14 @@ async function _tcFetchBwEntries() {
     if (latest.total_t    != null) _tcp.totalT         = String(latest.total_t);
     if (latest.shbg       != null) _tcp.shbg           = String(latest.shbg);
     if (latest.free_t     != null) _tcp.measuredFT     = String(latest.free_t);
-    if (latest.dose_at_bw != null) _tcp.currentDoseMgWk = String(latest.dose_at_bw);
+    // ⚠️ DERIVED FIRST, TYPED ONLY AS A FALLBACK. The record knows what was on board;
+    // a typed mg/week is at best a summary of it and during an ester transition is not
+    // expressible at all. Guarded because this runs on the bloodwork fetch, which can
+    // land before the injection history the rate is computed from — when it does,
+    // _tcRateAtDate returns null and the stored value still applies.
+    var _dr = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(latest.date) : null;
+    if (_dr && _dr.mgPerDay > 0)        _tcp.currentDoseMgWk = String(Math.round(_dr.mgPerWeek));
+    else if (latest.dose_at_bw != null) _tcp.currentDoseMgWk = String(latest.dose_at_bw);
   }
   _tcBwLoading = false;
   buildTCalc();
@@ -2891,7 +2973,62 @@ function _tcSolveDayKey(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 // Injection dates for one cadence over [start, start+weeks), as Date objects.
-function _tcSolveDates(cad, startDate, weeks){
+// ── A CAP ON INJECTIONS COUNTS THE ONES ALREADY TAKEN ───────────────────────
+// Henrik, 2026-09-16: "Still setting injections to max 3 per week adds 3 more this week
+// even though I already done 2."
+//
+// The cap chose which CADENCE could win and nothing else. A three-a-week cadence run
+// from the plan's own start date lays three into the opening week regardless of what is
+// already in the record for those same days, so a plan applied mid-week stacked its
+// first week on top of two doses that had already gone in. The steady state was right
+// all along; only the opening double-counted.
+//
+// ⚠️ NO CALENDAR WEEK. "Three a week" is enforced as "no 7-day window holds more than
+// three". That needs no Monday and no agreement about where a week starts — and it is
+// the stronger reading anyway: three on Friday, Saturday, Sunday and three again on
+// Monday, Tuesday, Wednesday satisfies any calendar rule and is six injections in six
+// days.
+//
+// ⚠️ ONE FUNCTION, BOTH SIDES. The solver calls this to score the schedule it proposes
+// and the generator calls it to write the rows, so the curve and the record cannot
+// disagree about which days carry a dose. Trimming in the generator alone would have
+// been the quick fix and would have broken the rule at the top of CLAUDE.md: the plan
+// would have been scored on days it never wrote.
+//
+// `takenMs` is the already-administered doses of THIS compound — the cap is per
+// compound (Henrik, 2026-09-16: "3 testosterone"), not a budget of needles across
+// everything scheduled that day.
+function _injCapTrim(dates, takenMs, cap){
+  if(!(cap>0)) return (dates||[]).slice();
+  var win=(takenMs||[]).slice().sort(function(a,b){ return a-b; });
+  var out=[];
+  (dates||[]).forEach(function(d){
+    var t=(d&&typeof d.getTime==='function')?d.getTime()
+         :new Date(String(d)+'T12:00:00').getTime();
+    if(!isFinite(t)) return;
+    var lo=t-6*86400000;                       // the 7 days ENDING on this one
+    var n=0;
+    for(var i=0;i<win.length;i++) if(win[i]>=lo&&win[i]<=t) n++;
+    if(n>=cap) return;                          // no room left in the window; skip it
+    win.push(t);
+    out.push(d);
+  });
+  return out;
+}
+// The already-taken doses of one compound, as epoch ms at local noon, from the logged
+// record. Only the days around the plan's opening matter — the trim cannot bite once
+// the schedule is running at its own cadence — so the curve log is plenty.
+function _injTakenMs(compId, log){
+  var cid=(typeof _tcCanonCompId==='function')?_tcCanonCompId(compId):compId;
+  return (log||[]).filter(function(e){
+    if(!e||!e.date) return false;
+    var eid=(typeof _tcCanonCompId==='function')?_tcCanonCompId(e.compId||e.compound_id):(e.compId||e.compound_id);
+    return eid===cid;
+  }).map(function(e){ return new Date(e.date+'T12:00:00').getTime(); })
+    .filter(function(t){ return isFinite(t); });
+}
+
+function _tcSolveDates(cad, startDate, weeks, opts){
   var out=[], start=new Date(startDate+'T12:00:00');
   var end=new Date(start.getTime()+weeks*7*86400000);
   if(cad.days&&cad.days.length){
@@ -2901,6 +3038,8 @@ function _tcSolveDates(cad, startDate, weeks){
     var step=cad.freqUnit==='weeks'?cad.freqVal*7:cad.freqVal;
     for(var t=new Date(start); t<end; t.setDate(t.getDate()+step)) out.push(new Date(t));
   }
+  // The cap counts what is already in the record, not just what this schedule adds.
+  if(opts&&opts.cap>0) out=_injCapTrim(out, opts.takenMs, opts.cap);
   return out;
 }
 // Free-T series (pmol/L per day) for a set of injection events.
@@ -3040,6 +3179,42 @@ function _tcSolveEvaluate(ctx, cad, dates, doses){
 // above the resolution floor. Shortest keeps the peak lowest, which is the stated
 // priority; the floor is what stops it asking for an undrawable dose. Ties go to the
 // interval whose quantised dose lands closest to the weekly requirement.
+// WHAT ONE INJECTION A WEEK COSTS, in the same units as `ripple` (a fraction of the
+// weekly mean). 0.01 = one percentage point of within-week swing per weekly injection.
+//
+// Calibrated to be a price, not a veto. On a 4.5-day ester daily (7/wk, ~7% ripple)
+// against every-2-days (3.5/wk, ~14%) is a 7-point gap for 3.5 extra injections: at
+// 0.01 the daily plan still wins, but by 3.5 points instead of 7, and any ester where
+// the gap is narrower — cypionate at 8 d, undecanoate at 56 d, where every interval
+// from daily to fortnightly ripples within a few points — now goes the other way. That
+// is the intent: shorter intervals keep winning where the pharmacology actually pays
+// for them, and stop winning where it does not.
+//
+// ⚠️ THIS IS A PREFERENCE, NOT A MEASUREMENT. Unlike every other constant in this
+// solver it is not derived from anything — there is no study on what a wasted 0.08 ml
+// of hub oil is worth against a percentage point of free-T swing. Change it on request,
+// and do not let it grow large enough to pick a schedule that misses target: it is
+// compared only AFTER worstSettled has decided, never against it.
+var _TC_INJ_COST = 0.01;
+// HOW FAR OFF TARGET A PLAN MAY SIT AND STILL BE CHOSEN FOR CONVENIENCE. Above this a
+// candidate is inadmissible: it can still be offered as an alternative and still win
+// when nothing does better, but no amount of saved injections promotes it over a plan
+// that actually holds the level. 6% of target, matching the band the suite asserts a
+// winner must hold.
+var _TC_HOLD_TOL = 0.06;
+// THE SMALLEST DRAW WORTH SCHEDULING, in ml. Henrik, 2026-09-16: "Also set min injection
+// to 0,1ml."
+//
+// Below this the syringe stops being the instrument the plan assumes. Detachable-needle
+// dead space is ~0.07-0.10 ml, so a 0.05 ml dose leaves more oil in the hub than it
+// delivers, and the graduations on a 1 ml barrel cannot be read to a fraction of it
+// either. The model would go on treating it as an exact number.
+//
+// It constrains the CADENCE, never the dose. A schedule whose per-injection draw falls
+// under the floor is excluded, so the solver reaches for a longer interval and a bigger
+// draw — it does not round the dose up, which would silently overdose to satisfy a
+// convenience rule. Same shape as maxInjPerWeek, and for the same reason.
+var _TC_MIN_ML = 0.1;
 var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
 // A dose below this many syringe steps cannot be set accurately enough to be worth
 // scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
@@ -3488,7 +3663,8 @@ function _tcSolveDailyDither(ctx, opts){
 function _tcSolveForCadence(ctx, cad, opts){
   opts=opts||{};
   var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
-  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks);
+  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks,
+    {cap:ctx.maxInjPerWeek, takenMs:_injTakenMs(ctx.incomingId, ctx.history)});
   if(!dates.length) return null;
   var W=ctx.weeks;
 
@@ -3721,6 +3897,195 @@ function _tcSolveForCadence(ctx, cad, opts){
           events:fin.events, stepMg:stepMg, baseWeekly:base.weekly};
 }
 
+// ── THE LOADING DOSE ────────────────────────────────────────────────────────
+// Henrik, 2026-09-16: "I am currently at 1100pmol/l and raising to 2200. Why is the
+// initial raise done with daily micro injections? Wouldn't a single bigger just bring
+// me to the new level in days instead of weeks?"
+//
+// Yes, and the reason the app was not doing it is a clamp rather than a calculation.
+//
+// WHAT A LOADING DOSE IS. For a depot ester the serum level tracks the appearance rate,
+// and the appearance rate tracks how much drug is still sitting in the depot. Steady
+// state is just "the depot has filled to the point where what leaks out each day equals
+// what you put in". Waiting three weeks on a 4.5-day ester is waiting for the depot to
+// fill at the maintenance rate. Put its steady-state contents in on day one and the
+// wait is over: a depot of exactly the right size releases at exactly the maintenance
+// rate from the first day, so the ideal front-load is a STEP, not a spike. The size is
+// (mg/day) ÷ k, which is why the search below is bounded by physiology rather than open
+// ended. Nebido's own label does this — a second 1000 mg at week 6 instead of the
+// maintenance 10-14 — so it is standard practice, not a trick.
+//
+// WHY THE SOLVER REFUSED. Both iterative solvers carry a note reading "NEVER INVERT
+// AGAINST A LOADING-PHASE SENSITIVITY … that is the week-0 loading spike and the
+// overshoot behind it". That note is correct about its own bug: the old code divided
+// week 0's whole gap by week 0's sensitivity, demanding a dose big enough to close the
+// gap INSIDE week 0, which is far larger than a loading dose and overshoots badly. The
+// fix clamped loading off entirely. A loading dose and that broken inversion are not
+// the same calculation, and nothing downstream could tell them apart.
+//
+// ⚠️ SO THIS IS MEASURED, NEVER INVERTED. No sensitivity, no division, no formula
+// trusted to be right: every candidate front-load is simulated through the same model
+// as the schedule it rides on, and the one that lands closest is kept. The analytic
+// depot size is used ONLY to bound the search. A front-load that pushes any week's peak
+// past _TC_LOAD_TOL over target is rejected outright — which is the guard the 2026-08
+// version never had.
+var _TC_LOAD_TOL = 0.05;        // a front-load may never put any week's peak this far over target
+var _TC_LOAD_MIN_GAIN = 0.15;   // …and must close this much of the gap to be worth proposing
+var _TC_LOAD_GRID = 12;         // simulations spent looking for it
+
+// Weekly stats for an arbitrary event list — the tail of _tcSolveEvaluate, reusable.
+function _tcSolveWeeklyOf(ctx, evts){
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var out=[];
+  for(var w=0;w<ctx.weeks;w++){
+    var f=startMs+w*7*86400000;
+    out.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return out;
+}
+
+function _tcSolveLoadingDose(ctx, best){
+  if(!best||best.degenerate||!best.events||!best.events.length) return null;
+  if(!(ctx.targetPmol>0)) return null;
+  var stepMg=best.stepMg||ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  if(!(stepMg>0)) return null;
+
+  // ⚠️ A LOADING DOSE IS NOT AN EXTRA INJECTION — IT IS THE FIRST ONE MADE BIGGER.
+  // Answering "my daily 25 mg jabs waste oil and syringes" with one more needle would
+  // be answering the wrong question.
+  var firstDate=null;
+  best.events.forEach(function(e){
+    if(!e||e.compId!==ctx.incomingId||!e.date||e.date<ctx.startDate) return;
+    if(firstDate===null||e.date<firstDate) firstDate=e.date;
+  });
+  if(!firstDate) return null;
+
+  // ⚠️ THE RAMP IS RE-SOLVED AROUND THE FRONT-LOAD, NOT LEFT TO SIT ON TOP OF IT.
+  // The first cut bolted a front-load onto the finished schedule and then refused
+  // almost every one it computed, for a reason worth keeping: the ramp ALREADY
+  // front-loads, crudely, by climbing too hard early to close the week-0 gap. A 2200
+  // target solved to weekly means of 1630, 2183, 2330, 2336 — overshooting 6% in week 2
+  // before any loading dose existed. Adding a depot fill on top of that pushes an
+  // already-high week higher, so every candidate breached the ceiling and the answer
+  // was always "no loading dose" — while the plan went on overshooting anyway.
+  //
+  // The overshoot and the slow start are the same problem: a schedule closing a gap
+  // with the only instrument it has. Give it the right instrument and it does not need
+  // to climb. So each candidate front-load is put into the base events and the cadence
+  // is SOLVED AGAIN around it, and what is compared is two complete plans — not a plan
+  // against itself-plus-a-dose. The ramp comes back gentler, which is the whole point.
+  var solveWith=function(extraMg){
+    var c2=Object.assign({}, ctx, {
+      scheduled: (ctx.scheduled||[]).concat(
+        extraMg>0 ? [{compId:ctx.incomingId, doseMg:String(extraMg), date:firstDate}] : [])
+    });
+    var r;
+    if(best.cadence&&best.cadence.dithered)      r=_tcSolveDailyDither(c2,{iters:6});
+    else if(best.cadence&&best.cadence.variable) r=_tcSolveVariable(c2,{iters:6});
+    else                                         r=_tcSolveForCadence(c2,best.cadence,{iters:6});
+    return (r&&!r.degenerate&&r.weekly&&r.weekly.length)?r:null;
+  };
+  // ONE OBJECTIVE, OVER THE WHOLE PLAN: how far the level sits from target, averaged
+  // across every week. Arriving sooner and holding steadier both reduce it, which is
+  // exactly the trade a loading dose is making — scoring only the settling weeks would
+  // buy a fast start with a worse tail.
+  var missOf=function(r){
+    var wk=r.weekly||[], m=0;
+    for(var w=0;w<wk.length;w++) m+=Math.abs(wk[w].mean-ctx.targetPmol);
+    return wk.length?m/wk.length:Infinity;
+  };
+  var overOf=function(r){
+    var wk=r.weekly||[], o=0;
+    for(var w=0;w<wk.length;w++){
+      var d=(wk[w].peak-ctx.targetPmol)/ctx.targetPmol;
+      if(d>o) o=d;
+    }
+    return o;
+  };
+  var reach=function(r){
+    var wk=r.weekly||[];
+    for(var w=0;w<wk.length;w++){ if(wk[w].mean>=ctx.targetPmol*0.95) return w+1; }
+    return 0;                                   // never gets there inside the plan
+  };
+
+  var zero=solveWith(0);
+  if(!zero) return null;
+  var zeroMiss=missOf(zero);
+  if(zeroMiss<=ctx.targetPmol*0.02) return null;        // already arrives on target
+
+  // Bounded by physiology, not by search: filling a depot to its steady-state contents
+  // is (mg/day)/k, so 1.5x that is already past any useful answer.
+  var info=(typeof _tcCompInfo==='function')?_tcCompInfo(ctx.incomingId):null;
+  var hl=(info&&info.halfLifeDays)||4.5;
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var endMs=startMs+ctx.weeks*7*86400000, winMs=endMs-28*86400000, tot=0;
+  best.events.forEach(function(e){
+    if(!e||e.compId!==ctx.incomingId||!e.date) return;
+    var t=new Date(e.date+'T12:00:00').getTime();
+    if(t>=winMs&&t<endMs) tot+=parseDec(e.doseMg)||0;
+  });
+  var mgPerDay=tot/28;
+  if(!(mgPerDay>0)) return null;
+  var cap=Math.max(stepMg, (mgPerDay*hl/Math.LN2)*1.5);
+
+  // ⚠️ THE CEILING, AND WHY IT IS NOT "STRICTLY BETTER THAN BASELINE".
+  // A plan that overshoots is worse than one that arrives late: with a long ester the
+  // level coming back down is not something a schedule can do quickly. So no candidate
+  // may peak above _TC_LOAD_TOL over target — unless the plan WITHOUT a loading dose
+  // already does, in which case that is the bar instead, because the ramp climbing to
+  // close the opening gap is itself an overshoot and it is not this feature's to fix.
+  //
+  // The slack is load-bearing, not sloppiness. The first cut demanded the loaded plan
+  // peak strictly BELOW the unloaded one and rejected every candidate on a transition
+  // that wanted a 125 mg front-load: the unloaded plan peaked 8.03% over, the loaded
+  // one 8.04%, and a hundredth of a point of iterative-solver noise threw away a
+  // schedule that cut the mean miss from 71 to 39 pmol/L. Each candidate is a fresh
+  // re-solve, and re-solves wobble; a guard that cannot tell noise from a real increase
+  // is not measuring what it claims to.
+  var ceilOver=Math.max(_TC_LOAD_TOL, overOf(zero))+0.005;
+  var bestL=0, bestPlan=zero, bestMiss=zeroMiss, seen={};
+  for(var g=1; g<=_TC_LOAD_GRID; g++){
+    var L=_tcSolveSnap(cap*g/_TC_LOAD_GRID, stepMg);
+    if(!(L>0)||seen[L]) continue;
+    seen[L]=true;
+    var r=solveWith(L);
+    if(!r) continue;
+    // NOT `break`. Overshoot would rise monotonically with the front-load if the
+    // schedule were fixed, but it is re-solved for every candidate — measured on one
+    // transition the series ran 8.0, 8.0, 8.0, 9.5, 8.0, 10.6, so stopping at the first
+    // breach would have skipped the answer.
+    if(overOf(r)>ceilOver) continue;
+    var m=missOf(r);
+    if(m<bestMiss){ bestMiss=m; bestPlan=r; bestL=L; }
+  }
+  if(!(bestL>0)) return null;
+  // Worth a bigger needle? A front-load that shaves a few percent off the climb is not.
+  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN) return null;
+
+  return {loading:{mg:Math.round(bestL*10)/10,
+                   ml:Math.round((bestL/ctx.concMgPerMl)*100)/100,
+                   date:firstDate,
+                   maintenanceMg:Math.round((bestPlan.doses&&bestPlan.doses[0]!=null
+                                             ?bestPlan.doses[0]:0)*10)/10,
+                   firstDoseMg:Math.round(((bestPlan.doses&&bestPlan.doses[0]!=null
+                                            ?bestPlan.doses[0]:0)+bestL)*10)/10,
+                   weeksWithout:reach(zero), weeksWith:reach(bestPlan),
+                   peakOver:Math.round(overOf(bestPlan)*1000)/10,
+                   // Reported so the ceiling rule is auditable from the outside. A
+                   // front-load may exceed _TC_LOAD_TOL only when the plan WITHOUT it
+                   // overshot further — the ramp climbing to close the gap is itself an
+                   // overshoot, and replacing a worse one with a better one is not a
+                   // breach. peakOverWithout is what it is being compared against.
+                   peakOverWithout:Math.round(overOf(zero)*1000)/10,
+                   missWithout:Math.round(zeroMiss), missWith:Math.round(bestMiss)},
+          // ⚠️ THE PLAN SHOWN MUST BE THE ONE THAT ASSUMES THE LOADING DOSE.
+          // Displaying the ramp solved WITHOUT it and then telling the user to add a
+          // front-load is how you get the overshoot this feature exists to avoid.
+          plan:bestPlan};
+}
+
 // The candidate schedule must start after the calibration anchor, or the solve is
 // self-cancelling (see the note above). Returns a warning string, or ''.
 function _tcSolveAnchorGuard(ctx){
@@ -3765,7 +4130,30 @@ function tcSolveTransition(opts){
     targetPmol:  parseDec(opts.targetPmol)||0,
     concMgPerMl: parseDec(opts.concMgPerMl)||250,
     stepMl:      parseDec(opts.stepMl)||_TC_SOLVE_STEP_ML,
-    weeks:       parseInt(opts.weeks,10)||12
+    weeks:       parseInt(opts.weeks,10)||12,
+    // ── AN INJECTION IS NOT FREE ────────────────────────────────────────────
+    // Henrik, 2026-09-16: "single small injections like 50mg (or like today a 25mg)
+    // does cause some issues … I do loose oil since the syringe and needle head still
+    // contains some oil that gets wasted. Also cost of syringes and needles becomes
+    // wasteful."
+    //
+    // He was right, and the ranking could not see it. It scored how well a schedule
+    // holds target, then how much it ripples, and only used injection count to break a
+    // tie in BOTH — which for a 4.5-day ester never happens: daily enanthate ripples
+    // ~7% against ~14% every-2-days, a gap far outside the 0.03 tie band, so daily won
+    // on ripple and the count key never fired. Seven injections a week were bought with
+    // seven points of ripple and no price was ever asked.
+    //
+    // The price is real and it is not only inconvenience. Detachable-needle dead space
+    // is ~0.07-0.10 ml; at 250 mg/ml a 25 mg dose is 0.10 ml, so nearly half of every
+    // draw stays in the hub. A daily plan over 13 weeks throws away more oil than a
+    // whole vial.
+    //
+    // So injections now cost ripple. maxInjPerWeek is the hard override for a user who
+    // simply will not do daily; injCost is the standing price everything pays.
+    maxInjPerWeek: parseDec(opts.maxInjPerWeek)||0,       // 0 = no cap
+    injCost:     (opts.injCost==null)?_TC_INJ_COST:(parseDec(opts.injCost)||0),
+    minMl:       (opts.minMl==null)?_TC_MIN_ML:(parseDec(opts.minMl)||0)
   };
   if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
 
@@ -3824,14 +4212,24 @@ function tcSolveTransition(opts){
   // wins. The tolerance is deliberately small — this breaks near-ties, it does not let
   // a smooth schedule win at the wrong level.
   var _TIE=0.03;
-  // ⚠️ AND WHEN SMOOTHNESS TIES TOO, TAKE THE FEWER INJECTIONS.
+  // ⚠️ AND SMOOTHNESS IS BOUGHT, NOT GIVEN. THE CURRENCY IS INJECTIONS.
   // Ripple is governed by interval ÷ half-life, which is an ester property: measured on
   // this model, every-2-days gives 82% ripple on propionate (t½ 0.8 d), 14% on enanthate
   // (4.5 d), 8% on cypionate (8 d) and 4% on undecanoate (56 d). For a long ester the
-  // ripple is flat at EVERY interval from daily to fortnightly — so a tie-break on
-  // ripple alone would happily recommend daily Nebido injections, which is 56 jabs to
-  // achieve what 4 achieve. Fewer injections is the third key, and it only ever applies
-  // once the first two are indistinguishable.
+  // ripple is flat at EVERY interval from daily to fortnightly — so ranking on ripple
+  // alone would happily recommend daily Nebido injections, which is 56 jabs to achieve
+  // what 4 achieve.
+  //
+  // Injection count used to be the THIRD key, applied only when ripple tied inside
+  // 0.03. That is a tie-break, not a cost, and for a mid-length ester it never fired:
+  // daily enanthate beats every-2-days by ~7 points of ripple, so it won outright and
+  // the count was never consulted. Seven injections a week cost nothing to propose.
+  //
+  // Now they cost `injCost` of ripple each. Same comparison, same tie band — the score
+  // being compared is simply ripple PLUS what the injections to achieve it are worth.
+  // A schedule that is smoother because it jabs twice as often has to be smoother by
+  // enough to pay for it. Still strictly after worstSettled: a plan may never buy
+  // smoothness by missing the target.
   var perWeekOf=function(r){
     var c=r.cadence||{};
     if(c.dithered) return 7;
@@ -3841,7 +4239,78 @@ function tcSolveTransition(opts){
     if(r.intervals&&r.intervals.length) return 7/(r.intervals.reduce(function(a,b){return a+b;},0)/r.intervals.length);
     return 3.5;
   };
+  // Ripple plus the price of the injections that buy it.
+  var _rippleCost=function(r){
+    var rip=(r.ripple==null)?Infinity:r.ripple;
+    if(!isFinite(rip)) return rip;
+    return rip + (ctx.injCost>0 ? ctx.injCost*perWeekOf(r) : 0);
+  };
+  // ⚠️ A CAP IS A CAP — IT REMOVES CANDIDATES, IT DOES NOT DISCOUNT THEM.
+  // A user who says "at most 3 a week" has not said "prefer 3, take 7 if it scores
+  // better"; folding the cap into the score would do exactly that. Applied before the
+  // sort, and only while something survives it: a cap that excludes every candidate is
+  // a cap that cannot be honoured, and answering with nothing helps no one. In that
+  // case the cap is dropped and said so, rather than silently obeyed or silently
+  // ignored.
+  var _capped=null;
+  if(ctx.maxInjPerWeek>0){
+    var _fits=results.filter(function(r){ return perWeekOf(r)<=ctx.maxInjPerWeek+1e-9; });
+    if(_fits.length){ _capped=results.length-_fits.length; results=_fits; }
+    else _capped=-1;
+  }
+  // ⚠️ THE FLOOR IS ON THE DRAW, AND IT EXCLUDES CADENCES RATHER THAN ROUNDING DOSES UP.
+  // Rounding a 0.06 ml dose to 0.1 would be a 67% overdose applied to satisfy a
+  // convenience rule — the constraint has to be met by injecting LESS OFTEN and more at
+  // a time, which is the only direction that keeps the weekly milligrams where the solve
+  // put them. Measured on the SETTLED doses, because a ramp's opening weeks are
+  // legitimately small while the outgoing ester is still carrying the level.
+  var _minMg=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
+  var _tooSmall=null;
+  var _drawOf=function(r){
+    var d=(r.doses||[]).filter(function(x){ return x>0; });
+    if(!d.length) return Infinity;              // nothing scheduled: not a small draw
+    return d[d.length-1];                       // the dose it settles at
+  };
+  if(_minMg>0){
+    var _bigEnough=results.filter(function(r){ return _drawOf(r)>=_minMg-1e-9; });
+    if(_bigEnough.length){ _tooSmall=results.length-_bigEnough.length; results=_bigEnough; }
+    else _tooSmall=-1;
+  }
+  // ⚠️ HOLDING THE TARGET IS NOT FOR SALE, AND _TIE IS TOO WIDE TO PROTECT IT ALONE.
+  // The keys below are ordered so that target-holding decides first and everything else
+  // only breaks its ties — but a 0.03 tie band is 42 pmol/L at a 1400 target, and a
+  // candidate sitting 0.029 worse could always be promoted by the second key. While
+  // that key was ripple, an intrinsic property that happened to track fit, nothing came
+  // of it. Charging for injections broke the coincidence: adding the price flipped an
+  // every-3-days plan holding 1267-1361 over a daily one holding 1400, and it won on
+  // being cheaper to administer while missing the target by 9.5%.
+  //
+  // So admissibility is a gate, not a key. A plan that cannot hold the target within
+  // _TC_HOLD_TOL never wins on convenience, at any price, however few the injections.
+  // Below the gate the ordering is exactly what it was. If NOTHING is admissible the
+  // gate stops discriminating and the old ranking decides the least-bad option, which
+  // is the honest answer to "no schedule holds this target" — the notes say so
+  // separately, and refusing to rank would just hide it.
+  //
+  // ⚠️ MEASURED ON THE WEEKLY MEANS, NOT ON worstSettled. The first cut of this gate
+  // used worstSettled, which folds RIPPLE into the number — and ripple is the very
+  // thing the injections are being bought to reduce. At a 6% band that made every
+  // interval longer than daily inadmissible by construction (every-2-days enanthate
+  // ripples ~14%, so ±7% before it is even off target), which does not gate the price,
+  // it abolishes it. Holding the target is a statement about where the level SITS; the
+  // swing around it is the separate thing the next key already ranks.
+  var _admits=function(r){
+    var wk=r.weekly||[], lo=Infinity, hi=0;
+    for(var i=(r.settleWeeks||0); i<wk.length; i++){
+      if(wk[i].mean<lo) lo=wk[i].mean;
+      if(wk[i].mean>hi) hi=wk[i].mean;
+    }
+    if(!isFinite(lo)||!(ctx.targetPmol>0)) return false;
+    return lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL);
+  };
   results.sort(function(a,b){
+    var aOK=_admits(a), bOK=_admits(b);
+    if(aOK!==bOK) return aOK?-1:1;
     // worstSettled, not worst — see the note in the scorer. The loading peak is an
     // ester property common to every candidate; ranking on it lets a near-constant
     // decide. Falls back to worst for any result that predates the field.
@@ -3849,7 +4318,7 @@ function tcSolveTransition(opts){
     var bw=(b.worstSettled==null)?b.worst:b.worstSettled;
     var d=aw-bw;
     if(Math.abs(d)>_TIE) return d;
-    var rp=a.ripple-b.ripple;
+    var rp=_rippleCost(a)-_rippleCost(b);
     if(Math.abs(rp)>_TIE) return rp;
     return perWeekOf(a)-perWeekOf(b);
   });
@@ -3861,7 +4330,7 @@ function tcSolveTransition(opts){
       // Already solved at full iteration count; the fixed-cadence refiner cannot
       // express it and would silently collapse it back to one interval.
       if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
-      if(results[ri].meanErr<=tol){ best=results[ri]; break; }
+      if(results[ri].meanErr<=tol&&_admits(results[ri])){ best=results[ri]; break; }
       continue;
     }
     try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
@@ -3871,7 +4340,14 @@ function tcSolveTransition(opts){
     if(!refined||refined.degenerate) continue;
     results[ri]=refined;
     if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
-    if(refined.meanErr<=tol){ best=refined; break; }
+    // ⚠️ RE-CHECK ADMISSIBILITY HERE — THE SORT RANKED THE CHEAP SOLVE.
+    // The ranking above runs on the 4-iteration pass; this loop re-solves the leaders
+    // at 12 and REPLACES them. A candidate can therefore arrive at the front of the
+    // queue admissible and be accepted after refining into something that is not, which
+    // is how an every-3-days plan holding 1267-1361 against a 1400 target was chosen
+    // on price. meanErr alone does not catch it: its 10% tolerance is wider than the
+    // 6% band, so a plan can miss the target and still pass.
+    if(refined.meanErr<=tol&&_admits(refined)){ best=refined; break; }
   }
   if(!best) best=fallback||results[0];
   if(!best||best.degenerate) return {best:null, alternatives:[], target:ctx.targetPmol,
@@ -3882,6 +4358,56 @@ function tcSolveTransition(opts){
   var notes=[];
   var guard=_tcSolveAnchorGuard(ctx);
   if(guard) notes.push(guard);
+  // ── SAY WHAT THE INJECTIONS COST, AND WHAT SKIPPING SOME WOULD ────────────
+  // The ranking now prices injections, so the reader is entitled to see the bill.
+  // Without this the frequency is just a number at the top of a card and the trade
+  // behind it — which is the whole of Henrik's 2026-09-16 question — is invisible.
+  (function(){
+    if(_capped===-1){
+      notes.push('No schedule fits a limit of '+ctx.maxInjPerWeek+' injection'
+        +(ctx.maxInjPerWeek===1?'':'s')+' a week at this target and syringe step, so the '
+        +'limit was not applied. The options below are the unrestricted ones.');
+    }else if(_capped>0){
+      notes.push(_capped+' schedule'+(_capped===1?' was':'s were')+' excluded for needing '
+        +'more than '+ctx.maxInjPerWeek+' injection'+(ctx.maxInjPerWeek===1?'':'s')+' a week.');
+    }
+    if(_tooSmall===-1){
+      notes.push('No schedule keeps every draw at or above '+ctx.minMl+' ml at this target '
+        +'and concentration, so that floor was not applied. A thinner vial would fix it: '
+        +'the same milligrams in more millilitres is a bigger, more accurate draw.');
+    }else if(_tooSmall>0){
+      notes.push(_tooSmall+' schedule'+(_tooSmall===1?' was':'s were')+' excluded for asking '
+        +'for a draw under '+ctx.minMl+' ml ('+Math.round(_minMg*10)/10+' mg at '
+        +ctx.concMgPerMl+' mg/ml). Below that, syringe dead space is a bigger share of the '
+        +'dose than the dose, and the barrel cannot be read that finely.');
+    }
+    if(!best) return;
+    var bw=perWeekOf(best);
+    // ALWAYS SAY THE FREQUENCY. It is the thing the user actually has to do, and until
+    // now it was implicit in a cadence label. The comparison below rides on this line
+    // when there is one to make; the line itself is not conditional on there being one.
+    var line='This plan asks for about '+(Math.round(bw*10)/10)+' injection'
+      +(Math.abs(bw-1)<0.05?'':'s')+' a week.';
+    // The cheapest alternative that is meaningfully rarer, and what it would cost.
+    var leaner=null;
+    results.forEach(function(r){
+      if(perWeekOf(r)>=bw-0.4) return;                       // not actually fewer
+      if(!_admits(r)) return;                                // never trade target for convenience
+      if(!leaner||perWeekOf(r)<perWeekOf(leaner)) leaner=r;
+    });
+    if(leaner){
+      var dRip=Math.round((leaner.ripple-best.ripple)*100);
+      var saved=Math.round((bw-perWeekOf(leaner))*10)/10;
+      line+=' '+(leaner.cadence&&leaner.cadence.label||'A longer interval')
+        +' also holds the target, with '+saved+' fewer a week, at '
+        +(dRip>0?('about '+dRip+' more points of within-week swing'):'no more swing')
+        +' — it is listed below and can be applied instead.';
+    }
+    // Why fewer, larger injections is not merely a preference.
+    line+=' Syringe dead space is a fixed ~0.08 ml every time, whatever the dose, so it '
+      +'is a far bigger share of a small draw than a large one.';
+    notes.push(line);
+  })();
   // ── HOW WELL IS THIS CURVE ACTUALLY CALIBRATED? ────────────────────────────
   // The guards above catch a curve that cannot be solved at all. They say nothing
   // about one that solves fine but rests on a weak anchor, and those numbers come out
@@ -3950,11 +4476,44 @@ function tcSolveTransition(opts){
     notes.push(msg);
   }
 
+  // ── AND HOW TO GET THERE, NOT ONLY WHERE TO END UP ───────────────────────
+  // Computed against the schedule that WON, because a front-load is sized to the plan
+  // it rides on: the maintenance rate decides the depot, and the depot decides the
+  // dose. Computed last for the same reason.
+  var loading=null;
+  try{
+    var _ld=_tcSolveLoadingDose(ctx, best);
+    if(_ld&&_ld.loading&&_ld.plan){
+      loading=_ld.loading;
+      // The ramp that assumes the front-load REPLACES the one that does not. Anything
+      // else shows a schedule solved for a gap the loading dose has already closed.
+      best=_ld.plan;
+    }
+  }
+  catch(e){ if(typeof _logErr==='function')_logErr('tcSolveLoadingDose',e); }
+  if(loading){
+    var _ln='Loading dose: make the first injection on '+loading.date+' '
+      +loading.firstDoseMg+' mg instead of '+loading.maintenanceMg+' mg — an extra '
+      +loading.mg+' mg ('+loading.ml+' ml), as ONE bigger injection rather than a second '
+      +'one. It fills the depot to the level this schedule maintains instead of waiting '
+      +'for it to fill at the maintenance rate, so you open at target instead of '
+      +'climbing to it: across the plan the level sits about '+loading.missWith
+      +' pmol/L from target on average, against '+loading.missWithout+' without it.';
+    if(loading.peakOverWithout>loading.peakOver+0.5){
+      _ln+=' The ramp is also gentler for it — without the loading dose the schedule has '
+        +'to climb hard to close the opening gap and overshoots '+loading.peakOverWithout
+        +'% in the middle of the plan; with it, '+loading.peakOver+'%.';
+    }
+    _ln+=' The whole schedule below was re-solved assuming this dose, so do not apply '
+      +'one without the other.';
+    notes.push(_ln);
+  }
+
   return {
     // results already has `best` removed above — slicing again silently dropped the
     // next-ranked option, which is how the variable-interval solve came 2nd and was
     // never shown.
-    best: best, alternatives: results, target: ctx.targetPmol,
+    best: best, alternatives: results, target: ctx.targetPmol, loading: loading,
     concMgPerMl: ctx.concMgPerMl, stepMl: ctx.stepMl, weeks: ctx.weeks,
     incomingId: ctx.incomingId, startDate: ctx.startDate, notes: notes,
     // dose_phases, in the shape the generator and the ramp editor already consume.
@@ -5650,7 +6209,10 @@ function buildTCalc() {
       var _bwTT   = parseDec(_latestBw.total_t)   || 0;
       var _bwSHBG = parseDec(_latestBw.shbg)       || 0;
       var _bwMFT  = parseDec(_latestBw.free_t)     || 0;
-      var _bwDose = parseDec(_latestBw.dose_at_bw) || 0;
+      // Same rule as the profile sync: the record answers this, not a typed number.
+      var _bwRate = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(_latestBw.date) : null;
+      var _bwDose = (_bwRate && _bwRate.mgPerDay > 0) ? _bwRate.mgPerWeek
+                                                      : (parseDec(_latestBw.dose_at_bw) || 0);
       var _bwVerm = (_bwTT > 0 && _bwSHBG > 0) ? _tcVermeulenFT(_bwTT, _bwSHBG) : null;
       var _bwFrac = _bwMFT > 0 && _bwTT > 0 ? _bwMFT / (_bwTT * 1000)
                   : (_bwVerm !== null && _bwTT > 0 ? _bwVerm / (_bwTT * 1000) : null);

@@ -193,7 +193,7 @@ async function wizSave(){
   var res=await saveStacksToBackend();
   updateWEEKLY();
   var _savedStack=_wiz.stackIndex>=0?_userStacks[_wiz.stackIndex]:null;
-  if(_savedStack&&_savedStack.cycle_start){var _today0=new Date(NOW);_today0.setHours(0,0,0,0);await generateAndPushInjections(_savedStack,_today0);await refreshInjectionsCache();}
+  if(_savedStack&&_savedStack.cycle_start&&confirmSavePrune(_savedStack)){var _today0=new Date(NOW);_today0.setHours(0,0,0,0);await generateAndPushInjections(_savedStack,_today0);await refreshInjectionsCache();}
   buildWeekStrip();
   buildToday();
   buildSchedule();
@@ -924,7 +924,7 @@ function _trtSolveWeeksDefault(scope){
 }
 function _trtSolveSt(id,scope){
   if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',
-    weeks:_trtSolveWeeksDefault(scope),step:'0.05',running:false,result:null,error:''};
+    weeks:_trtSolveWeeksDefault(scope),step:'0.05',maxInj:'',minMl:'0.1',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
 // ⚠️ NEVER RE-RENDER FROM A TEXT INPUT'S oninput HANDLER.
@@ -1035,7 +1035,13 @@ async function trtSolveRun(scope,id){
       history:hist, scheduled:sched, incomingId:_inc,
       startDate:start, targetPmol:st.target,
       concMgPerMl:parseDec(st.conc)||_trtDefaultConc(id),
-      stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16
+      stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16,
+      // '' means no cap — the solver then ranks on the standing per-injection price
+      // alone, which is the default and the behaviour everyone had before.
+      maxInjPerWeek:parseDec(st.maxInj)||0,
+      // '' is an explicit "no floor", distinct from unset — parseDec('')||0 gives 0,
+      // which the solver reads as no constraint.
+      minMl:(st.minMl===''?0:(parseDec(st.minMl)||0))
     }):null;
     if(!res)st.error='Could not solve — check the target, the start date, and that you have logged injections to model the tail from.';
     st.result=res;
@@ -1140,6 +1146,21 @@ function trtSolveApply(scope,id,which){
   var _lone=_mapped.length===1&&!(_mapped[0].iv>0)&&!(_mapped[0].pattern&&_mapped[0].pattern.length);
   if(_lone)delete comp.dose_phases;   // also clears a stale ramp from an earlier solve
   else comp.dose_phases=_mapped;
+  // ── THE LOADING DOSE COMES WITH THE PLAN IT WAS SIZED FOR ────────────────
+  // A front-load is computed against the maintenance rate of ONE schedule — the depot
+  // it has to fill is that schedule's depot. Applying a different option must therefore
+  // not carry the winner's loading dose across, and must clear any left over from an
+  // earlier solve, or the protocol keeps a front-load sized for a plan it no longer runs.
+  var _load=(pick===st.result.best)?st.result.loading:null;
+  if(_load&&_load.mg>0) comp.load_mg=String(_load.mg);
+  else delete comp.load_mg;
+  // ⚠️ THE CAP TRAVELS WITH THE PLAN, or the generator cannot honour it.
+  // The solver trims its candidate days so the cap counts doses already taken
+  // (_injCapTrim); the generator has to trim the SAME days or the rows written would
+  // not be the rows scored. Stored per compound because the cap is per compound.
+  var _cap=parseDec(st.maxInj)||0;
+  if(_cap>0) comp.max_inj_week=String(_cap);
+  else delete comp.max_inj_week;
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
@@ -1232,6 +1253,39 @@ function _renderTRTSolve(c,selData,scope,hideRun){
       +'</select>'
       +'<span style="font-size:11px;color:var(--muted2)">= '
       +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg per step</span></div>'
+    // ── HOW OFTEN YOU ARE WILLING TO INJECT IS AN INPUT, NOT AN OUTPUT ───────
+    // Henrik, 2026-09-16, on a plan that asked for a 25 mg jab every day: "I do loose
+    // oil since the syringe and needle head still contains some oil that gets wasted.
+    // Also cost of syringes and needles becomes wasteful."
+    //
+    // The solver prices injections now, so a frequent plan has to earn its smoothness.
+    // This is the hard override on top of that price, for when the answer is simply
+    // "not daily, whatever the model says". Left empty it does nothing.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">At most</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'maxInj',this.value")+'">'
+      +[['','no limit'],['7','1 a day'],['4','4 a week'],['3','3 a week'],
+        ['2','2 a week'],['1','1 a week']].map(function(o){
+          return '<option value="'+o[0]+'"'+(String(st.maxInj||'')===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2)">injections</span></div>'
+    // ── THE SMALLEST DRAW WORTH SCHEDULING ──────────────────────────────────
+    // Henrik, 2026-09-16: "Also set min injection to 0,1ml." Below about a tenth of a
+    // millilitre the syringe stops being the instrument the plan assumes: dead space is
+    // ~0.07-0.10 ml, so the hub keeps more than the muscle gets, and a 1 ml barrel
+    // cannot be read to a fraction of it. The solver meets this by injecting less often
+    // and more at a time, never by rounding a dose up.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">No less than</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'minMl',this.value")+'">'
+      +[['0.1','0.1 ml'],['0.05','0.05 ml'],['0.15','0.15 ml'],['0.2','0.2 ml'],['','no floor']]
+        .map(function(o){
+          return '<option value="'+o[0]+'"'+(String(st.minMl===''?'':(st.minMl||'0.1'))===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2)">per injection ('
+      +(Math.round((parseDec(conc)||250)*(parseDec(st.minMl)||0)*10)/10)+' mg)</span></div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';
@@ -1275,6 +1329,27 @@ function _renderTRTSolve(c,selData,scope,hideRun){
         })();
     h+='<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>';
     h+='</div>';
+    // ── THE LOADING DOSE IS A DIFFERENT INSTRUCTION AND GETS ITS OWN BOX ─────
+    // Every other number on this card is "do this repeatedly". This one is "do this
+    // once, first", and folding it into the ramp table is how it would be missed or —
+    // far worse — repeated. It sits above the schedule because it happens before it.
+    h+=(function(){
+      var L=r.loading;
+      if(!L||!(L.mg>0))return '';
+      return '<div style="background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.45);'
+        +'border-radius:8px;padding:10px 12px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:700;color:#5ad1b0;margin-bottom:3px">'
+        +'Loading dose &mdash; once, on '+_esc(L.date)+'</div>'
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.55">'
+        +'Make that first injection <b>'+L.firstDoseMg+' mg</b> ('+L.ml+' ml more than the '
+        +L.maintenanceMg+' mg the schedule calls for), then carry on as below. '
+        +'It fills the depot to the level this plan maintains instead of waiting for it '
+        +'to fill at the maintenance rate, so you reach target in '
+        +(L.weeksWith?('about week '+L.weeksWith):'the first week')+' rather than '
+        +(L.weeksWithout?('week '+L.weeksWithout):'not at all inside this plan')+'.'
+        +'<br><b>One bigger injection, not an extra one.</b> Applying this plan writes it '
+        +'into the first dose for you.</div></div>';
+    })();
     h+='<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
       +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">'
@@ -1618,8 +1693,10 @@ async function saveEditBuf(){
         await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
-    await generateAndPushInjections(_editBuf,_editToday0);
-    await refreshInjectionsCache();
+    if(confirmSavePrune(_editBuf)){
+      await generateAndPushInjections(_editBuf,_editToday0);
+      await refreshInjectionsCache();
+    }
   }
   buildWeekStrip();buildToday();buildSchedule();
   buildStackStore();
@@ -4918,6 +4995,30 @@ function _nextDay(d){
   return n;
 }
 
+// ── A LOADING DOSE RIDES ON THE FIRST INJECTION, AND ONLY ON IT ─────────────
+// Held as a plain mg on the compound rather than as a dated row. A date would have to
+// be kept in step with the ramp's cycle_start offset, with the compound's own
+// start_date, and with every edit to either — and a stale one would front-load the
+// wrong day silently.
+//
+// ⚠️ THE FIRST DAY IS COMPUTED FROM THE PROTOCOL START, NEVER FROM genStart.
+// Regeneration resumes from a date in the middle of a plan (a forward rewrite after an
+// edit). Taking the first day from there would re-apply the front-load on whatever day
+// the rewrite happened to start — a second loading dose, weeks in, every time anything
+// was edited. Off the protocol start it resolves to the same calendar day every time,
+// and that day falls outside a forward rewrite's window, so the rewrite simply does
+// not include it.
+function _trtLoadFirstDay(c,cycleStart,cycleEnd){
+  if(!(parseDec(c&&c.load_mg)>0))return null;
+  var from=c.start_date
+    ? new Date(Math.max(parseLocalDate(c.start_date).getTime(),cycleStart.getTime()))
+    : new Date(cycleStart);
+  for(var d=new Date(from); d<=cycleEnd; d=_nextDay(d)){
+    if(_phasedHitsDay(c,d,cycleStart,_trtHitsDay))return dateKey(d);
+  }
+  return null;
+}
+
 function _genInjBatches(stack,cycleId,fromDate){
   if(!stack||!stack.cycle_start)return[];
   var cycleStart=parseLocalDate(stack.cycle_start);
@@ -5024,6 +5125,30 @@ function _genInjBatches(stack,cycleId,fromDate){
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
+      var _loadDay=_trtLoadFirstDay(c,cycleStart,cycleEnd), _loadMg=parseDec(c.load_mg)||0;
+      // ⚠️ THE SAME TRIM THE SOLVER SCORED, FROM THE SAME FUNCTION.
+      // A cap of "3 a week" is a cap on 7-day WINDOWS counting doses already in the
+      // record, not a quota the plan's own first week gets to spend afresh. Working it
+      // out here independently would be two implementations of one rule, which is how
+      // the plan and the curve come to disagree; _injCapTrim is the single copy.
+      var _capW=parseDec(c.max_inj_week)||0, _allowed=null;
+      if(_capW>0&&typeof _injCapTrim==='function'){
+        var _cand=[];
+        for(var _cd=new Date(cStart);_cd<=cEnd;_cd=_nextDay(_cd))
+          if(_phasedHitsDay(c,_cd,cycleStart,_trtHitsDay))_cand.push(new Date(_cd));
+        var _taken=[];
+        Object.keys(_injectionsCache||{}).forEach(function(dk){
+          (_injectionsCache[dk]||[]).forEach(function(e){
+            if(!e||!e.logged)return;
+            var eid=(typeof _canonCompoundId==='function')?_canonCompoundId(e.compound_id):e.compound_id;
+            if(eid!==_canonCompoundId(c.id))return;
+            var t=new Date(e.date+'T12:00:00').getTime();
+            if(isFinite(t))_taken.push(t);
+          });
+        });
+        _allowed={};
+        _injCapTrim(_cand,_taken,_capW).forEach(function(dd){_allowed[dateKey(dd)]=true;});
+      }
       for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
@@ -5033,6 +5158,7 @@ function _genInjBatches(stack,cycleId,fromDate){
         // that exact reading for saved protocols and lets either be chosen now.
         hit=_phasedHitsDay(c,d,cycleStart,_trtHitsDay);
         if(!hit)continue;
+        if(_allowed&&!_allowed[dateKey(d)])continue;   // the cap's window is already full
         // ── DOSE RAMPS APPLY TO TESTOSTERONE TOO (ester transitions) ──────────
         // _effectiveDoseAt had exactly one call site — the peptide branch — so a TRT
         // compound carrying dose_phases generated its FLAT dose and the ramp was
@@ -5057,7 +5183,13 @@ function _genInjBatches(stack,cycleId,fromDate){
         // stayed invisible while every testosterone arrived pre-filled from the
         // catalogue — which is the thing being removed here.
         if(!(parseDec(_dpd.dose)>0))continue;
-        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dpd.dose||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
+        // The front-load is added to this dose rather than scheduled beside it: one
+        // bigger injection, not two on the same day. Guarded on mg because a loading
+        // dose in milligrams has no meaning against an IU or ml dose.
+        var _dOut=_dpd.dose;
+        if(_loadDay&&_loadMg>0&&dateKey(d)===_loadDay&&(_dpd.unit||'mg')==='mg')
+          _dOut=String(Math.round((parseDec(_dpd.dose)+_loadMg)*10)/10);
+        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dOut||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       // Empty batches are pushed too — see the note in the peptide branch above.
       batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
@@ -5128,6 +5260,63 @@ function _injPkMeta(tier,id){
     }
   }catch(e){}
   return {ester:ester,half_life_days:(hl&&isFinite(hl)&&hl>0)?hl:null};
+}
+
+// ── SAY SO BEFORE A SAVE REPLACES A DOSE YOU MAY HAVE TAKEN ─────────────────
+// Henrik, 2026-09-16, after 19 past PM HGH rows were pruned by a protocol rewrite:
+// "Add a warning that saving a new protocol might prune unchecked doses."
+//
+// Saving regenerates the plan from today, which replaces this protocol's UNCHECKED rows
+// from today on. Past rows are safe now (backend #274 — an unticked past dose is not a
+// plan), so what is left at risk is the narrow, real case: a dose scheduled for TODAY or
+// YESTERDAY that was taken and not ticked yet. The record cannot tell that apart from one
+// that was skipped, so a rewrite that drops the compound or the slot takes it with it.
+//
+// ⚠️ IT DOES NOT WARN ABOUT THE FORWARD PLAN, and that is the whole design. A thirteen
+// week protocol has ninety unchecked doses in it by definition — they are the plan, and
+// replacing them is what saving MEANS. A dialog announcing that on every save is noise,
+// and noise is what gets clicked through. This fires only when something is genuinely
+// unrecoverable, which is rare enough to be read.
+//
+// Yesterday is included because the backend's prune boundary is yesterday, deliberately,
+// so a server running ahead of the user's local day cannot treat their current day as
+// past. The warning covers exactly what the prune can still reach.
+function _injAtRiskOnSave(stack){
+  if(!stack||typeof _injectionsCache==='undefined'||!_injectionsCache) return [];
+  var cid=_stackCycleId(stack);
+  var t0=new Date(NOW); t0.setHours(0,0,0,0);
+  var from=dateKey(new Date(t0.getTime()-86400000)), to=dateKey(t0);
+  var out=[];
+  Object.keys(_injectionsCache).forEach(function(dk){
+    if(dk<from||dk>to) return;
+    (_injectionsCache[dk]||[]).forEach(function(e){
+      if(!e||e.logged) return;
+      if((e.cycle_id||'')!==cid) return;
+      out.push({date:e.date, name:e.compound_name||e.compound_id, slot:e.time_of_day||''});
+    });
+  });
+  out.sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; });
+  return out;
+}
+// Returns false only when the user actively declines. Nothing to warn about, or no
+// confirm available, proceeds — a save must not be blocked by the absence of a dialog.
+function confirmSavePrune(stack){
+  var at=_injAtRiskOnSave(stack);
+  if(!at.length) return true;
+  if(typeof confirm!=='function') return true;
+  var t0=dateKey(NOW);
+  var lines=at.slice(0,6).map(function(r){
+    return '  \u2022 ' + (r.date===t0?'today':r.date) + ' \u2014 ' + r.name
+         + (r.slot?(' ('+r.slot+')'):'');
+  }).join('\n');
+  if(at.length>6) lines+='\n  \u2022 \u2026and '+(at.length-6)+' more';
+  return confirm(
+    'Saving replaces this protocol\'s unchecked doses from today.\n\n'
+    + at.length + ' unchecked dose' + (at.length===1?'':'s') + ' from today or yesterday '
+    + 'will be rewritten:\n' + lines + '\n\n'
+    + 'If you have already taken any of them, tick them first \u2014 an unchecked dose '
+    + 'cannot be told apart from one you skipped, and if the new plan does not schedule '
+    + 'it, the record of it is gone.\n\nSave anyway?');
 }
 
 async function generateAndPushInjections(stack,fromDate){
