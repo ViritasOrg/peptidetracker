@@ -17584,6 +17584,170 @@ console.log('\n── Enhanced dose: drawable injections ───────�
   G._COMPOUND_CATALOG=_catSave;
 }
 
+// ── THE DEPLOY CARD MUST NOT PRESENT AN OLD PUSH AS THE CURRENT STATE ────────
+// Henrik, 2026-09-17: "I pushed deploy to prod on b805 but when I check status it says
+// b797 last push to prod? If the 805 failed I would expect a different message."
+//
+// It had not failed. Prod went to v1.328 from staging v1.805 exactly as it should. The
+// UI stopped watching: pollPromoteStatus gave up after 100 attempts at 3s — five
+// minutes — while that promotion run took 8m28s, because the workflow's last step waits
+// for CI on the prod PR before merging it. On timeout it wrote NOTHING, so the record
+// still held the previous push and the card showed a 16-hour-old v1.797 → v1.327.
+// ── EVERY TIER GETS THE INFO BUTTON ──────────────────────────────────────────
+// Henrik, 2026-09-17: "Why is test E nit having a Info button here?"
+//
+// Because Today only ever built one for two of the three tiers — both renderers branch
+// peptide / enhanced and stop. Glow and HGH got an ℹ, Masteron got one for being an
+// enhanced compound, and the testosterone sitting between them got nothing. Nothing was
+// disabled or hidden: the button was never created, and there was no card to open.
+// This is the failure CLAUDE.md's UI-consistency rule names outright — "If one tier
+// shows an info card, all must" — on the tier the app is built around.
+console.log('\n── Today: info button parity across tiers ─────────────────');
+{
+  const td=fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8');
+  // Count the INFO-BUTTON branch specifically. `dose.tier==='trt'` also appears in the
+  // name-colour logic, so a bare occurrence count would pass without a button existing.
+  //
+  // ⚠️ AND A DISTANCE IS NOT A SCOPE — the lesson this file already learned once. A
+  // `[^}]*` window dies on the first nested callback's brace and a fixed character count
+  // reaches into the next branch. Each occurrence is sliced to wherever the NEXT tier
+  // test begins, which is the real boundary between these branches.
+  const infoBranches=(t)=>{
+    const marks=[]; const needle="dose.tier==='";
+    for(let i=td.indexOf(needle); i>=0; i=td.indexOf(needle,i+1)) marks.push(i);
+    let n=0;
+    marks.forEach(function(at,idx){
+      if(td.slice(at,at+needle.length+t.length+1)!==needle+t+"'") return;
+      const end=(idx+1<marks.length)?marks[idx+1]:td.length;
+      if(td.slice(at,end).indexOf('info-btn')>=0) n++;
+    });
+    return n;
+  };
+  ['peptide','enhanced','trt'].forEach(function(t){
+    check('both Today renderers offer an info button for '+t, infoBranches(t)===2,
+      infoBranches(t)+' of 2');
+  });
+  check('  …and each tier opens its own card', (function(){
+    return /showPeptideCard\(_id\)/.test(td) && /showEnhancedCard\(_id\)/.test(td)
+        && /showTrtCard\(_id\)/.test(td);
+  })());
+
+  // The card itself: same sheet, same Done button, carrying the guide the compound
+  // editor already shows under TRT GUIDE.
+  check('a TRT info card exists and renders without throwing', (function(){
+    if(typeof G.showTrtCard!=='function') return false;
+    const _su=G._userStacks, _sa=G._activeStackIndices;
+    G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg',
+                                     cadence:'days',days:[4]}]}}];
+    G._activeStackIndices=[0];
+    let ok=true;
+    try{ G.showTrtCard('enanthate'); }catch(e){ ok=false; }
+    G._userStacks=_su; G._activeStackIndices=_sa;
+    return ok;
+  })());
+  check('  …built from the guide the editor already shows', (function(){
+    const g=G._renderTRTGuide('enanthate',350);
+    return !!g && /Recommended cadence/.test(g) && /½-life/.test(g);
+  })());
+  // ⚠️ A COMPOUND WITH NEITHER A CATALOGUE ENTRY NOR A GUIDE MUST BE A NO-OP, NOT A
+  // THROW — Today builds the button from the same lookup, and an exception inside an
+  // onclick takes the whole row's handler with it.
+  check('  …and an unknown compound opens nothing rather than throwing', (function(){
+    try{ G.showTrtCard('no-such-compound'); return true; }catch(e){ return false; }
+  })());
+}
+
+// ── WHAT TO DRAW, NOT JUST WHAT TO GIVE ─────────────────────────────────────
+// Henrik, 2026-09-17: "Also add ml to draw and inject after the mg in the today view."
+//
+// A milligram figure is the prescription; a millilitre figure is the instruction. The
+// row said "125 mg" and left the arithmetic — at which strength? — to be done at the
+// fridge, every time, on the one screen that exists to be followed rather than read.
+console.log('\n── Today: draw volume beside the dose ─────────────────────');
+{
+  const _cat=G._COMPOUND_CATALOG, _us=G._userStacks, _ai=G._activeStackIndices;
+  G._COMPOUND_CATALOG=[
+    {id:'mast_p',name:'Masteron Propionate',pack:{type:'vial',conc_mg_ml:100,vol_ml:10}},
+    {id:'dbol',  name:'Dianabol',           pack:{type:'tablet',mg_per_tab:50,tabs_per_pack:100}}];
+  G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg',conc_mg_ml:250}]}}];
+  G._activeStackIndices=[0];
+
+  check('a TRT dose shows the draw at the vial its plan was solved for',
+    G._todayDrawMl({tier:'trt',compound_id:'enanthate',dose:'125',unit:'mg'})===0.5);
+  check('  …and an enhanced dose reads its vial from the catalogue',
+    G._todayDrawMl({tier:'enhanced',compound_id:'mast_p',dose:'120',unit:'mg'})===1.2);
+
+  // ⚠️ ONLY WHERE THE CONCENTRATION IS KNOWN, NEVER GUESSED. A volume that looks exact
+  // and is not is the worst kind of number on a dosing screen, so anything without a
+  // real strength behind it shows nothing at all.
+  check('  …while a tablet, an IU dose and an ml dose show no volume', (function(){
+    return G._todayDrawMl({tier:'enhanced',compound_id:'dbol',dose:'30',unit:'mg'})===null
+        && G._todayDrawMl({tier:'peptide',compound_id:'hgh',dose:'3',unit:'IU'})===null
+        && G._todayDrawMl({tier:'peptide',compound_id:'glow',dose:'0.09',unit:'ml'})===null;
+  })());
+  check('  …and a compound nobody has told us the strength of shows none either',
+    G._todayDrawMl({tier:'enhanced',compound_id:'nope',dose:'50',unit:'mg'})===null);
+
+  // ⚠️ THE VIAL IS REMEMBERED, NOT RE-GUESSED. TRT_CAT's `conc` array lists the
+  // strengths a compound is SOLD in; the one in the fridge is whichever the user picked
+  // in the solve, so trtSolveApply stores it. Without that, "125 mg · 0.5 ml" would be
+  // plausible rather than right.
+  {
+    const stk=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …because applying a plan records the vial it was solved at',
+      /comp\.conc_mg_ml=_cmm/.test(stk));
+  }
+  // A compound whose plan predates that still shows a volume, from the same default the
+  // solver panel opens at — the strength those milligrams were worked out at — and the
+  // info card names the assumption rather than burying it in a division.
+  G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg'}]}}];
+  check('  …and one that predates it falls back to the solver default, not to silence',
+    G._todayDrawMl({tier:'trt',compound_id:'enanthate',dose:'125',unit:'mg'})
+      ===Math.round((125/G._trtDefaultConc('enanthate'))*100)/100);
+
+  // Both renderers put it on the row.
+  {
+    const td=fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8');
+    // Count the CALL SITES, not every mention — `function _todayDrawMl(dose){` matches
+    // the same text and would let one renderer go without.
+    check('  …shown on the row in both Today renderers',
+      (td.match(/var _ml=_todayDrawMl\(dose\)/g)||[]).length===2
+      && (td.match(/' · '\+_ml\+' ml'/g)||[]).length===2);
+  }
+  G._COMPOUND_CATALOG=_cat; G._userStacks=_us; G._activeStackIndices=_ai;
+}
+
+console.log('\n── Deploy card: push status ───────────────────────────────');
+{
+  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  // ⚠️ THE WAIT IS BUDGETED IN TIME, AGAINST WHAT THE WORKFLOW TAKES. Counting attempts
+  // hid the deadline: "100" reads like patience and was five minutes. Asserted as a
+  // duration that comfortably exceeds the 8m28s run that exposed this.
+  check('the promote poller waits longer than the workflow takes', (function(){
+    const m=html.match(/_PROMOTE_WAIT_MS\s*=\s*(\d+)\s*\*\s*60\s*\*\s*1000/);
+    return !!m && parseInt(m[1],10)>=15;
+  })(), (html.match(/_PROMOTE_WAIT_MS\s*=\s*[^;]+/)||['not found'])[0]);
+  check('  …and gives up on elapsed time, not on a count of attempts',
+    /Date\.now\(\)-startedAt>_PROMOTE_WAIT_MS/.test(html) && !/attempt>100/.test(html));
+
+  // ⚠️ LOSING SIGHT OF A PUSH IS A THIRD OUTCOME AND MUST BE RECORDED AS ONE. Silence is
+  // indistinguishable from "nothing happened", which is the reading that made him doubt
+  // a deploy that had worked.
+  check('  …recording a push it stopped watching rather than leaving the last one standing',
+    /function saveAbandonedPush\(/.test(html)
+    && (html.match(/saveAbandonedPush\(/g)||[]).length>=3);
+  check('  …and showing it as unknown, not as a failure',
+    /conclusion:'unknown'/.test(html) && /_unk\?'\?'/.test(html));
+
+  // ⚠️ AND WHAT PROD IS RUNNING IS A FACT, NOT A MEMORY OF HAVING WATCHED IT CHANGE.
+  // Everything else on the card is what this browser saw while it was watching; close
+  // the app and that freezes. One fetch answers the question the card is really asked.
+  check('  …while the live prod version is read fresh, independent of any record',
+    /function _showLiveProdVersion\(/.test(html)
+    && /_showLiveProdVersion\(\);/.test(html)
+    && /Prod is running/.test(html));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after

@@ -1137,6 +1137,16 @@ async function trtSolveRun(scope,id){
 function trtSolveApply(scope,id,which){
   var st=_trtSolveSt(id), comp=_trtComp(scope,id);
   if(!st.result||!comp)return;
+  // ⚠️ REMEMBER WHICH VIAL THIS PLAN WAS SOLVED FOR.
+  // The doses below are milligrams, and milligrams only become a draw once you know the
+  // concentration. TRT_CAT's `conc` array is the list of strengths a compound is SOLD
+  // in, not a statement about the one in the fridge — so a millilitre figure derived
+  // from it is a guess. The solve already knows: the user picked a vial in the panel,
+  // and every dose it produced was snapped to whole 0.1 ml steps AT THAT STRENGTH.
+  // Storing it is what lets Today say "125 mg · 0.5 ml" and be right rather than
+  // plausible.
+  var _cmm=parseDec(st.conc)||_trtDefaultConc(id);
+  if(_cmm>0) comp.conc_mg_ml=_cmm;
   var pick=st.result.best;
   if(which!=null&&which!=='best'){
     var alt=(st.result.alternatives||[])[parseInt(which,10)];
@@ -2040,6 +2050,83 @@ function showEnhancedCard(id){
   var overlay=document.createElement('div');overlay.className='pcard-overlay';overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
   var sheet=document.createElement('div');sheet.className='pcard-sheet';
   sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+(cat.name||id)+'</div><div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'+(cat.group||'')+'</div></div>'+myDoseHtml+_renderEnhancedGuide(cat,activeDose,(userComp&&userComp.unit)||cat.unit||'')+'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;"><button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
+  overlay.appendChild(sheet);document.body.appendChild(overlay);
+}
+// ⚠️ TRT HAD NO INFO CARD AT ALL, AND THAT IS A TIER-PARITY BREAK.
+// Henrik, 2026-09-17: "Why is test E nit having a Info button here?"
+//
+// Because Today only ever built one for two of the three tiers — the renderers branch
+// peptide / enhanced and stop. So Glow and HGH got an ℹ, Masteron got one for being an
+// enhanced compound, and the testosterone sitting between them got nothing. Nothing was
+// disabled or hidden: the button was never created, and there was no card for it to
+// open either.
+//
+// This is the failure CLAUDE.md's UI-consistency rule names outright — "If one tier
+// shows an info card, all must" — and it is the tier the app is built around.
+//
+// The content already existed: _renderTRTGuide is what the compound editor shows under
+// TRT GUIDE, with the recommended cadence, the half-life and the dose tiers. Same
+// sheet, same shape and same Done button as the enhanced card, so the three tiers read
+// as one app rather than three.
+function showTrtCard(id){
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===id;}):null;
+  // A compound with no catalogue entry AND no guide has nothing to show; one with
+  // either still does. TRT_GUIDE is keyed on the same ids, so a guide alone is enough.
+  var guide=(typeof TRT_GUIDE!=='undefined')?TRT_GUIDE[id]:null;
+  if(!cat&&!guide)return;
+  var dot=(cat&&cat.dot)||'#e05050';
+  var name=(cat&&cat.name)||id;
+  // The user's own dose, read from whichever active stack carries this compound —
+  // exactly how the enhanced card finds it.
+  var userComp=null;
+  (_activeStackIndices||[]).forEach(function(si){
+    var st=_userStacks[si]; if(!st||!st.trt)return;
+    var f=(st.trt.compounds||[]).find(function(c){return c.id===id;});
+    if(f&&!userComp)userComp=f;
+  });
+  var myDoseHtml='', weeklyMg=0;
+  if(userComp){
+    // ⚠️ THE GUIDE IS KEYED ON MILLIGRAMS PER WEEK, AND A RAMP HAS NO SINGLE DOSE.
+    // _trtCurrentScheduleLabel already knows how to say what a compound is running;
+    // the weekly figure here drives which dose tier the guide highlights, so a ramped
+    // compound uses the phase in force today rather than the flat field it ignores.
+    var perInj=parseDec(userComp.dose)||0;
+    if(userComp.dose_phases&&userComp.dose_phases.length){
+      var ph=userComp.dose_phases.slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+      perInj=parseDec(ph[ph.length-1].d)||perInj;
+    }
+    var ivDays=(typeof _cadenceIntervalDays==='function')?_cadenceIntervalDays(userComp):7;
+    if(perInj>0&&ivDays>0) weeklyMg=perInj*7/ivDays;
+    var label=(typeof _trtCurrentScheduleLabel==='function')?_trtCurrentScheduleLabel(userComp):'';
+    if(label&&label!=='NONE')
+      myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:12px;">'
+        +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div>'
+        +'<div style="font-size:13px;color:var(--text);">'+_esc(label)
+        +(weeklyMg>0?(' · ~'+Math.round(weeklyMg)+' mg/week'):'')+'</div>'
+        // ⚠️ NAME THE STRENGTH THE MILLILITRES ARE DERIVED FROM. Today shows a draw
+        // volume beside every mg figure, and a volume is only meaningful with the
+        // concentration behind it. Said once here rather than repeated on every row.
+        +(function(){
+           var cmm=parseDec(userComp.conc_mg_ml)
+                   ||((typeof _trtDefaultConc==='function')?_trtDefaultConc(id):0);
+           if(!(cmm>0))return '';
+           var stored=parseDec(userComp.conc_mg_ml)>0;
+           return '<div style="font-size:11px;color:var(--muted2);margin-top:4px">'
+             +(stored?'Solved for a ':'Draw volumes assume a ')+'<b>'+cmm+' mg/ml</b> vial'
+             +(stored?'.':' — apply a plan to set this from the vial you picked.')+'</div>';
+         })()
+        +'</div>';
+  }
+  var overlay=document.createElement('div');overlay.className='pcard-overlay';
+  overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
+  var sheet=document.createElement('div');sheet.className='pcard-sheet';
+  sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+_esc(name)+'</div>'
+    +'<div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'
+    +_esc(_metaWithHalfLife(cat||{id:id},(cat&&cat.sub)||''))+'</div></div>'
+    +myDoseHtml
+    +((typeof _renderTRTGuide==='function')?_renderTRTGuide(id,weeklyMg):'')
+    +'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;">'
+    +'<button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
   overlay.appendChild(sheet);document.body.appendChild(overlay);
 }
 // ── Wizard ────────────────────────────────────────────────────────────────────
