@@ -2984,6 +2984,43 @@ var _TC_CADENCES = [
   {key:'1xwk', label:'Once weekly (Mon)',       days:[1],                   perWeek:1}
 ];
 
+// ⚠️ A WEEKLY CADENCE STARTS WHEN THE PLAN STARTS, NOT ON A MONDAY.
+// Henrik, 2026-09-17: "Why would first testosterone injection happen next week if
+// protocol starts today?"
+//
+// Because the weekday cadences above named their days literally — Mon, and Mon/Thu —
+// and _tcSolveDates walks forward from the start date taking the first match. A plan
+// beginning on a Wednesday therefore did nothing for five days. The interval cadences
+// never had this: they step from the start date, which is why it only ever bit the
+// weekly options.
+//
+// The model was at least honest about it — it simulated the first dose on that later
+// day too, so the curve was right — but the days are still lost, and they are the worst
+// days to lose: the LOADING DOSE rides on the first injection. A front-load exists to
+// close the gap in days rather than weeks, and it was sitting in the vial for most of a
+// half-life before the plan opened.
+//
+// So the weekday set is rotated onto the start day: once weekly injects on the start
+// day and every seventh day after, twice weekly on the start day and ~3.5 days later.
+// Same cadence, same spacing, same solve — it just no longer waits for a Monday. The
+// label follows, because "Once weekly (Mon)" on a Wednesday plan is the kind of caption
+// that sends someone hunting for a bug that is not there.
+var _TC_DAY_NAMES=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function _tcAnchorCadence(cad, startDate){
+  if(!cad||!cad.days||!cad.days.length||!startDate) return cad;
+  var d=new Date(startDate+'T12:00:00');
+  if(isNaN(d.getTime())) return cad;
+  // Rotate by the gap between the cadence's own first day and the start weekday, so the
+  // SPACING between days is preserved exactly — Mon/Thu is 3 then 4 days apart, and it
+  // stays 3 then 4 wherever it lands.
+  var shift=((d.getDay()-cad.days[0])%7+7)%7;
+  if(!shift) return cad;
+  var days=cad.days.map(function(x){ return (x+shift)%7; }).sort(function(a,b){return a-b;});
+  var named=days.map(function(x){ return _TC_DAY_NAMES[x]; }).join('/');
+  return Object.assign({}, cad, {days:days,
+    label:cad.label.replace(/\([^)]*\)/, '('+named+')')});
+}
+
 function _tcSolveDayKey(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
@@ -3080,6 +3117,45 @@ function _tcSolveWindowStats(ser,fromMs,toMs){
     if(v>pk)pk=v; if(v<tr)tr=v;
   }
   return {mean:n?sum/n:0, peak:pk, trough:isFinite(tr)?tr:0};
+}
+
+// ⚠️ THE FLOOR APPLIES TO EVERY DOSE IN THE PLAN, NOT JUST THE ONE IT SETTLES AT.
+// Henrik, 2026-09-16: "0,2ml is non negotiable."
+//
+// The candidate filter measured the floor on the SETTLED dose, on the reasoning that
+// "a ramp's opening weeks are legitimately small while the outgoing ester is still
+// carrying the level". That was true of a tapering ramp and false the moment a loading
+// dose existed: a front-load is followed by a compensation week where the plan needs
+// almost nothing, and on his own numbers that came out as 25 mg — 0.1 ml at 250 mg/ml,
+// half his floor, scheduled as a real injection to tick off in Today.
+//
+// A dose below the floor is not a dose. It is met the way the panel copy has always
+// promised — by injecting LESS OFTEN, never by rounding up — so a sub-floor week
+// becomes a skipped injection and the schedule keeps the milligrams it was solved for
+// in the weeks it can actually draw. Rounding up would be an overdose applied to
+// satisfy a convenience rule, which is the one thing the floor must never cause.
+//
+// Applied after snapping in all three solvers and before the final evaluation, so the
+// reported levels are the levels of the schedule the user will actually inject.
+// ⚠️ A SKIPPED DOSE IS DEFERRED, NOT DISCARDED. Zeroing a sub-floor dose outright
+// throws its milligrams away, and the level goes with them: on one measured solve two
+// consecutive light weeks became a fourteen-day hole and the mean fell to 1207 against
+// a 1400 target. The drug was never the problem — the NEEDLE was. So a dose under the
+// floor is not given, and what it was owed rolls forward to the next injection that can
+// afford it. A 25 mg-a-day plan under a 50 mg floor becomes 50 mg every other day: same
+// weekly milligrams, half the needles, every one of them drawable.
+//
+// Both inputs are already whole syringe steps, so a carried dose stays on the grid — the
+// carry can never produce a volume the snap would have rejected.
+function _tcApplyFloor(doses, minMg){
+  if(!(minMg>0)) return doses;
+  var out=[], carry=0;
+  for(var i=0;i<doses.length;i++){
+    var d=(doses[i]||0)+carry;
+    if(d>0 && d<minMg-1e-9){ out.push(0); carry=d; }   // owed, not lost
+    else { out.push(d); carry=0; }
+  }
+  return out;
 }
 
 // Snap a dose to whole syringe steps — what can actually be drawn up.
@@ -3217,6 +3293,19 @@ var _TC_INJ_COST = 0.01;
 // that actually holds the level. 6% of target, matching the band the suite asserts a
 // winner must hold.
 var _TC_HOLD_TOL = 0.06;
+// ⚠️ HOW FAR THE LEVEL MAY TRAVEL BETWEEN INJECTIONS AND STILL COUNT AS HOLDING.
+// _TC_HOLD_TOL above is about where the level SITS — a band on the weekly means. This is
+// the other half of the same claim: how far it may swing around them. Measured as
+// worstSettled, the furthest the level ever gets from target once settled, peaks and
+// troughs included.
+//
+// 0.30 is a floor under the word "holding", not a precision target. On his record at
+// 1600 the candidates run 19% (daily-dithered), 24% (every 2 days), 26% (every 3 days),
+// 40% (twice weekly) and 74% (once weekly) — so it admits every cadence that keeps him
+// inside roughly 1100-2100 and refuses the two that do not. A tighter number would start
+// excluding reasonable schedules on long esters; a looser one would let the 861-2785
+// sawtooth back in on the strength of its average.
+var _TC_HOLD_SWING = 0.30;
 // THE SMALLEST DRAW WORTH SCHEDULING, in ml. Henrik, 2026-09-16: "Also set min injection
 // to 0,1ml."
 //
@@ -3432,6 +3521,9 @@ function _tcSolveVariable(ctx, opts){
     if(moved<stepMg*0.1) break;
   }
   var finalSched=_tcSolveDatesPhased(ctx.startDate,W,ivWk);
+  var _settledDrawV=0;
+  for(var sdv=mgWk.length-1; sdv>=0; sdv--){ if(mgWk[sdv]>0){ _settledDrawV=mgWk[sdv]; break; } }
+  mgWk=_tcApplyFloor(mgWk, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
   var fin=_tcSolveEvaluatePhased(ctx, finalSched, mgWk);
   if(!fin) return null;
 
@@ -3481,7 +3573,7 @@ function _tcSolveVariable(ctx, opts){
   worstSettledV=ctx.targetPmol>0?worstSettledV/ctx.targetPmol:Infinity;
   return {worstSettled:worstSettledV,
           cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
-          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
+          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk, settledDraw:_settledDrawV,
           ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
           worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
@@ -3581,6 +3673,11 @@ function _tcSolveDailyDither(ctx, opts){
   // Instead the week's total is quantised to whole steps and those steps are spread as
   // evenly as possible across the seven days. The same weekly load always yields the
   // same pattern, so consecutive equal weeks collapse into one phase.
+  // The pattern still spreads the week across all seven days — that is the whole reason
+  // this mode resolves finer than a fixed daily dose. The draw floor is applied to the
+  // finished daily array instead, where it can defer a sub-floor dose to the next day
+  // that can afford it; enforcing it here would have to decide the spacing blind, a week
+  // at a time, and would strand whatever the week could not spend.
   function weekPattern(perDayMg){
     var totalSteps=Math.max(0,Math.round(perDayMg*7/stepMg));
     var base=Math.floor(totalSteps/7), extra=totalSteps%7;
@@ -3616,14 +3713,48 @@ function _tcSolveDailyDither(ctx, opts){
     mg=dither(needW);
     if(moved<stepMg*0.05) break;
   }
+  // Daily array: one entry per injection, so the floor lands on each needle rather than
+  // on a weekly average. This is the mode the floor bites hardest in — 25 mg a day at
+  // 250 mg/ml is 0.1 ml — and it is supposed to: the answer is fewer, bigger draws.
+  mg=_tcApplyFloor(mg, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
+  // ⚠️ FOR A DITHERED PLAN THE FLOOR IS A QUESTION ABOUT THE WEEK, NOT THE DAY.
+  // The carry gives the week as many needles as it can afford and defers the rest, so
+  // the per-day figure is an outcome of the floor rather than a test of it. What can
+  // still fail is a settled week whose whole total is under one floor dose — there the
+  // carry never clears and the steady state is injections drifting further apart
+  // forever, which is a longer interval badly expressed. So the filter is handed the
+  // settled week's TOTAL when that total cannot afford a single dose, and the dose the
+  // plan actually schedules when it can. Zero means "wants nothing", which is legitimate
+  // under a heavy outgoing tail.
+  var _floorMgD=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
+  var _lastWkTotal=(needW[W-1]||0)*7;
+  var _settledDrawD=0;
+  if(_lastWkTotal>0){
+    if(_floorMgD>0&&_lastWkTotal<_floorMgD-1e-9){
+      _settledDrawD=_lastWkTotal;              // cannot afford one dose: excluded
+    }else{
+      for(var sdd=mg.length-1; sdd>=Math.max(0,mg.length-7); sdd--){
+        if(mg[sdd]>0){ _settledDrawD=mg[sdd]; break; }
+      }
+    }
+  }
   var fin=evalDaily(mg);
   if(!fin) return null;
 
-  // A phase per WEEK-PATTERN change: the seven doses of that week, repeating.
+  // A phase per WEEKLY-LOAD change.
+  // ⚠️ KEYED ON THE WEEK'S TOTAL, NOT ON THE EXACT PATTERN. This keyed on the seven
+  // doses, which was the same thing back when a given weekly load always dithered to
+  // the same pattern. The draw floor's carry broke that: it defers a sub-floor dose to
+  // the next day that can afford it, so the pattern now depends on what came before and
+  // two weeks with an identical load can arrange it differently — 30/20/20/0/30/20/20
+  // and 20/20/20/20/20/20/20 are both 140 mg. Emitting a phase for that prints two rows
+  // reading "20 mg" back to back, which is exactly the wall of identical rows the step
+  // function exists to avoid. The weekly load is what the user reads and acts on; a
+  // reshuffle inside the week at the same total is not a new instruction.
   var phases=[], prevKey=null;
   for(var pz=0;pz<W;pz++){
     var pat=mg.slice(pz*7,pz*7+7);
-    var pkey=pat.map(function(x){return Math.round(x*10)/10;}).join(',');
+    var pkey=String(Math.round(pat.reduce(function(a,b){return a+b;},0)*10)/10);
     if(pkey!==prevKey){
       var avg=pat.reduce(function(a,b){return a+b;},0);
       phases.push({w:pz, iv:1, pattern:pat.map(function(x){return Math.round(x*10)/10;}),
@@ -3674,7 +3805,7 @@ function _tcSolveDailyDither(ctx, opts){
   return {worstSettled:worstSettledD,
           cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
           phases:phases, weekly:fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,mg:mg[i*7]};}),
-          doses:mg, ripple:rn?rp/rn:Infinity,
+          doses:mg, settledDraw:_settledDrawD, ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
           worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
           meanErr:en?err/en:Infinity, lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
@@ -3795,6 +3926,17 @@ function _tcSolveForCadence(ctx, cad, opts){
       if(snapped[ci-1]===snapped[ci+1]&&snapped[ci]!==snapped[ci-1]) snapped[ci]=snapped[ci-1];
     }
   }
+  // ⚠️ WHAT THIS CADENCE WANTS AT STEADY STATE, CAPTURED BEFORE THE FLOOR TOUCHES IT.
+  // The floor zeroes a sub-floor dose rather than scheduling it, which is right for a
+  // ramp week and WRONG as the whole answer: if the dose this cadence settles at is
+  // itself under the floor, the cure is a longer interval, not a schedule with holes in
+  // its steady state. After flooring that is invisible — every surviving dose clears the
+  // floor by construction — so the ranking filter would see a compliant plan that in
+  // fact skips settled weeks. Recorded here, read by the filter, and the reason a
+  // too-small cadence is excluded instead of quietly thinned.
+  var _settledDraw=0;
+  for(var sd=snapped.length-1; sd>=0; sd--){ if(snapped[sd]>0){ _settledDraw=snapped[sd]; break; } }
+  snapped=_tcApplyFloor(snapped, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
   var fin=_tcSolveEvaluate(ctx, cad, dates, snapped);
   if(!fin) return null;
 
@@ -3910,7 +4052,7 @@ function _tcSolveForCadence(ctx, cad, opts){
   var sensTail=0, stn=0;
   for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
   sensTail=stn?sensTail/stn:0;
-  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
+  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped, settledDraw:_settledDraw,
           ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, worstSettled:worstSettled,
           meanErr:en?err/en:Infinity,
           settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
@@ -3952,9 +4094,38 @@ function _tcSolveForCadence(ctx, cad, opts){
 // depot size is used ONLY to bound the search. A front-load that pushes any week's peak
 // past _TC_LOAD_TOL over target is rejected outright — which is the guard the 2026-08
 // version never had.
-var _TC_LOAD_TOL = 0.05;        // a front-load may never put any week's peak this far over target
+var _TC_LOAD_TOL = 0.05;        // once settled, a front-load may never put a week's peak this far over target
 var _TC_LOAD_MIN_GAIN = 0.15;   // …and must close this much of the gap to be worth proposing
 var _TC_LOAD_GRID = 12;         // simulations spent looking for it
+// ⚠️ WHAT THE RAISE MAY COST, AND WHY IT IS A MULTIPLE RATHER THAN AN ALLOWANCE.
+// While filling the depot, a week's peak may run this many times the peak the SETTLED
+// plan produces — not this far over target. The distinction is the whole point. Ripple
+// is an ester property at a given interval: once-weekly enanthate peaks ~53% over
+// target every week, daily enanthate ~6%. A flat "+25 points over target" allowance
+// would be almost the entire ripple budget for the daily plan and a rounding error for
+// the weekly one, so it would mean two completely different things depending on a
+// cadence the user did not choose for this reason. A multiple of the plan's own peak
+// means the same thing in both: a third higher than what this schedule already does to
+// you every week, once, on the way in.
+//
+// 1.5 is set by the WORST CADENCE, not by a typical one, because the multiple has to
+// hold for every schedule the solver can return. A daily-dithered plan has a settled
+// peak near 5% and its arriving front-load needs a ratio of about 1.07; anything above
+// 1.1 would look generous there. A ONCE-WEEKLY plan ripples ~59% over target every week
+// on its own, and the front-load that lands on target in week one peaks 135% over —
+// 2.35/1.59, a ratio of 1.49. Long-interval schedules are ordinary (an injection limit,
+// a long ester, or simply a user who does not want daily needles), so a multiple tuned
+// on the smooth case would ship as a fix and go on refusing the very plans that take
+// longest to arrive and need the front-load most.
+//
+// What makes it safe is not the number, it is the other gate: in every candidate this
+// admits, the settled peak is unchanged or LOWER than the plan without a loading dose
+// (55% against 59% in the weekly case). The transient is the entire price. Measured
+// across seven transitions — three targets on one real record, four synthetic esters —
+// a front-load never once widened the plan's weekly span. It narrowed it every time,
+// 54% to 6% in one case, because the alternative to arriving fast is not a flat line,
+// it is a ramp climbing through the whole band.
+var _TC_RAISE_MULT = 1.5;
 
 // Weekly stats for an arbitrary event list — the tail of _tcSolveEvaluate, reusable.
 function _tcSolveWeeklyOf(ctx, evts){
@@ -4019,14 +4190,45 @@ function _tcSolveLoadingDose(ctx, best){
     for(var w=0;w<wk.length;w++) m+=Math.abs(wk[w].mean-ctx.targetPmol);
     return wk.length?m/wk.length:Infinity;
   };
-  var overOf=function(r){
-    var wk=r.weekly||[], o=0;
-    for(var w=0;w<wk.length;w++){
+  // ⚠️ THE RAISE AND THE STEADY STATE ARE TWO DIFFERENT QUESTIONS, SO TWO DIFFERENT
+  // CEILINGS. Henrik, 2026-09-16: "the raise from todays free T to the new target is
+  // still stupid slow, a single 250mg injection would almost close the gap in a few
+  // days, but still it uses the slow ramp. The ripple when raising free T could be
+  // allowed to be bigger than ripple at the steady state?"
+  //
+  // He is right, and this was one ceiling doing both jobs. `overOf` took the highest
+  // weekly peak anywhere in the plan and compared it against a bar set by the plan's
+  // own STEADY-STATE ripple — so the raise was allowed exactly as much headroom as the
+  // steady state and not one point more. Measured on his own record (Nebido 100 mg
+  // E2-3D to 13 Sep, free T 634 at the 15 Sep draw, enanthate at 250 mg/ml), the
+  // candidate that arrives is rejected at every target he might be on:
+  //
+  //   target 1400   chosen 75 mg   -> on target week 2, opens at 1083
+  //                 rejected 125 mg -> on target week 1, opens at 1361, mean miss 47 vs 55
+  //   target 2200   chosen 250 mg  -> on target week 1, mean miss 57
+  //                 rejected 325 mg -> on target week 1, mean miss 39
+  //
+  // and in EVERY rejected candidate the settled peak is unchanged or lower. The front-
+  // load costs nothing at steady state; it is paid entirely during the raise, which is
+  // the one window the old ceiling refused to price separately.
+  //
+  // So the peak is measured in two windows and gated twice. The settled window keeps
+  // the 2026-08 guard exactly as it was — a front-load may never leave the plan sitting
+  // higher than the plan without one. The raise window gets its own, wider bar.
+  var _peakIn=function(r, from, to){
+    var wk=r.weekly||[], o=-Infinity;
+    for(var w=Math.max(0,from); w<Math.min(to,wk.length); w++){
       var d=(wk[w].peak-ctx.targetPmol)/ctx.targetPmol;
       if(d>o) o=d;
     }
-    return o;
+    return isFinite(o)?o:-Infinity;
   };
+  // The boundary is `settleWeeks` — the incoming ester's own loading time, and already
+  // the file's definition of "not settled yet" in all three scorers. A second, cleverer
+  // definition of "the raise" here would be one number with two sources.
+  var _swOf=function(r){ return Math.max(0, Math.min((r.weekly||[]).length, r.settleWeeks||0)); };
+  var settledOver=function(r){ var o=_peakIn(r,_swOf(r),(r.weekly||[]).length); return isFinite(o)?o:0; };
+  var raiseOver=function(r){ var o=_peakIn(r,0,_swOf(r)); return isFinite(o)?o:-Infinity; };
   var reach=function(r){
     var wk=r.weekly||[];
     for(var w=0;w<wk.length;w++){ if(wk[w].mean>=ctx.targetPmol*0.95) return w+1; }
@@ -4067,7 +4269,17 @@ function _tcSolveLoadingDose(ctx, best){
   // schedule that cut the mean miss from 71 to 39 pmol/L. Each candidate is a fresh
   // re-solve, and re-solves wobble; a guard that cannot tell noise from a real increase
   // is not measuring what it claims to.
-  var ceilOver=Math.max(_TC_LOAD_TOL, overOf(zero))+0.005;
+  var settledCeil=Math.max(_TC_LOAD_TOL, settledOver(zero))+0.005;
+  // ⚠️ AND THE RAISE CEILING IS A WIDENING ONLY — IT CAN NEVER REFUSE WHAT THE OLD ONE
+  // ALLOWED. Expressed against the plan's own settled PEAK rather than against target,
+  // because that is the exposure the user has already accepted: a schedule that peaks
+  // 53% over target every week for a year is not made reckless by one transient 33%
+  // above that peak on the way in. Against target the same allowance reads as 104% and
+  // looks wild; against the weekly peak it is a third, once. `Math.max` with the settled
+  // ceiling is what guarantees the one-way property — for a flat ester whose settled
+  // peak is already low the multiplier could otherwise land BELOW the old bar, and
+  // answering "the raise may run hotter" by tightening it would be a lie.
+  var raiseCeil=Math.max(settledCeil, (1+settledCeil)*_TC_RAISE_MULT-1);
   var bestL=0, bestPlan=zero, bestMiss=zeroMiss, seen={};
   for(var g=1; g<=_TC_LOAD_GRID; g++){
     var L=_tcSolveSnap(cap*g/_TC_LOAD_GRID, stepMg);
@@ -4079,13 +4291,62 @@ function _tcSolveLoadingDose(ctx, best){
     // schedule were fixed, but it is re-solved for every candidate — measured on one
     // transition the series ran 8.0, 8.0, 8.0, 9.5, 8.0, 10.6, so stopping at the first
     // breach would have skipped the answer.
-    if(overOf(r)>ceilOver) continue;
-    var m=missOf(r);
-    if(m<bestMiss){ bestMiss=m; bestPlan=r; bestL=L; }
+    if(settledOver(r)>settledCeil) continue;
+    if(raiseOver(r)>raiseCeil) continue;
+    // ⚠️ AND WHEN TWO FRONT-LOADS FIT THE PLAN EQUALLY WELL, THE ONE THAT ARRIVES WINS.
+    // Widening the ceiling was only half of "the raise is stupid slow". The other half
+    // is here: missOf is a mean over every week of the plan, so arriving a week sooner
+    // moves it by about a twelfth of one week's gap — and on his record at a 2200
+    // target that made 104 vs 106 pmol/L decide between reaching target in week 1 and
+    // in week 2. Two pmol/L of iterative-solver noise is not a reason to spend an extra
+    // week below target. Inside a 1%-of-target band the two fits are the same claim, so
+    // the tie goes to the plan that gets there — which is the question being asked.
+    //
+    // A BAND, NOT A SECOND OBJECTIVE. Outside it, fit still decides outright: this may
+    // never buy a fast start with a plan that holds the target worse.
+    // ⚠️ FIT DECIDES; INSIDE A TIE, ARRIVING DECIDES; INSIDE THAT, THE SMALLER NEEDLE.
+    // Widening the ceiling was only half of "the raise is stupid slow". The other half
+    // is here. missOf is a mean over every week of the plan, so arriving a week sooner
+    // moves it by about a twelfth of one week's gap — and on his record under his own
+    // 3-injections-a-week cap that made 106 vs 107 pmol/L decide between reaching target
+    // in week 1 and in week 2. One pmol/L of iterative-solver noise is not a reason to
+    // spend an extra week below target.
+    //
+    // And the third key is not decoration either: at a 2200 target the candidates from
+    // 250 mg to 500 mg all land within 2 pmol/L of each other and all arrive in week 1,
+    // so a bare `m<bestMiss` picked the 450 mg — a 700 mg first injection, 2.8 ml, for
+    // a fit difference the model cannot resolve. Where the outcome is the same, the
+    // smallest dose that achieves it is the answer; the grid ascends, so keeping the
+    // incumbent on a tie is what "smallest" means here.
+    //
+    // A BAND, NOT A NEW OBJECTIVE. Outside 1% of target, fit still decides outright:
+    // this may never buy a fast start with a plan that holds the target worse.
+    var m=missOf(r), _tie=ctx.targetPmol*0.01;
+    // `reach` is 1-based and 0 means "never gets there inside the plan", so arriving
+    // beats not arriving, and arriving late beats never.
+    var _rNew=reach(r)||Infinity, _rOld=reach(bestPlan)||Infinity;
+    var take = (m < bestMiss-_tie)                                   // a better fit outright
+            || (Math.abs(m-bestMiss)<=_tie && _rNew<_rOld);          // same fit, arrives sooner
+    if(take){ bestMiss=m; bestPlan=r; bestL=L; }
   }
   if(!(bestL>0)) return null;
   // Worth a bigger needle? A front-load that shaves a few percent off the climb is not.
-  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN) return null;
+  //
+  // ⚠️ BUT ARRIVING SOONER IS WORTH IT ON ITS OWN. This tested the mean miss alone, and
+  // missOf averages over every week of the plan — so a front-load that takes the opening
+  // week from 1011 to 1357 against a 1400 target, and brings arrival forward from week 2
+  // to week 1, scores a 7% improvement and was thrown out for not clearing 15%. Ten
+  // settled weeks that were always going to be fine drown the one week the front-load
+  // exists to fix. It is the same dilution that made the tie-break above prefer a plan
+  // arriving a week later, measured on the same number.
+  //
+  // So either test may carry it: a materially better fit across the plan, OR getting
+  // there sooner without holding the target worse. The second clause is what stops that
+  // becoming a licence — a front-load may buy arrival, never a worse plan.
+  var _arrivesSooner = reach(bestPlan)>0
+    && (reach(zero)===0 || reach(bestPlan)<reach(zero))
+    && bestMiss<=zeroMiss;
+  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN && !_arrivesSooner) return null;
 
   return {loading:{mg:Math.round(bestL*10)/10,
                    ml:Math.round((bestL/ctx.concMgPerMl)*100)/100,
@@ -4095,13 +4356,26 @@ function _tcSolveLoadingDose(ctx, best){
                    firstDoseMg:Math.round(((bestPlan.doses&&bestPlan.doses[0]!=null
                                             ?bestPlan.doses[0]:0)+bestL)*10)/10,
                    weeksWithout:reach(zero), weeksWith:reach(bestPlan),
-                   peakOver:Math.round(overOf(bestPlan)*1000)/10,
-                   // Reported so the ceiling rule is auditable from the outside. A
-                   // front-load may exceed _TC_LOAD_TOL only when the plan WITHOUT it
-                   // overshot further — the ramp climbing to close the gap is itself an
-                   // overshoot, and replacing a worse one with a better one is not a
-                   // breach. peakOverWithout is what it is being compared against.
-                   peakOverWithout:Math.round(overOf(zero)*1000)/10,
+                   // ⚠️ peakOver IS THE SETTLED PEAK, AND SAYING SO MATTERS.
+                   // It used to be the highest peak anywhere in the plan, back when one
+                   // ceiling governed the whole thing. Now that the raise is allowed to
+                   // run hotter, a whole-plan maximum would be dominated by the
+                   // front-load week and the note built on it — "the ramp is gentler for
+                   // it" — would report the opposite of what happened. This pair is the
+                   // steady state, compared like with like, and it is still the number
+                   // the 2026-08 guard is about: a front-load may never leave the plan
+                   // SITTING higher than the plan without one.
+                   peakOver:Math.round(settledOver(bestPlan)*1000)/10,
+                   peakOverWithout:Math.round(settledOver(zero)*1000)/10,
+                   // …and the transient is reported beside it rather than folded in,
+                   // because arriving in days instead of weeks is bought with exactly
+                   // this and the price should be legible. -Infinity means the plan has
+                   // no raise window at all (settleWeeks 0), not a peak of zero.
+                   raisePeakOver:isFinite(raiseOver(bestPlan))
+                                 ?Math.round(raiseOver(bestPlan)*1000)/10:null,
+                   raisePeakOverWithout:isFinite(raiseOver(zero))
+                                 ?Math.round(raiseOver(zero)*1000)/10:null,
+                   raiseWeeks:_swOf(bestPlan),
                    missWithout:Math.round(zeroMiss), missWith:Math.round(bestMiss)},
           // ⚠️ THE PLAN SHOWN MUST BE THE ONE THAT ASSUMES THE LOADING DOSE.
           // Displaying the ramp solved WITHOUT it and then telling the user to add a
@@ -4180,7 +4454,8 @@ function tcSolveTransition(opts){
   };
   if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
 
-  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; });
+  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; })
+                        .map(function(c){ return _tcAnchorCadence(c, ctx.startDate); });
   // Two passes: a cheap one to rank the cadences, then a proper solve for the winner
   // only. Refining all four to convergence costs four times as long for three answers
   // that get thrown away.
@@ -4285,14 +4560,30 @@ function tcSolveTransition(opts){
   // Rounding a 0.06 ml dose to 0.1 would be a 67% overdose applied to satisfy a
   // convenience rule — the constraint has to be met by injecting LESS OFTEN and more at
   // a time, which is the only direction that keeps the weekly milligrams where the solve
-  // put them. Measured on the SETTLED doses, because a ramp's opening weeks are
-  // legitimately small while the outgoing ester is still carrying the level.
+  // put them.
+  //
+  // ⚠️ MEASURED ON EVERY DOSE, NOT ON THE SETTLED ONE. This read the LAST non-zero dose,
+  // on the reasoning that "a ramp's opening weeks are legitimately small while the
+  // outgoing ester is still carrying the level". A loading dose broke that: the week
+  // after a front-load needs almost nothing, so it came out at 25 mg — 0.1 ml at
+  // 250 mg/ml, half the floor — and the settled dose said the plan was fine. Henrik,
+  // 2026-09-16: "0,2ml is non negotiable."
+  //
+  // The solvers now zero any sub-floor dose rather than scheduling it, so this filter
+  // sees a plan whose every injection already clears the floor. What is left for it to
+  // do is the job it always had: exclude a CADENCE that cannot meet the floor at all —
+  // one whose settled dose is under it, where zeroing would empty the schedule instead
+  // of thinning it. Both halves are checked, because a filter that trusts an invariant
+  // it does not verify is how the invariant gets lost.
   var _minMg=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
   var _tooSmall=null;
   var _drawOf=function(r){
+    // What the cadence WANTS at steady state, before the floor zeroed anything. Falls
+    // back to the last scheduled dose for any result predating the field.
+    if(r.settledDraw!=null) return r.settledDraw>0?r.settledDraw:Infinity;
     var d=(r.doses||[]).filter(function(x){ return x>0; });
     if(!d.length) return Infinity;              // nothing scheduled: not a small draw
-    return d[d.length-1];                       // the dose it settles at
+    return d[d.length-1];
   };
   if(_minMg>0){
     var _bigEnough=results.filter(function(r){ return _drawOf(r)>=_minMg-1e-9; });
@@ -4322,6 +4613,34 @@ function tcSolveTransition(opts){
   // ripples ~14%, so ±7% before it is even off target), which does not gate the price,
   // it abolishes it. Holding the target is a statement about where the level SITS; the
   // swing around it is the separate thing the next key already ranks.
+  //
+  // ⚠️ AND A MEAN IS NOT A HOLD. Henrik, 2026-09-17: "instead of more frequent smaller
+  // doses it keeps bigger infrequent ones creating a curve oscillating between 2200 and
+  // 1300."
+  //
+  // The note above is right that RIPPLE must not be folded into the closeness measure —
+  // that is what made every interval longer than daily inadmissible by construction. It
+  // was wrong to conclude that ripple should play no part in the gate at all. Measured
+  // on his own record at a 1600 target, once-weekly enanthate scored a mean error of 20
+  // pmol/L and was the ONLY admissible candidate, so it won outright — while swinging
+  // 861 to 2785 inside each week. Daily-dithered sat at 1406-1898 with a mean error of
+  // 88 and was ranked second, behind a plan that is off target by more than a third of
+  // its own value most of the time.
+  //
+  // When a gate admits exactly one candidate, that gate IS the ranking: worstSettled,
+  // ripple and the injection price below it never get consulted. So the gate has to mean
+  // what it says. Holding a target is two claims, not one — the level SITS there (the
+  // weekly means) and it STAYS there (the excursion around them) — and a weekly mean of
+  // 1600 delivered by a 861-2785 sawtooth is not holding 1600 by any reading.
+  //
+  // The swing band is deliberately far wider than the mean band: it is not a second
+  // attempt at precision, it is a floor under what "holding" can be stretched to cover.
+  // Ripple is still ranked, not priced, below — this only stops a plan that abandons the
+  // target between injections from being promoted for having a tidy average.
+  //
+  // And it stays safe for esters where ripple is unavoidable: if NOTHING clears both
+  // halves the gate stops discriminating, exactly as it always has, and the old ranking
+  // picks the least-bad option.
   var _admits=function(r){
     var wk=r.weekly||[], lo=Infinity, hi=0;
     for(var i=(r.settleWeeks||0); i<wk.length; i++){
@@ -4329,7 +4648,9 @@ function tcSolveTransition(opts){
       if(wk[i].mean>hi) hi=wk[i].mean;
     }
     if(!isFinite(lo)||!(ctx.targetPmol>0)) return false;
-    return lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL);
+    if(!(lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL))) return false;
+    var sw=(r.worstSettled==null)?r.worst:r.worstSettled;
+    return !(sw>_TC_HOLD_SWING);
   };
   results.sort(function(a,b){
     var aOK=_admits(a), bOK=_admits(b);
@@ -4346,13 +4667,24 @@ function tcSolveTransition(opts){
     return perWeekOf(a)-perWeekOf(b);
   });
   var tol=ctx.targetPmol*0.10;
+  // ⚠️ THE FALLBACK MUST NOT CONTRADICT THE RANKING IT FALLS BACK FROM.
+  // This tracked the lowest meanErr and used it whenever nothing was admissible — and
+  // meanErr is an AVERAGE of the distance from target, so it forgives a sawtooth that
+  // spends equal time above and below. On his record at a 1600 target, once-weekly
+  // enanthate averaged 20 pmol/L out while swinging 861 to 2785, and won the fallback
+  // over a daily-dithered plan holding 1406-1898 that averaged 88 out. The sort directly
+  // above had already ranked them the other way round, on worstSettled — which is the
+  // same question meanErr asks, answered without letting the peaks cancel the troughs.
+  //
+  // So the least-bad option is the best-ranked one, not the one with the tidiest
+  // average. results is already sorted; the first candidate to survive refinement is it.
   var best=null, fallback=null;
   for(var ri=0; ri<results.length; ri++){
     var refined;
     if(results[ri].cadence&&(results[ri].cadence.variable||results[ri].cadence.dithered)){ 
       // Already solved at full iteration count; the fixed-cadence refiner cannot
       // express it and would silently collapse it back to one interval.
-      if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
+      if(!fallback) fallback=results[ri];
       if(results[ri].meanErr<=tol&&_admits(results[ri])){ best=results[ri]; break; }
       continue;
     }
@@ -4362,7 +4694,7 @@ function tcSolveTransition(opts){
     // the cheap result rather than promoting an unusable one into the rankings.
     if(!refined||refined.degenerate) continue;
     results[ri]=refined;
-    if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
+    if(!fallback) fallback=refined;
     // ⚠️ RE-CHECK ADMISSIBILITY HERE — THE SORT RANKED THE CHEAP SOLVE.
     // The ranking above runs on the 4-iteration pass; this loop re-solves the leaders
     // at 12 and REPLACES them. A candidate can therefore arrive at the front of the
@@ -4526,6 +4858,25 @@ function tcSolveTransition(opts){
       _ln+=' The ramp is also gentler for it — without the loading dose the schedule has '
         +'to climb hard to close the opening gap and overshoots '+loading.peakOverWithout
         +'% in the middle of the plan; with it, '+loading.peakOver+'%.';
+    }
+    // ⚠️ SAY WHAT THE FAST ARRIVAL COSTS. The front-load is allowed to peak higher
+    // while the depot fills than the settled plan ever does — that is the whole reason
+    // it can close the gap in days — and a number the solver is willing to spend is a
+    // number the person spending it is entitled to see. Stated as a multiple of the
+    // peak this schedule already produces every week, because that is the comparison
+    // that makes it judgeable: against target alone, "104% over" reads as reckless
+    // when the plan it rides on does 53% every week for a year.
+    if(loading.raisePeakOver!=null&&loading.raisePeakOver>loading.peakOver+0.5){
+      _ln+=' Getting there this fast is paid for once, while the depot fills: over the '
+        +'first '+loading.raiseWeeks+' week'+(loading.raiseWeeks===1?'':'s')+' the level '
+        +'peaks about '+loading.raisePeakOver+'% over target, against '+loading.peakOver
+        +'% once it settles'
+        +((loading.raisePeakOverWithout!=null&&loading.raisePeakOverWithout>0)
+          ?(' — and '+loading.raisePeakOverWithout+'% over the same weeks without it, '
+            +'because the ramp climbing to close the gap is its own overshoot')
+          :'')
+        +'. If peaks are what you are managing, this is the trade: a higher few days '
+        +'for weeks less spent below target.';
     }
     _ln+=' The whole schedule below was re-solved assuming this dose, so do not apply '
       +'one without the other.';

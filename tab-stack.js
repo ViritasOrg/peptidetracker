@@ -847,6 +847,68 @@ function trtSetDate(scope,id,which,val){
   if(val)c[which]=val;else delete c[which];
   _trtRerender(scope);
 }
+// ── ONE PLANNING STRATEGY AT A TIME ─────────────────────────────────────────
+// Henrik, 2026-09-16, on the testosterone editor: "It needs a tripple switch to decide
+// on active planning strategy and only show the chosen model. Showing all three like
+// this is retarded and nonone would understand it."
+//
+// He is right, and the copy was the tell. The panel stacked three ways of deciding the
+// same number — a flat Dose field, a Dose ramp, and a Target free-T solver — and then
+// had to explain the precedence between them in prose: "While the ramp is on it
+// overrides the Dose field above." A UI that needs a sentence to say which of its own
+// controls is in charge has already lost; worse, the Dose field stayed editable and
+// inert while a ramp was on, which is the silent-mismatch failure this app keeps
+// getting bitten by.
+//
+// Three strategies, one switch, one editor visible. What is SHARED by all three —
+// cadence, time of day, the transition window — stays where it is, because those are
+// not competing answers to the same question.
+var _TRT_PLAN_MODES=[['fixed','Fixed dose'],['ramp','Dose ramp'],['target','Target free T']];
+// ⚠️ DERIVED FOR ANYTHING SAVED BEFORE THE SWITCH EXISTED. `plan_mode` is new, and every
+// compound already on the backend predates it. The ramp's on/off state has always been
+// "does dose_phases exist", so that is what an unset mode reads. Nothing saved changes
+// meaning; a protocol opened after this ships shows the strategy it was already running.
+// 'target' cannot be recovered that way — an applied solve leaves a ramp behind and is
+// indistinguishable from a hand-built one — so it is only ever an explicit choice.
+function _trtPlanMode(c){
+  if(!c)return 'fixed';
+  var m=c.plan_mode;
+  for(var i=0;i<_TRT_PLAN_MODES.length;i++) if(_TRT_PLAN_MODES[i][0]===m) return m;
+  return (c.dose_phases&&c.dose_phases.length)?'ramp':'fixed';
+}
+// ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK. The cadence switch in this
+// file already carries that rule — "a user comparing the two and switching back would
+// lose what they had" — and it matters far more here: a ramp can be a dozen phases a
+// solver spent thirty simulations arriving at, and this switch is one tap.
+//
+// The generator's contract is untouched: a ramp runs iff dose_phases is present, which
+// is what every reader in the app already assumes. So choosing Fixed dose STASHES the
+// phases rather than deleting them, and choosing a ramp again restores exactly what was
+// put away. The old toggle's seed-from-flat-dose behaviour survives for a compound that
+// has never had a ramp at all.
+function trtSetPlanMode(scope,id,mode){
+  var c=_trtComp(scope,id); if(!c) return;
+  var known=false;
+  for(var i=0;i<_TRT_PLAN_MODES.length;i++) if(_TRT_PLAN_MODES[i][0]===mode) known=true;
+  if(!known) return;
+  if(_trtPlanMode(c)!==mode){
+    if(mode==='fixed'){
+      if(c.dose_phases&&c.dose_phases.length){ c.ramp_stash=c.dose_phases; }
+      delete c.dose_phases;
+    }else{
+      if(!(c.dose_phases&&c.dose_phases.length)){
+        if(c.ramp_stash&&c.ramp_stash.length){ c.dose_phases=c.ramp_stash; delete c.ramp_stash; }
+        else if(mode==='ramp'){
+          // Seed week 0 from the flat dose so turning a ramp on never changes what is
+          // scheduled until a phase is actually edited.
+          c.dose_phases=[{w:0,d:String(c.dose||''),u:c.unit||'mg'}];
+        }
+      }
+    }
+    c.plan_mode=mode;
+  }
+  _trtRerender(scope);
+}
 function trtToggleRamp(scope,id){
   var c=_trtComp(scope,id);if(!c)return;
   if(c.dose_phases&&c.dose_phases.length){
@@ -1009,7 +1071,19 @@ async function trtSolveRun(scope,id){
     // state never gets a frame to paint in and the button just appears dead. One turn
     // of the event loop is enough for the render to land first.
     await new Promise(function(r){setTimeout(r,0);});
-    var start=comp.start_date||(typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
+    // ⚠️ TODAY, NOT TOMORROW, WHEN THE PROTOCOL HAS ALREADY STARTED.
+    // This defaulted to NOW+1 unconditionally, which cost a day on top of whatever the
+    // cadence cost — and the anchor guard it was written for only needs the solve to
+    // start after the last LOGGED injection, not after today. When the protocol is
+    // already running, the plan should open on the protocol's own start date if that is
+    // still ahead, and otherwise today; tomorrow is only the fallback for a solve with
+    // no protocol to anchor to.
+    var _cs=(typeof _scopeCycleStart==='function')?_scopeCycleStart(scope):'';
+    var _today=(typeof dateKey==='function')?dateKey(NOW):'';
+    var start=comp.start_date
+      || (_cs&&_today&&_cs>_today ? _cs : '')
+      || _today
+      || (typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
     var _inc=(typeof _canonCompoundId==='function')?_canonCompoundId(id):id;
     // ── AND WHAT IS STILL SCHEDULED OF THE OUTGOING ESTER ────────────────────
     // The tail above is the logged past. It is not the whole picture: if the protocol
@@ -1324,7 +1398,23 @@ function _renderTRTSolve(c,selData,scope,hideRun){
     // press to make any of it real was off-screen, and the wizard's own fixed "Next"
     // footer sat where a reader expects the primary action. Sticking it to the top of
     // the results keeps it in reach for the whole scroll without competing with Next.
-    h+='<div style="position:sticky;top:0;z-index:25;background:var(--bg);padding:10px 0 8px;margin-top:10px">';
+    //
+    // ⚠️ AND IN THE WIZARD, STICKY-TOP WAS STILL THE WRONG EDGE. Henrik, 2026-09-17:
+    // "When I hit generate the Next button is shown but the apply schedule button is
+    // hidden below, the whole Apply Schedule needs to be a overlay not a extension of
+    // the section." Sticky to the TOP of a scrolling body only comes into view once you
+    // have scrolled down to the results — and the results render below three form
+    // fields, so on first generate the button is off-screen while the wizard's own Next
+    // occupies the spot a reader reads as the primary action. It is a fixed bar above
+    // the footer now: an overlay, not the tail of the card.
+    //
+    // The EDITOR keeps sticky-top. It has no fixed footer to fight, the panel is not a
+    // full-screen scroller, and a bar bolted to the viewport there would hang over
+    // unrelated content.
+    var _wizBar=(scope==='wiz');
+    h+=_wizBar
+      ? '<div class="trt-apply-bar">'
+      : '<div style="position:sticky;top:0;z-index:25;background:var(--bg);padding:10px 0 8px;margin-top:10px">';
     h+=(function(){
           var cur=_trtCurrentScheduleLabel(c);
           if(!cur)return '';
@@ -1344,6 +1434,10 @@ function _renderTRTSolve(c,selData,scope,hideRun){
         })();
     h+='<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>';
     h+='</div>';
+    // A fixed bar is out of the flow, so the end of the results would sit underneath it.
+    // The spacer is what the bar no longer occupies — without it the last note and the
+    // vial advice are unreadable however far you scroll.
+    if(_wizBar) h+='<div style="height:104px" aria-hidden="true"></div>';
     // ── THE LOADING DOSE IS A DIFFERENT INSTRUCTION AND GETS ITS OWN BOX ─────
     // Every other number on this card is "do this repeatedly". This one is "do this
     // once, first", and folding it into the ramp table is how it would be missed or —
@@ -1480,11 +1574,72 @@ function _renderTRTSolve(c,selData,scope,hideRun){
 // each one's own half-life, tmax and testosterone fraction (undecanoate 0.6315 vs
 // enanthate 0.7199 — a 14% error if it were ignored), so the combined free-T line is
 // the real answer to "does this hold steady", on a model the user can see.
+// The switch and whichever single editor it selects. `doseRow` is the flat Dose control,
+// passed in because the editor and the wizard bind it to different handlers — the same
+// reason _renderCadenceControl takes a handlers object.
+function _renderTRTPlan(c,selData,scope,doseRow){
+  scope=(scope==='wiz')?'wiz':'edit';
+  var id=c.id, mode=_trtPlanMode(selData);
+  var q=function(fn,args){return fn+'(\''+scope+'\',\''+id+'\''+(args||'')+')';};
+  var h='<div class="cfg-row"><div class="cfg-lbl">Plan</div><div class="time-chips">'
+    +_TRT_PLAN_MODES.map(function(m){
+        return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'
+          +q('trtSetPlanMode',',\''+m[0]+'\'')+'">'+m[1]+'</div>';
+      }).join('')
+    +'</div></div>';
+  // ⚠️ ONE LINE SAYING WHAT THIS STRATEGY DECIDES, AND NOTHING ABOUT THE OTHER TWO.
+  // The old panel explained precedence because all three were on screen at once. With
+  // one visible there is no precedence to explain — only what this one does.
+  // Target mode has no line here on purpose: the solver panel below carries its own
+  // heading and explanation, and printing a second one above it is the duplication this
+  // whole change is about.
+  var blurb={fixed:'The same dose every injection.',
+             ramp:'A dose that steps up or down at chosen weeks. Week counts from the PROTOCOL start, not this compound\'s start date.'}[mode];
+  if(blurb) h+='<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin:-2px 0 8px">'+blurb+'</div>';
+
+  // ⚠️ THE CADENCE BELONGS TO THE STRATEGY TOO. Henrik, 2026-09-16: "when I choose
+  // Target T, why show this weird schedule builder at all?"
+  //
+  // Because it was left outside the switch — and it is the same inert-control bug the
+  // switch was built to kill, one row further down. The solver DECIDES how often to
+  // inject: trtSolveApply writes cadence, days and freqVal from the plan it picked. So a
+  // Weekly-days / Every… builder sitting under the target is a control the user can set,
+  // that looks set, and that the next Generate silently overwrites.
+  //
+  // Fixed and Ramp still need it — nothing else decides their spacing. Target shows what
+  // the solve chose instead, as a fact rather than a field. TIME stays editable in every
+  // mode: the solver picks the interval, never the hour of day.
+  var cadenceBlock=(mode==='target')
+    ? ('<div class="cfg-row"><div class="cfg-lbl">Schedule</div><div style="flex:1;font-size:12px;color:var(--text)">'
+        +_esc(_trtCadenceLabel(selData)||'—')
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:3px">'
+        +'Chosen by the solve — generating a schedule sets it.</div></div></div>')
+    : _renderTRTCadence(id,selData,scope);
+
+  if(mode==='fixed') h+=(doseRow||'');
+  else if(mode==='ramp'){
+    var phases=(selData.dose_phases||[]).slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+    h+=phases.map(function(ph,phi){
+      var uOpts=_trtUnitOptions(ph.u||selData.unit||'mg');
+      return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:5px">'
+        +'<span style="font-size:11px;color:var(--muted2);white-space:nowrap;min-width:30px">Wk</span>'
+        +'<input class="dose-in" type="number" inputmode="numeric" min="0" value="'+String(ph.w||0)+'" oninput="'+q('trtSetPhase',','+phi+',\'w\',+this.value')+'" style="width:44px;text-align:center;">'
+        +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(ph.d||''))+'" oninput="'+q('trtSetPhase',','+phi+',\'d\',this.value')+'" placeholder="dose" style="width:60px;">'
+        +'<select class="unit-sel" onchange="'+q('trtSetPhase',','+phi+',\'u\',this.value')+'">'+uOpts+'</select>'
+        +'<button onclick="'+q('trtRemovePhase',','+phi)+'" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'
+        +'</div>';
+    }).join('');
+    h+='<button onclick="'+q('trtAddPhase')+'" style="font-size:11px;color:var(--accent);background:none;border:1px solid var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-top:2px">+ Add phase</button>';
+  }
+  else h+=_renderTRTSolve(c,selData,scope);
+  h+=cadenceBlock;
+  return h;
+}
+
 function _renderTRTTransition(c,selData,scope){
   scope=(scope==='wiz')?'wiz':'edit';
   var id=c.id, q=function(fn,args){return fn+'(\''+scope+'\',\''+id+'\''+(args||'')+')';};
   var sd=String(selData.start_date||''),ed=String(selData.end_date||'');
-  var hasRamp=!!(selData.dose_phases&&selData.dose_phases.length);
   var h='<div class="cfg-row" style="display:block;border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
     +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Transition window</div>'
     +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Leave blank to run for the whole protocol. Set these to overlap two esters — the outgoing one gets an end date, the incoming one a start date.</div>'
@@ -1503,30 +1658,6 @@ function _renderTRTTransition(c,selData,scope){
   if(sd&&ed&&ed<sd){
     h+='<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-top:6px;font-weight:600">⚠ End is before start — this compound would generate no injections.</div>';
   }
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;margin-bottom:'+(hasRamp?'8px':'0')+'">'
-    +'<span style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase">Dose ramp</span>'
-    +'<div onclick="'+q('trtToggleRamp')+'" style="cursor:pointer"><div class="toggle-sw'+(hasRamp?' on':'')+'"></div></div></div>';
-  if(hasRamp){
-    var phases=(selData.dose_phases||[]).slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
-    // THE DOSE FIELD ABOVE IS OVERRIDDEN while a ramp is on — the generator reads the
-    // phases, not the flat dose. Editing Dose and seeing nothing change is exactly the
-    // silent mismatch this app keeps getting bitten by, so it is stated rather than
-    // discovered. (The peptide editor cancels the ramp instead; here the ramp is the
-    // point of the feature, so deleting it on a stray keystroke would be worse.)
-    h+='<div style="font-size:11px;color:var(--muted2);margin-bottom:8px;line-height:1.5">Week counts from the PROTOCOL start, not this compound\'s start date. While the ramp is on it overrides the Dose field above.</div>';
-    h+=phases.map(function(ph,phi){
-      var uOpts=_trtUnitOptions(ph.u||selData.unit||'mg');
-      return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:5px">'
-        +'<span style="font-size:11px;color:var(--muted2);white-space:nowrap;min-width:30px">Wk</span>'
-        +'<input class="dose-in" type="number" inputmode="numeric" min="0" value="'+String(ph.w||0)+'" oninput="'+q('trtSetPhase',','+phi+',\'w\',+this.value')+'" style="width:44px;text-align:center;">'
-        +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(ph.d||''))+'" oninput="'+q('trtSetPhase',','+phi+',\'d\',this.value')+'" placeholder="dose" style="width:60px;">'
-        +'<select class="unit-sel" onchange="'+q('trtSetPhase',','+phi+',\'u\',this.value')+'">'+uOpts+'</select>'
-        +'<button onclick="'+q('trtRemovePhase',','+phi)+'" style="background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1">×</button>'
-        +'</div>';
-    }).join('');
-    h+='<button onclick="'+q('trtAddPhase')+'" style="font-size:11px;color:var(--accent);background:none;border:1px solid var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-top:2px">+ Add phase</button>';
-  }
-  h+=_renderTRTSolve(c,selData,scope);
   h+='</div>';
   return h;
 }
@@ -1638,7 +1769,7 @@ function _renderEditTRT(trt){if(!trt)trt={};
     });
     return lockedHtml;
   }
-  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTCadence(c.id,selData,'edit');html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';var _doseRow='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTPlan(c,selData,'edit',_doseRow);html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -2116,6 +2247,77 @@ function _enhHitsDay(c,d,cycleStart){ return _cadenceHitsDay(c,d,cycleStart); }
 // Calendar days between two consecutive injections of an enhanced compound. Interval
 // cadence states it outright; weekday cadence spreads n injections over 7 days.
 function _enhIntervalDays(c){ return _cadenceIntervalDays(c); }
+
+// ── A WEEKLY RATE HAS TO DIVIDE INTO DRAWABLE INJECTIONS ─────────────────────
+// Henrik, 2026-09-17: "The 400mg/week masteron dosed at e2d creates an impossible draw.
+// In dose creation wizard adjust weekly dose to fit the 0,1ml draw precision to
+// compensate for the scheduling."
+//
+// 400 mg/week every two days is 114.3 mg a shot, and at Masteron Propionate's 100 mg/ml
+// that is 1.143 ml — a number no 1 ml barrel can be drawn to. The rate was a round
+// figure and the cadence turned it into one that is not; nothing downstream noticed,
+// because the generator faithfully wrote 114.3 mg and Today faithfully displayed it.
+//
+// The fix is at the source: the WEEKLY figure is adjusted so the per-injection volume
+// lands on a whole 0.1 ml step. 400 mg/week at E2D becomes 385 — 110 mg a shot, 1.1 ml
+// — which is a dose someone can actually give. It is the same rule the T-Calc solver
+// already works to; this is the hand-entered path finally honouring it.
+//
+// ⚠️ ON COMMIT, NOT ON EVERY KEYSTROKE. Snapping inside `oninput` would rewrite the
+// field mid-type — "4" becomes something else before "00" is reached — which is the
+// focus-stealing failure this file has been bitten by before. It runs on change (blur)
+// and whenever the cadence or unit moves the arithmetic underneath it.
+function _enhConcMgPerMl(id){
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length)
+    ? _COMPOUND_CATALOG : ((typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)||[]);
+  var e=cat.find(function(x){return x&&x.id===id;});
+  var pk=e&&e.pack;
+  // Tablets have no draw to round; only a vial has a concentration.
+  return (pk&&pk.type==='vial'&&pk.conc_mg_ml>0)?pk.conc_mg_ml:0;
+}
+// What one injection of this compound actually is, in mg and ml. Returns null when the
+// question does not apply — a tablet, an IU dose, a dose already given in ml.
+function _enhDrawOf(c){
+  if(!c)return null;
+  var conc=_enhConcMgPerMl(c.id);
+  if(!(conc>0))return null;
+  var unit=String(c.unit||'');
+  if(unit.split('/')[0]!=='mg')return null;      // IU, ml and % are not this rule's business
+  var pd=_enhDosePerInjection(c);
+  var mg=parseDec(pd&&pd.dose);
+  if(!(mg>0))return null;
+  return {mg:mg, ml:mg/conc, conc:conc, stepMg:conc*_TC_DRAW_STEP_ML};
+}
+// The draw step is the syringe's, not this tier's — 0.1 ml, the same figure T-Calc
+// solves to and for the same reason: a 1 ml barrel cannot be read finer.
+var _TC_DRAW_STEP_ML=0.1;
+// Adjust the stored RATE so the per-injection draw is a whole step. Returns true when it
+// changed something, so a caller can re-render and say so.
+function _enhSnapDoseToDraw(c){
+  var d=_enhDrawOf(c);
+  if(!d||!(d.stepMg>0))return false;
+  // ⚠️ NEVER ROUND A DOSE UP TO REACH THE FIRST STEP. A dose whose injection is under
+  // half a step cannot be snapped without inflating it — 7 mg/week at E2D is 2 mg a
+  // shot, and forcing that to 0.1 ml would quintuple the week to 35 mg. That is an
+  // overdose applied to satisfy a convenience rule, which is the one thing this must
+  // never cause; T-Calc's draw floor carries the same rule in the other direction. The
+  // answer there is a less frequent cadence or a weaker vial, both of which are the
+  // user's call, so the dose is left exactly as entered and the draw line says why.
+  var steps=Math.round(d.mg/d.stepMg);
+  if(steps<1)return false;
+  var wantMg=steps*d.stepMg;
+  if(Math.abs(wantMg-d.mg)<1e-9)return false;    // already drawable
+  var unit=String(c.unit||''), slash=unit.indexOf('/');
+  if(slash<0)return false;
+  var per=unit.slice(slash+1).toLowerCase();
+  var periodDays=(per==='week')?7:(per==='eod')?2:1;
+  var iv=_enhIntervalDays(c);
+  if(!(iv>0))return false;
+  // The inverse of _enhDosePerInjection: rate = perInjection x period / interval.
+  var rate=wantMg*periodDays/iv;
+  c.dose=String(Math.round(rate*10)/10);
+  return true;
+}
 // A configured enhanced dose is a RATE ("350 mg/week"), not the amount in the syringe.
 // An injection record stores an amount, so the rate has to be converted before it is
 // written.
@@ -3473,8 +3675,11 @@ function wizStepTRT(body,footer){
       if(!isNebido&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}
       else{var freqDays=(selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1);weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}
       html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
-      html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';
-      html+=_renderTRTCadence(c.id,selData,'wiz');
+      // ⚠️ PARITY. The wizard and the editor configure the same compound; a strategy
+      // switch in one and three stacked editors in the other is the same confusion with
+      // an extra step.
+      var _wizDoseRow='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';
+      html+=_renderTRTPlan(c,selData,'wiz',_wizDoseRow);
       html+=_renderTRTTransition(c,selData,'wiz');
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
       html+='</div>';
@@ -3525,7 +3730,35 @@ function editToggleEnhancedCompound(id){
   renderStackEditor();
 }
 function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
-function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.unit=v;_enhCommitDose('edit',id);}
+// Commit handler for both surfaces: snap the rate to a drawable injection, then
+// re-render so the field shows what was stored and the draw line agrees with it.
+function _enhCommitDose(scope,id){
+  var c=(scope==='wiz')
+    ? (_wiz.enhanced.compounds||[]).find(function(x){return x.id===id;})
+    : (((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;}));
+  if(!c)return;
+  if(_enhSnapDoseToDraw(c)) _trtRerender(scope);
+}
+// "1.1 ml at 100 mg/ml" under the dose, so the adjustment is legible rather than a
+// number that silently changed. Nothing is shown for a tablet or an IU dose.
+function _enhDrawLine(c){
+  var d=_enhDrawOf(c);
+  if(!d)return '';
+  var ml=Math.round(d.ml*1000)/1000;
+  var mg=Math.round(d.mg*10)/10;
+  if(d.mg<d.stepMg-1e-9){
+    // Too small to draw, and not something to fix by giving more.
+    return '<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin:-2px 0 8px">'
+      +'<b>'+mg+' mg</b> per injection is <b>'+ml+' ml</b> at '+d.conc+' mg/ml — under the '
+      +_TC_DRAW_STEP_ML+' ml a syringe can be drawn to. Inject less often, or use a weaker '
+      +'vial; the dose has been left as you entered it rather than rounded up.</div>';
+  }
+  return '<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin:-2px 0 8px">'
+    +'<b>'+mg+' mg</b> per injection — <b>'+ml+' ml</b> at '
+    +d.conc+' mg/ml, on the 0.1 ml a syringe can be drawn to.</div>';
+}
+
 function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
 // Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
 // the peptide tier, including the guard that the last remaining slot cannot be removed.
@@ -3537,30 +3770,34 @@ function editSetEnhCadence(id,mode){
   if(!c)return;
   c.cadence=(mode==='interval')?'interval':'days';
   if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  // The rate did not move but the injections did, so the draw has to be re-checked.
+  _enhSnapDoseToDraw(c);
   _collectEditInputs();renderStackEditor();
 }
 function editSetEnhFreqVal(id,v){
   var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+  if(!c)return;c.freqVal=Math.max(1,parseInt(v,10)||1);_enhSnapDoseToDraw(c);
 }
 function editSetEnhFreqUnit(id,v){
   var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_collectEditInputs();renderStackEditor();
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_enhSnapDoseToDraw(c);
+  _collectEditInputs();renderStackEditor();
 }
 function wizSetEnhCadence(id,mode){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
   if(!c)return;
   c.cadence=(mode==='interval')?'interval':'days';
   if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  _enhSnapDoseToDraw(c);
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetEnhFreqVal(id,v){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+  if(!c)return;c.freqVal=Math.max(1,parseInt(v,10)||1);_enhSnapDoseToDraw(c);
 }
 function wizSetEnhFreqUnit(id,v){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_enhSnapDoseToDraw(c);
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function editToggleEnhTime(id,t){
@@ -3582,7 +3819,7 @@ function wizToggleEnhTime(id,t){
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
-function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
+function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});_enhSnapDoseToDraw(c);renderStackEditor();}
 // Why an enhanced testosterone entry generates no doses: T-Calc schedules testosterone
 // (rule 2026-08-14). Empty string for everything that is not testosterone — the rest of
 // the Enhanced tier is generated from here exactly as before.
@@ -3728,7 +3965,8 @@ function _renderEditEnhanced(enh,opts){
           html+=_renderSlotTimingHint(c.id,_eTimes);
           html+=_renderEnhCadence(c,selData,'edit');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" onchange="_enhCommitDose(\'edit\',\''+c.id+'\')" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_enhDrawLine(selData);
           html+=_renderEnhCadence(c,selData,'edit');
         }
         html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
@@ -4692,7 +4930,8 @@ function wizStepEnhanced(body,footer){
           html+=_renderSlotTimingHint(c.id,_wTimes);
           html+=_renderEnhCadence(c,selData,'wiz');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" onchange="_enhCommitDose(\'wiz\',\''+c.id+'\')" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_enhDrawLine(selData);
           html+=_renderEnhCadence(c,selData,'wiz');
         }
         html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
@@ -4727,9 +4966,9 @@ function wizToggleEnhancedCompound(id){
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
-function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.unit=v;_enhCommitDose('wiz',id);}
 function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
-function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});_enhSnapDoseToDraw(c);wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 // Every TRT compound this protocol will actually dose, whichever way the tier was
 // filled in. Reported 2026-08-01: the Validate and Review steps read only the classic
 // _wiz.trt tier, so a protocol whose testosterone came from the T-Calc planner listed

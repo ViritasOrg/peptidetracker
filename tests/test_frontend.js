@@ -2143,8 +2143,12 @@ console.log('\n── Injection timestamps ────────────�
     // another season disagrees with the local `date` sitting beside it.
     check('  …a local timestamp carrying its UTC offset, not a bare instant',
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(_stamp), _stamp);
+    // ⚠️ THE DOSE'S OWN DAY, NOT TODAY. This compared against dateKey(new Date()), which
+    // was the same thing only while the fixture's date happened to BE today — so it went
+    // red the morning after, on a back-fill path that was working correctly. The check's
+    // name had it right all along; the assertion did not.
     check('  …whose date half is the day the dose belongs to',
-      _stamp.slice(0,10) === G.dateKey(new Date()), _stamp);
+      _stamp.slice(0,10) === _day, _stamp+' for a dose on '+_day);
     check('  …and the cache carries it without waiting for a refetch',
       _row().logged_at === _stamp, String(_row().logged_at));
 
@@ -6082,14 +6086,108 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …and for the wizard scope',                        /trtSetDate\('wiz'/.test(wHtml));
     check('  …with neither leaking the other\'s scope',
       !/'wiz'/.test(eHtml) && !/'edit'/.test(wHtml));
-    check('  …both offering the window and the ramp',
-      ['Transition window','Dose ramp','trtToggleRamp','trtAddPhase','trtRemovePhase','trtSetPhase']
+    check('  …both offering the window', ['Transition window','trtSetDate']
         .every(k=>eHtml.includes(k)&&wHtml.includes(k)));
 
-    // The flat Dose field is IGNORED while a ramp is on. Saying so is the whole guard
-    // against editing Dose and seeing nothing change.
-    check('  …and stating that the ramp overrides the Dose field',
-      /overrides the Dose field/.test(eHtml)&&/overrides the Dose field/.test(wHtml));
+    // ── ONE PLANNING STRATEGY AT A TIME ──────────────────────────────────────
+    // Henrik, 2026-09-16: "It needs a tripple switch to decide on active planning
+    // strategy and only show the chosen model. Showing all three like this is retarded
+    // and nonone would understand it."
+    //
+    // The ramp editor and the solver moved out of the transition panel and behind the
+    // switch, so the scope and parity checks follow them. The window stays where it is:
+    // it is not a fourth strategy, it is when this compound runs.
+    const ePlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'edit',
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>');
+    const wPlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'wiz',
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>');
+    check('the plan switch offers exactly the three strategies', (function(){
+      const h=ePlan('fixed');
+      return ['Fixed dose','Dose ramp','Target free T'].every(k=>h.includes(k))
+          && G._TRT_PLAN_MODES.length===3;
+    })());
+    check('  …in both scopes, neither leaking the other\'s',
+      /trtSetPlanMode\('edit'/.test(ePlan('fixed')) && !/'wiz'/.test(ePlan('fixed')) &&
+      /trtSetPlanMode\('wiz'/.test(wPlan('fixed'))  && !/'edit'/.test(wPlan('fixed')));
+    // ⚠️ THE GUARANTEE THAT REPLACED A SENTENCE. This used to assert the panel SAID
+    // "while the ramp is on it overrides the Dose field above" — a caption apologising
+    // for showing an editable control that does nothing. The control is simply not
+    // rendered now, so the guard is structural instead of typographical: pin that, not
+    // the prose, or the caption could come back without the field ever going away.
+    check('  …showing the flat Dose field only in fixed mode', (function(){
+      const doseShown=(h)=>/cfg-lbl">Dose</.test(h);
+      return doseShown(ePlan('fixed')) && !doseShown(ePlan('ramp')) && !doseShown(ePlan('target'))
+          && doseShown(wPlan('fixed')) && !doseShown(wPlan('ramp')) && !doseShown(wPlan('target'));
+    })());
+    check('  …the ramp editor only in ramp mode', (function(){
+      const rampShown=(h)=>['trtAddPhase','trtSetPhase','trtRemovePhase'].every(k=>h.includes(k));
+      return rampShown(ePlan('ramp')) && !rampShown(ePlan('fixed')) && !rampShown(ePlan('target'))
+          && rampShown(wPlan('ramp'));
+    })());
+    check('  …and the solver only in target mode', (function(){
+      const solveShown=(h)=>/trtSolveRun/.test(h);
+      return solveShown(ePlan('target')) && !solveShown(ePlan('fixed')) && !solveShown(ePlan('ramp'));
+    })());
+    // ⚠️ THE CADENCE BELONGS TO THE STRATEGY TOO. Henrik, 2026-09-16: "when I choose
+    // Target T, why show this weird schedule builder at all?" — the same inert-control
+    // bug as the Dose field, one row further down. trtSolveApply writes cadence, days and
+    // freqVal from the plan it picks, so a weekday builder under the target is something
+    // the user can set, that looks set, and that the next Generate silently overwrites.
+    // Fixed and Ramp keep it: nothing else decides their spacing.
+    check('  …with the schedule builder editable in fixed and ramp, but not in target',
+      (function(){
+        const builder=(h)=>/day-chip/.test(h)||/Weekly days/.test(h);
+        return builder(ePlan('fixed')) && builder(ePlan('ramp')) && !builder(ePlan('target'))
+            && builder(wPlan('ramp')) && !builder(wPlan('target'));
+      })());
+    check('  …target showing what the solve chose instead, as a fact not a field',
+      /Chosen by the solve/.test(ePlan('target')) && /Chosen by the solve/.test(wPlan('target')));
+    // TIME is not the solver's to pick — it stays a field in every mode, and it lives
+    // outside this renderer, so nothing here may swallow it.
+    check('  …and no mode renders a time-of-day control inside the plan section',
+      !/time-chip[^"]*"[^>]*>AM</.test(ePlan('target')) && !/>AM</.test(ePlan('fixed')));
+
+    // ⚠️ NOTHING SAVED BEFORE THE SWITCH EXISTED CHANGES MEANING. plan_mode is new; the
+    // ramp's on/off state has always been "does dose_phases exist", so that is what an
+    // unset mode must read. A protocol opened after this ships shows the strategy it was
+    // already running, rather than silently reverting to a flat dose.
+    check('a compound saved before the switch keeps the strategy it was running',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp' &&
+      G._trtPlanMode({id:'x',dose:'100'})==='fixed' &&
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[],plan_mode:'target'})==='target');
+
+    // ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK — the rule the cadence
+    // switch in this file already carries, and it matters more here: a ramp can be a
+    // dozen phases a solver spent thirty simulations arriving at, and this switch is one
+    // tap. The generator's contract is untouched (a ramp runs iff dose_phases exists), so
+    // Fixed dose stashes the phases rather than deleting them.
+    {
+      const _sv=G._editBuf;
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'100',unit:'mg',
+                                   dose_phases:[{w:0,d:'50',u:'mg'},{w:6,d:'75',u:'mg'}]}]}};
+      const _c=()=>G._editBuf.trt.compounds[0];
+      G.trtSetPlanMode('edit','enanthate','fixed');
+      check('choosing a flat dose puts the ramp away rather than deleting it',
+        !_c().dose_phases && (_c().ramp_stash||[]).length===2 && _c().plan_mode==='fixed',
+        JSON.stringify(_c()));
+      G.trtSetPlanMode('edit','enanthate','ramp');
+      check('  …and choosing the ramp again gets back exactly what was put away',
+        (_c().dose_phases||[]).length===2 && _c().dose_phases[1].d==='75' && !_c().ramp_stash,
+        JSON.stringify(_c().dose_phases));
+      // A compound that never had a ramp still seeds week 0 from the flat dose, so
+      // turning one on changes nothing until a phase is actually edited.
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'120',unit:'mg'}]}};
+      G.trtSetPlanMode('edit','enanthate','ramp');
+      check('  …while a compound with no ramp seeds week 0 from its flat dose',
+        (_c().dose_phases||[]).length===1 && _c().dose_phases[0].d==='120'
+          && _c().dose_phases[0].w===0);
+      // Target mode must not invent a ramp — the solver writes one when it is applied.
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'120',unit:'mg'}]}};
+      G.trtSetPlanMode('edit','enanthate','target');
+      check('  …and target mode invents no ramp before a solve is applied',
+        !_c().dose_phases && _c().plan_mode==='target');
+      G._editBuf=_sv;
+    }
 
     // An inverted window warns in the UI as well as generating nothing.
     check('  …warning on an inverted window',
@@ -6249,8 +6347,13 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       // compared whichever cadence happened to rank first at each step, and once
       // ranking moved to the settled window a step change could flip the winner —
       // making this assert something about cadence selection rather than draw volume.
+      // ⚠️ AND OPT OUT OF THE DRAW FLOOR. This measures what the STEP is worth at one
+      // concentration, so the three solves must differ only in the step. A 0.2 ml floor
+      // is 50 mg here — four steps at 0.05 ml and fifty at 0.01 — so it bites the fine
+      // steps hardest and turns a step-size measurement into a floor measurement. What
+      // the floor costs is pinned in its own block below; this one is about the step.
       const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
-        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d'});
+        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d',minMl:0});
       return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr, worst:rr.best.worst, cad:rr.best.cadence.key};
     });
     // Only the claim the product actually rests on: halving the draw volume at a FIXED
@@ -6857,6 +6960,112 @@ console.log('\n── The price of an injection ──────────�
   // 40mg and 100mg/ml 20mg" — and all three are the same draw: 50/250, 40/200 and
   // 20/100 are each 0.2 ml. So the floor is stored in ml and the milligrams are what it
   // looks like at whichever vial is in hand. It was 0.1, which was half what he meant.
+  // ⚠️ EVERY DOSE, NOT JUST THE ONE IT SETTLES AT. Henrik, 2026-09-16: "0,2ml is non
+  // negotiable." The filter measured the floor on the SETTLED dose, on the reasoning
+  // that a ramp's opening weeks are legitimately small — true of a tapering ramp, false
+  // the moment a loading dose existed. After a front-load the next week needs almost
+  // nothing, and on his own record that came out as 25 mg: 0.1 ml at 250 mg/ml, half
+  // his floor, scheduled as a real injection to tick off in Today.
+  //
+  // Asserted across every solver family and several targets, because each builds its
+  // doses differently — a fixed weekly array, a per-phase interval array, and a daily
+  // dithered array — and the floor has to mean the same thing in all three.
+  {
+    const _fd=['2026-06-20','2026-06-26','2026-07-02','2026-07-08','2026-07-14','2026-07-20',
+      '2026-07-26','2026-08-01','2026-08-07','2026-08-13','2026-08-18','2026-08-22',
+      '2026-08-25','2026-08-28','2026-09-01','2026-09-04','2026-09-07','2026-09-10',
+      '2026-09-12','2026-09-13'];
+    const _fh=_fd.map(d=>({compId:'nebido',doseMg:'100',date:d}));
+    const _bwS=G._tcBwEntries, _ftS=G._tcp.measuredFT, _shS=G._tcp.shbg,
+          _ttS=G._tcp.totalT, _dwS=G._tcp.currentDoseMgWk;
+    G._tcBwEntries=[{date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+    G._tcp.measuredFT='634'; G._tcp.shbg='39'; G._tcp.totalT='43.3';
+    G._tcp.currentDoseMgWk='233';
+    const _mkPlan=(t,cap)=>G.tcSolveTransition({history:_fh,incomingId:'enanthate',
+      startDate:'2026-09-17',targetPmol:t,concMgPerMl:250,stepMl:0.1,minMl:0.2,weeks:13,
+      maxInjPerWeek:cap||0});
+    const _cases=[[1000,0],[1400,0],[1600,2],[2200,0]];
+    const _offenders=[];
+    _cases.forEach(function(c){
+      const r=_mkPlan(c[0],c[1]);
+      if(!r||!r.best) return;
+      (r.best.doses||[]).forEach(function(d){
+        if(d>0 && d<50-1e-9) _offenders.push(c[0]+(c[1]?('/cap'+c[1]):'')+':'+d+'mg');
+      });
+    });
+    check('no dose anywhere in the plan is under the floor', _offenders.length===0,
+      _offenders.slice(0,8).join(' '));
+
+    // ⚠️ AND A SKIPPED DOSE IS DEFERRED, NOT DISCARDED. Zeroing a sub-floor dose outright
+    // throws its milligrams away with it: measured before the carry, two consecutive
+    // light weeks became a fourteen-day hole and the mean fell to 1207 against a 1400
+    // target. The drug was never the problem, the needle was — so what a skipped dose was
+    // owed rolls into the next injection that can afford it, and the weekly milligrams
+    // survive even though the needles are fewer.
+    check('  …and the milligrams a skipped dose was owed are not lost', (function(){
+      const step=25, floor=50;
+      const sum=a=>a.reduce((x,y)=>x+y,0);
+      const flo=G._tcApplyFloor([step,step,step,step,step,step,step,step], floor);
+      return Math.abs(sum(flo)-step*8)<1e-9            // same total
+          && flo.every(d=>d===0||d>=floor-1e-9)        // every needle clears the floor
+          && flo.filter(d=>d>0).length===4;            // half the needles, twice the dose
+    })(), JSON.stringify(G._tcApplyFloor([25,25,25,25,25,25,25,25],50)));
+    check('  …and no floor still means no floor', (function(){
+      const a=[25,25,10,0,40];
+      return JSON.stringify(G._tcApplyFloor(a,0))===JSON.stringify(a);
+    })());
+
+    // ── A WEEKLY CADENCE STARTS WHEN THE PLAN STARTS ─────────────────────────
+    // Henrik, 2026-09-17: "Why would first testosterone injection happen next week if
+    // protocol starts today?" The weekday cadences named their days literally — Mon, and
+    // Mon/Thu — so a plan beginning on a Wednesday did nothing for five days. The model
+    // was honest about it (it simulated the later start too), but the days are lost, and
+    // they are the worst days to lose: the LOADING DOSE rides on the first injection.
+    check('a weekly plan injects on its own start day, whatever weekday that is',
+      (function(){
+        return ['2026-09-16','2026-09-17','2026-09-19','2026-09-20'].every(function(sd){
+          const r=G.tcSolveTransition({history:_fh,incomingId:'enanthate',startDate:sd,
+            targetPmol:1500,concMgPerMl:250,stepMl:0.1,minMl:0.2,maxInjPerWeek:2,weeks:13});
+          if(!r||!r.best) return false;
+          const ev=(r.best.events||[]).filter(e=>e.compId==='enanthate')
+                    .map(e=>e.date).sort();
+          return ev.length && ev[0]===sd;
+        });
+      })());
+    check('  …and the loading dose rides that first day rather than waiting for one',
+      (function(){
+        const r=G.tcSolveTransition({history:_fh,incomingId:'enanthate',
+          startDate:'2026-09-16',targetPmol:1500,concMgPerMl:250,stepMl:0.1,minMl:0.2,
+          maxInjPerWeek:2,weeks:13});
+        return !r.loading || r.loading.date==='2026-09-16';
+      })());
+    // ⚠️ THE SPACING INSIDE THE WEEK IS PRESERVED, NOT JUST THE FIRST DAY. Mon/Thu is
+    // three days then four; rotated onto any start day it must stay three then four, or
+    // the cadence the solver ranked is not the cadence the user gets.
+    check('  …with a two-a-week cadence keeping its 3/4-day spacing wherever it lands',
+      (function(){
+        for(const sd of ['2026-09-16','2026-09-18','2026-09-20']){
+          const c=G._tcAnchorCadence({key:'2xwk',label:'Twice weekly (Mon/Thu)',
+                                      days:[1,4],perWeek:2}, sd);
+          const gaps=[(c.days[1]-c.days[0]+7)%7, (c.days[0]-c.days[1]+7)%7].sort();
+          if(gaps.join(',')!=='3,4') return false;
+          if(c.days.indexOf(new Date(sd+'T12:00:00').getDay())<0) return false;
+        }
+        return true;
+      })());
+    check('  …and the label names the days it actually uses',
+      /\(Wed\)/.test(G._tcAnchorCadence({key:'1xwk',label:'Once weekly (Mon)',days:[1],
+                                          perWeek:1},'2026-09-16').label));
+    // Interval cadences already stepped from the start date and must be left alone.
+    check('  …while an interval cadence is untouched', (function(){
+      const c={key:'e2d',label:'Every 2 days',freqVal:2,freqUnit:'days',perWeek:3.5};
+      return G._tcAnchorCadence(c,'2026-09-16')===c;
+    })());
+
+    G._tcBwEntries=_bwS; G._tcp.measuredFT=_ftS; G._tcp.shbg=_shS;
+    G._tcp.totalT=_ttS; G._tcp.currentDoseMgWk=_dwS;
+  }
+
   check('the default floor is the draw he named, not half of it', G._TC_MIN_ML===0.2,
     String(G._TC_MIN_ML));
   check('  …and it is the same 0.2 ml at every concentration he gave', (function(){
@@ -7151,9 +7360,26 @@ console.log('\n── The loading dose ─────────────�
     // allowed ONLY when the plan without a loading dose overshot further — the ramp
     // climbing to close the opening gap is itself an overshoot, and replacing a worse
     // one with a better one is not a breach.
-    check('  …that never overshoots more than the plan without it',
+    //
+    // peakOver IS NOW THE SETTLED PEAK, which is what this assertion was always about:
+    // the 2026-08 regression was a plan left SITTING high, not a transient on the way
+    // in. Since 2026-09-16 the raise window is gated separately and more loosely, so a
+    // whole-plan maximum here would fold the deliberately-wider window into the
+    // deliberately-tight one and this check would fail for doing its job.
+    check('  …that never overshoots more than the plan without it, once settled',
       L.peakOver<=G._TC_LOAD_TOL*100+0.5 || L.peakOver<=L.peakOverWithout+0.5,
       L.peakOver+'% vs '+L.peakOverWithout+'% unloaded');
+    // ⚠️ AND THE WIDER WINDOW IS STILL A WINDOW. Henrik, 2026-09-16: "The ripple when
+    // raising free T could be allowed to be bigger than ripple at the steady state?"
+    // Yes — bigger, not unbounded. The raise may peak up to _TC_RAISE_MULT times the
+    // peak the settled plan itself produces; without an assertion here "wider" would
+    // quietly become "no ceiling at all", which is the 2026-08 failure by another door.
+    check('  …and the raise peak stays inside the raise ceiling', (function(){
+      if(L.raisePeakOver==null) return true;          // no raise window to gate
+      var settledCeil=Math.max(G._TC_LOAD_TOL, L.peakOverWithout/100)+0.005;
+      var raiseCeil=Math.max(settledCeil,(1+settledCeil)*G._TC_RAISE_MULT-1);
+      return L.raisePeakOver/100<=raiseCeil+1e-9;
+    })(), L.raisePeakOver+'% raise vs '+L.peakOverWithout+'% settled-unloaded');
     // It holds the target better across the WHOLE plan — arriving sooner and holding
     // steadier are the same objective, and scoring only the opening would buy a fast
     // start with a worse tail.
@@ -7230,6 +7456,151 @@ console.log('\n── The loading dose ─────────────�
                      cadence:'interval',freqVal:2,freqUnit:'days'});
     check('  …and a compound with no loading dose generates exactly as before',
       plain.every(r=>parseFloat(r.dose)===50), plain.map(r=>r.dose).join(','));
+  }
+
+  // ── The raise is allowed to run hotter than the steady state ──────────────
+  // Henrik, 2026-09-16: "the raise from todays free T to the new target is still stupid
+  // slow, a single 250mg injection would almost close the gap in a few days, but still
+  // it uses the slow ramp. The ripple when raising free T could be allowed to be bigger
+  // than ripple at the steady state?"
+  //
+  // Both halves were true. ONE ceiling governed the whole plan and it was set by the
+  // plan's own steady-state ripple, so the raise got exactly as much headroom as the
+  // steady state and no more — and the candidate that arrives was thrown away for
+  // exceeding a bar that has nothing to do with the question it answers.
+  //
+  // Run on HIS RECORD rather than a synthetic one, because that is what he was looking
+  // at: Nebido 100 mg every 2-3 days to 13 Sep, free T 634 pmol/L at the 15 Sep draw,
+  // enanthate at 250 mg/ml. Measured before and after, the front-load the solver picks
+  // goes 75 mg -> 150 mg at a 1400 target and 250 mg -> 325 mg at 2200, and the level
+  // reaches target in week 1 instead of week 2 in both.
+  {
+    const _rd=['2026-06-20','2026-06-23','2026-06-26','2026-06-29','2026-07-02','2026-07-05',
+      '2026-07-08','2026-07-11','2026-07-14','2026-07-17','2026-07-20','2026-07-23','2026-07-26',
+      '2026-07-29','2026-08-01','2026-08-04','2026-08-07','2026-08-10','2026-08-13','2026-08-16',
+      '2026-08-18','2026-08-20','2026-08-22','2026-08-24','2026-08-25','2026-08-26','2026-08-28',
+      '2026-08-29','2026-09-01','2026-09-04','2026-09-07','2026-09-10','2026-09-11','2026-09-12',
+      '2026-09-13'];
+    // The 75 mg on 13 Sep is in the record too, and it is not decoration: dropping it
+    // flips the winning cadence from daily-dithered to once-weekly, which is a
+    // completely different ripple regime. A fixture that is nearly his record is not
+    // his record.
+    const _rh=_rd.map(d=>({compId:'nebido',doseMg:'100',date:d}))
+                 .concat([{compId:'nebido',doseMg:'75',date:'2026-09-13'}]);
+    const _bwSave=G._tcBwEntries, _ftSave=G._tcp.measuredFT, _shSave=G._tcp.shbg,
+          _ttSave=G._tcp.totalT, _dwSave=G._tcp.currentDoseMgWk, _bySave=G._tcp.birthYear;
+    G._tcBwEntries=[{date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='634'; G._tcp.shbg='39';
+    G._tcp.totalT='43.3'; G._tcp.currentDoseMgWk='233';
+    const _raise=(t)=>G.tcSolveTransition({history:_rh,incomingId:'enanthate',
+      startDate:'2026-09-17',targetPmol:t,concMgPerMl:250,stepMl:0.1,minMl:0.2,weeks:12});
+
+    const r14=_raise(1400), r22=_raise(2200);
+    // ⚠️ THE POINT OF THE CHANGE, PINNED AS AN OUTCOME RATHER THAN A CONSTANT.
+    // "On target in week 1" is what he asked for; a test on _TC_RAISE_MULT would pass
+    // while the schedule still opened 300 pmol/L low.
+    check('the raise reaches target in the first week at a 1400 target',
+      !!(r14.loading && r14.loading.weeksWith===1),
+      r14.loading?('w'+r14.loading.weeksWith+', load '+r14.loading.mg+' mg'):'no loading dose');
+    check('  …opening at target rather than climbing to it',
+      r14.best.weekly[0].mean>=1400*0.93,
+      Math.round(r14.best.weekly[0].mean)+' vs 1400');
+    check('  …and the same at 2200',
+      !!(r22.loading && r22.loading.weeksWith===1 && r22.best.weekly[0].mean>=2200*0.93),
+      Math.round(r22.best.weekly[0].mean)+' vs 2200');
+
+    // ⚠️ IT IS PAID FOR IN THE RAISE, NOT AT STEADY STATE. This is the invariant that
+    // makes the wider window defensible at all: the front-load buys a fast arrival with
+    // a transient, never with a plan that sits high forever. If this ever fails, the
+    // multiplier is leaking into the settled window and the 2026-08 overshoot is back.
+    [[r14,1400],[r22,2200]].forEach(function(pair){
+      const L=pair[0].loading; if(!L) return;
+      check('  …without leaving the settled level higher than the plan without it ('+pair[1]+')',
+        L.peakOver<=Math.max(G._TC_LOAD_TOL*100, L.peakOverWithout)+0.6,
+        L.peakOver+'% settled vs '+L.peakOverWithout+'% unloaded');
+    });
+
+    // ⚠️ AND THE COST IS STATED WHEN THERE IS ONE — AND NOT CLAIMED WHEN THERE IS NOT.
+    // A solver that spends a bigger peak on the user's behalf without saying so is worse
+    // than one that refuses; a solver that warns about a transient it did not create is
+    // noise that teaches people to ignore the warning. Asserted BOTH ways, because a
+    // one-way check goes quietly vacuous the moment a fixture stops producing a
+    // transient — which is exactly what anchoring the cadence to the start date did,
+    // since a plan that injects on day one never has to climb.
+    [[r14,1400],[r22,2200]].forEach(function(pair){
+      const r=pair[0], L=r.loading; if(!L) return;
+      const claims=(r.notes||[]).some(n=>/while the depot fills/.test(n));
+      const costs=(L.raisePeakOver!=null && L.raisePeakOver>L.peakOver+0.5);
+      check('  …stating the peak cost at '+pair[1]+' exactly when there is one',
+        claims===costs,
+        'raise '+L.raisePeakOver+'% vs settled '+L.peakOver+'% — note says cost: '+claims);
+    });
+
+    // ⚠️ A WIDENING ONLY — IT MAY NEVER REFUSE WHAT THE OLD SINGLE CEILING ALLOWED.
+    // The multiplier is applied to (1 + settled ceiling), so for a flat ester whose
+    // settled peak is near zero it could land BELOW the old bar. Math.max is what stops
+    // that, and answering "the raise may run hotter" by tightening it would be a lie.
+    check('  …and the raise ceiling is never tighter than the settled one', (function(){
+      for(const sc of [0, 0.02, 0.05, 0.2, 0.53, 1.2]){
+        const settledCeil=Math.max(G._TC_LOAD_TOL, sc)+0.005;
+        if(Math.max(settledCeil,(1+settledCeil)*G._TC_RAISE_MULT-1) < settledCeil-1e-12) return false;
+      }
+      return G._TC_RAISE_MULT>1;
+    })(), 'mult='+G._TC_RAISE_MULT);
+
+    // ── A MEAN IS NOT A HOLD ─────────────────────────────────────────────────
+    // Henrik, 2026-09-17: "instead of more frequent smaller doses it keeps bigger
+    // infrequent ones creating a curve oscillating between 2200 and 1300."
+    //
+    // Measured on his record with both labs at a 1600 target, once-weekly enanthate
+    // averaged 20 pmol/L from target and WON — while swinging 861 to 2785 inside each
+    // week. Daily-dithered held 1406-1898 and was ranked second. Two things put it
+    // there: the admissibility gate asked only where the weekly MEANS sit, and the
+    // fallback used when nothing is admissible ranked on meanErr, an average that lets
+    // the peaks cancel the troughs and directly contradicts the sort above it.
+    //
+    // Pinned as an outcome — how far the level actually travels — because a test on the
+    // constant would pass while the curve still sawtoothed.
+    check('the winner holds the target rather than averaging it', (function(){
+      const _2labs=G._tcBwEntries;
+      G._tcBwEntries=[{date:'2026-06-26',free_t:'217',total_t:'17',shbg:'45',unit:'pmol/L'},
+                      {date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+      const r=_raise(1600);
+      G._tcBwEntries=_2labs;
+      if(!r||!r.best) return false;
+      const w=(r.best.weekly||[]).slice(r.best.settleWeeks||0);
+      const lo=Math.min(...w.map(x=>x.trough)), hi=Math.max(...w.map(x=>x.peak));
+      // The sawtooth this replaced ran 861-2785 on exactly these inputs.
+      return lo>=1600*0.75 && hi<=1600*1.25;
+    })());
+    // ⚠️ AND NO ALTERNATIVE MAY HOLD IT BETTER THAN THE WINNER. This is the invariant
+    // both bugs broke: the gate and the fallback could each promote a plan that every
+    // ranked key below them says is worse.
+    check('  …and nothing ranked below it holds the target more tightly', (function(){
+      const r=_raise(1400);
+      if(!r||!r.best) return false;
+      const sw=(x)=>(x.worstSettled==null)?x.worst:x.worstSettled;
+      // The tie band is the sort's own; inside it the other keys legitimately decide.
+      return (r.alternatives||[]).every(a=>sw(a)>=sw(r.best)-0.03);
+    })());
+
+    // ⚠️ AND ARRIVING SOONER JUSTIFIES A FRONT-LOAD ON ITS OWN. missOf averages over
+    // every week, so a front-load that takes the opening week from 1011 to 1357 and
+    // pulls arrival from week 2 to week 1 scored a 7% gain and was thrown out for not
+    // clearing 15%. Ten settled weeks that were always going to be fine drown the one
+    // week the front-load exists to fix.
+    check('  …with a front-load that buys a week, even when the 12-week mean barely moves',
+      (function(){
+        const r=_raise(1400);
+        if(!r||!r.loading) return false;
+        return r.loading.weeksWith>0 && r.loading.weeksWith<r.loading.weeksWithout
+            && r.loading.missWith<=r.loading.missWithout;
+      })(), (function(){const r=_raise(1400);return r.loading
+        ? ('w'+r.loading.weeksWith+' vs w'+r.loading.weeksWithout+', miss '
+           +r.loading.missWith+' vs '+r.loading.missWithout) : 'no loading dose';})());
+
+    G._tcBwEntries=_bwSave; G._tcp.measuredFT=_ftSave; G._tcp.shbg=_shSave;
+    G._tcp.totalT=_ttSave; G._tcp.currentDoseMgWk=_dwSave; G._tcp.birthYear=_bySave;
   }
 }
 
@@ -7343,8 +7714,16 @@ console.log('\n── The loading dose ─────────────�
     const _bwSave=G._tcBwEntries;
     G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
     const hist=mk(33,2,100,'2026-08-26');
+    // ⚠️ NO DRAW FLOOR HERE, DELIBERATELY. This block is about the solver SEEING the
+    // outgoing ester's still-scheduled doses and asking for less because of them — and
+    // asking for less is exactly what collides with a floor. With Nebido still booked
+    // every two days the new ester is only needed at ~37 mg a week, which is 0.15 ml at
+    // 250 mg/ml: under a 0.2 ml floor the honest schedule is 75 mg every fortnight, and
+    // a fortnightly enanthate ripples far outside the ±6% band this test measures. That
+    // band is about stacking, not about needles. What the floor costs is pinned in its
+    // own block; this fixture predates it and is left testing what it was written for.
     const opts={incomingId:'enanthate',startDate:'2026-08-28',targetPmol:1400,
-                concMgPerMl:250,stepMl:0.05,weeks:16};
+                concMgPerMl:250,stepMl:0.05,weeks:16,minMl:0};
     const bare  = G.tcSolveTransition(Object.assign({history:hist},opts));
     const withSched = G.tcSolveTransition(Object.assign(
       {history:hist, scheduled:fwd(35,2,100,'2026-08-28')},opts));
@@ -7911,6 +8290,43 @@ console.log('\n── The loading dose ─────────────�
       const h=G._renderTRTSolve(comp,{},'wiz',true);
       check('  …and the panel says applied, not "not applied yet"',
         /Applied\. This protocol now schedules/.test(h) && !/Not applied yet/.test(h));
+
+      // ── APPLY IS AN OVERLAY IN THE WIZARD, NOT THE TAIL OF THE CARD ────────
+      // Henrik, 2026-09-17: "When I hit generate the Next button is shown but the apply
+      // schedule button is hidden below, the whole Apply Schedule needs to be a overlay
+      // not a extension of the section."
+      //
+      // It was position:sticky;top:0, which pins to the TOP of the scrolling body — so
+      // it only comes into view once you have scrolled down to the results, and the
+      // results render below three form fields. On first generate the button that makes
+      // the plan real was off-screen while the wizard's own Next sat where a reader
+      // looks for the primary action.
+      check('  …with Apply as a fixed overlay bar in the wizard',
+        /class="trt-apply-bar"/.test(h) && !/position:sticky;top:0/.test(h));
+      // A fixed bar is out of the flow, so without a spacer the last note and the vial
+      // advice sit under it unreadably however far you scroll.
+      check('  …and a spacer standing in for the space it no longer occupies',
+        /height:104px/.test(h));
+      // ⚠️ THE EDITOR KEEPS STICKY. It has no fixed footer to fight and is not a
+      // full-screen scroller; a bar bolted to the viewport there would hang over
+      // unrelated content. Same state, both scopes, so this cannot pass by accident.
+      const hEdit=G._renderTRTSolve(comp,{},'edit');
+      check('  …while the editor keeps the in-flow sticky block',
+        /position:sticky;top:0/.test(hEdit) && !/trt-apply-bar/.test(hEdit));
+      check('  …and both still offer the button itself',
+        /Apply cadence \+ ramp/.test(h) && /Apply cadence \+ ramp/.test(hEdit));
+      // The bar is fixed inside .wiz-overlay, which carries a transform and is therefore
+      // the containing block for fixed descendants — that is what keeps it pinned to the
+      // wizard rather than the page. Its offset is the footer height, declared beside
+      // .wiz-footer so the two cannot drift apart.
+      {
+        const css=fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8');
+        check('  …anchored above the wizard footer, not to the page',
+          /\.trt-apply-bar\{[^}]*position:fixed/.test(css) &&
+          /\.trt-apply-bar\{[^}]*bottom:var\(--wiz-foot-h\)/.test(css) &&
+          /\.wiz-overlay\{--wiz-foot-h:/.test(css) &&
+          /\.wiz-overlay\{position:fixed;inset:0;[^}]*transform:/.test(css));
+      }
       G._trtSolveState={};
     }
   }
@@ -17078,6 +17494,94 @@ console.log('\n── Ancillary groups and tier-2 access ───────�
       G._compoundAllowedForTier({id:id, group:'whatever'}, 2) === true);
   });
   G._userTier = _sv;
+}
+
+// ── A WEEKLY RATE MUST DIVIDE INTO DRAWABLE INJECTIONS ───────────────────────
+// Henrik, 2026-09-17: "The 400mg/week masteron dosed at e2d creates an impossible draw.
+// In dose creation wizard adjust weekly dose to fit the 0,1ml draw precision to
+// compensate for the scheduling."
+//
+// 400 mg/week every two days is 114.3 mg a shot, and at Masteron Propionate's 100 mg/ml
+// that is 1.143 ml — a number no 1 ml barrel can be drawn to. The rate was round and the
+// cadence turned it into one that is not; nothing downstream noticed, because the
+// generator faithfully wrote 114.3 mg and Today faithfully displayed it.
+console.log('\n── Enhanced dose: drawable injections ─────────────────────');
+{
+  const _catSave=G._COMPOUND_CATALOG;
+  G._COMPOUND_CATALOG=[
+    {id:'mast_p',name:'Masteron Propionate',pack:{type:'vial',conc_mg_ml:100,vol_ml:10}},
+    {id:'mast_e',name:'Masteron Enanthate', pack:{type:'vial',conc_mg_ml:200,vol_ml:10}},
+    {id:'dbol',  name:'Dianabol',           pack:{type:'tablet',mg_per_tab:50,tabs_per_pack:100}},
+    {id:'hcg',   name:'hCG'}
+  ];
+  const snap=(c)=>({changed:G._enhSnapDoseToDraw(c),
+                    perInj:parseFloat(G._enhDosePerInjection(c).dose)});
+
+  const his={id:'mast_p',dose:'400',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+  const r=snap(his);
+  check('his case: 400 mg/wk E2D becomes a drawable rate',
+    r.changed && his.dose==='385' && Math.abs(r.perInj-110)<1e-9,
+    his.dose+' mg/week = '+r.perInj+' mg = '+(r.perInj/100)+' ml');
+
+  // ⚠️ EVERY CADENCE, NOT JUST THE ONE HE HIT. The rate is divided by injections per
+  // week, so a weekday set breaks it exactly as an interval does.
+  check('  …and a weekday cadence is snapped the same way', (function(){
+    const c={id:'mast_p',dose:'400',unit:'mg/week',cadence:'days',days:[1,3,5]};
+    const q=snap(c);
+    const ml=q.perInj/100;
+    return q.changed && Math.abs(ml*10-Math.round(ml*10))<1e-9;
+  })());
+  check('  …a rate that already divides cleanly is left alone', (function(){
+    const c={id:'mast_e',dose:'400',unit:'mg/week',cadence:'days',days:[1,4]};
+    return snap(c).changed===false && c.dose==='400';
+  })());
+  check('  …and snapping is idempotent', (function(){
+    const c={id:'mast_p',dose:'400',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+    snap(c); const first=c.dose;
+    return snap(c).changed===false && c.dose===first;
+  })());
+
+  // ⚠️ NEVER ROUND A DOSE UP TO REACH THE FIRST STEP. 7 mg/week at E2D is 2 mg a shot;
+  // forcing that onto 0.1 ml would quintuple the week to 35 mg. That is an overdose
+  // applied to satisfy a convenience rule — the thing T-Calc's draw floor exists to
+  // prevent, in the other direction. The cadence or the vial is the answer, and both are
+  // the user's call.
+  check('  …but a dose too small to draw is never rounded UP', (function(){
+    const c={id:'mast_p',dose:'7',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+    return snap(c).changed===false && c.dose==='7';
+  })());
+  check('  …and it says so rather than leaving an impossible draw unexplained',
+    /under the .* ml a syringe can be drawn to/.test(
+      G._enhDrawLine({id:'mast_p',dose:'7',unit:'mg/week',cadence:'interval',
+                      freqVal:2,freqUnit:'days'})));
+
+  // Nothing without a vial has a draw to round: tablets and IU doses are untouched, and
+  // must not acquire a ml readout that means nothing.
+  check('  …while tablets and IU doses are left entirely alone', (function(){
+    const t={id:'dbol',dose:'33',unit:'mg/day',cadence:'interval',freqVal:1,freqUnit:'days'};
+    const h={id:'hcg',dose:'1000',unit:'IU/week',cadence:'days',days:[1,4]};
+    return snap(t).changed===false && t.dose==='33' && G._enhDrawLine(t)===''
+        && snap(h).changed===false && h.dose==='1000' && G._enhDrawLine(h)==='';
+  })());
+  check('  …and a drawable dose reports its volume',
+    /1\.1 ml/.test(G._enhDrawLine(his)) && /100 mg\/ml/.test(G._enhDrawLine(his)),
+    G._enhDrawLine(his).replace(/<[^>]*>/g,''));
+
+  // ⚠️ ON COMMIT, NOT ON EVERY KEYSTROKE. Snapping inside `oninput` would rewrite the
+  // field mid-type — "4" becomes something else before "00" is reached — which is the
+  // focus-stealing failure this file has been bitten by before.
+  {
+    const stk=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …snapped on change, never on input', (function(){
+      const rows=stk.match(/oninput="(wiz|edit)SetEnhDose\([^>]*/g)||[];
+      return rows.length===2 && rows.every(x=>/onchange="_enhCommitDose\(/.test(x))
+          && !/oninput="[^"]*_enhCommitDose/.test(stk);
+    })());
+    // Parity: the wizard and the editor configure the same compound.
+    check('  …in both the wizard and the editor',
+      /_enhCommitDose\(..wiz/.test(stk) && /_enhCommitDose\(..edit/.test(stk));
+  }
+  G._COMPOUND_CATALOG=_catSave;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
