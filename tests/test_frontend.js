@@ -8500,6 +8500,71 @@ console.log('\n── The loading dose ─────────────�
     }
   }
 
+  // -- A BLANK DRAW MUST NOT CALIBRATE THE CURVE -----------------------------
+  // Found 2026-09-18 in Henrik's live record: two entries dated 2026-09-15, one carrying
+  // free T 634 and one carrying no marker values at all. He called the blank one "most
+  // likely a leftover from the bug" and it is -- but the reason it MATTERS is that the
+  // calibration anchor was picked by two different rules.
+  //
+  // _bwAnchorDate walks the list for the newest entry that actually carries a value,
+  // while _tcFetchBwEntries took _tcBwEntries[0] whatever it held. The sort comparator
+  // returned 1 for two entries on the same DATE -- never 0 -- so ties were decided by
+  // whichever algorithm the engine picked for that array length, and on his three rows
+  // the blank one came out in front. The anchor DATE then moved to the new draw while
+  // `if (latest.free_t != null)` declined to update the VALUE, so the curve was
+  // calibrated as "the old free T was measured on the new date". Every level on the plot
+  // is wrong by that ratio, and nothing on screen says so.
+  //
+  // It lives in this async block because _tcFetchBwEntries is async and the file is
+  // CommonJS -- a top-level await here makes the module format ambiguous and nothing
+  // runs at all.
+  if (typeof G._tcFetchBwEntries === 'function') {
+    console.log('\n-- T-calc: a blank draw cannot anchor --');
+    const _bbSave = {f:G.fetch, ah:G.authHeaders, bt:G.buildTCalc, tp:G._tcp,
+                     bw:G._tcBwEntries, rate:G._tcRateAtDate};
+    G.authHeaders = () => ({});
+    G.buildTCalc = () => {};
+    G._tcRateAtDate = () => null;
+    // His three rows, in the order the backend returns them (date desc, stable sort).
+    const _bbRows = [
+      {id:'21353b87', date:'2026-09-15', free_t:null, total_t:null, shbg:null},
+      {id:'91318589', date:'2026-09-15', free_t:634,  total_t:43.3, shbg:39},
+      {id:'da53a820', date:'2026-06-26', free_t:217,  total_t:17,   shbg:45}];
+    G.fetch = async () => ({ok:true, json:async()=>_bbRows.map(r=>Object.assign({},r))});
+    G._tcp = {measuredFT:'217', totalT:'17', shbg:'45'};
+    await G._tcFetchBwEntries();
+    check('a blank row beside a real one does not become the calibration source',
+      G._tcp.measuredFT === '634', 'measuredFT=' + G._tcp.measuredFT);
+    check('  ...and the rest of that draw comes from the same row',
+      G._tcp.totalT === '43.3' && G._tcp.shbg === '39',
+      'totalT=' + G._tcp.totalT + ' shbg=' + G._tcp.shbg);
+    // SAME-DATE TIES MUST BE DECIDED BY THE DATA, NOT BY THE SORT. A comparator that
+    // never returns 0 is inconsistent, and its answer depends on the array length.
+    check('  ...because the comparator no longer breaks ties by accident',
+      /da===db \? 0 :/.test(fs.readFileSync(path.join(__dirname,'../tab-tcalc.js'),'utf8')));
+    // The other half of the same rule: _bwAnchorDate refuses a draw dated in the future,
+    // so a `latest` that accepted one would feed the curve a value the anchor rejected.
+    G._tcp = {measuredFT:'217', totalT:'17', shbg:'45'};
+    const _fut = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+    G.fetch = async () => ({ok:true, json:async()=>[
+      {id:'future',   date:_fut,         free_t:1500, total_t:60,   shbg:35},
+      {id:'91318589', date:'2026-09-15', free_t:634,  total_t:43.3, shbg:39}]});
+    await G._tcFetchBwEntries();
+    check('  ...and a draw dated in the future cannot calibrate either',
+      G._tcp.measuredFT === '634', 'measuredFT=' + G._tcp.measuredFT);
+    // A partial panel is still a calibrating draw -- total T + SHBG with no free T is an
+    // ordinary TRT panel, and the 2026-08-02 report was exactly this being ignored.
+    G._tcp = {measuredFT:'', totalT:'', shbg:''};
+    G.fetch = async () => ({ok:true, json:async()=>[
+      {id:'partial', date:'2026-09-15', free_t:null, total_t:25, shbg:40}]});
+    await G._tcFetchBwEntries();
+    check('  ...while a total-T-only panel still counts as a real draw',
+      G._tcp.totalT === '25' && G._tcp.shbg === '40',
+      'totalT=' + G._tcp.totalT + ' shbg=' + G._tcp.shbg);
+    G.fetch=_bbSave.f; G.authHeaders=_bbSave.ah; G.buildTCalc=_bbSave.bt;
+    G._tcp=_bbSave.tp; G._tcBwEntries=_bbSave.bw; G._tcRateAtDate=_bbSave.rate;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -12576,7 +12641,10 @@ function _isProdCheckout(dir) {
 // whoever adds the next one to remember.
 {
   const _selfSrc = require('fs').readFileSync(__filename, 'utf8');
-  ['../CLAUDE.md', 'promote-to-prod.yml'].forEach(function (f) {
+  // '../docs/' joined the list on 2026-09-18: the body-fat uncertainty source was read
+  // unscoped and failed prod CI on two promotion branches. docs/ is development material
+  // and the promotion deliberately leaves it behind, exactly like the two files above.
+  ['../CLAUDE.md', 'promote-to-prod.yml', '../docs/'].forEach(function (f) {
     var idx = -1, unguarded = [];
     while ((idx = _selfSrc.indexOf(f, idx + 1)) !== -1) {
       // Only actual reads count; the name appears in prose, and in this scanner's own
@@ -15214,6 +15282,37 @@ if (typeof G._labDrawStatus === 'function') {
   check('  …and the draw recorder asks it rather than filtering its own',
     /var existing = _labEntryOnDate\(d\);/.test(_ldSrc));
 
+  // ⚠️ AND IT PREFERS THE PENDING ROW — RESULTS BELONG IN THE DRAW THEY CAME FROM.
+  // The comment above already names the hazard: "which wins is decided by ordering rather
+  // than by data". This is that hazard writing a row. _labConfirmAdd asks for the entry on
+  // the date, discards it unless it is still awaiting results, and POSTs a NEW row when it
+  // gets nothing back. So on a date holding both a pending draw and a completed one, the
+  // completed row could answer, _pending came back null, and the results landed as a third
+  // row instead of filling the draw that was waiting for them.
+  //
+  // Henrik's 2026-09-15 is the live example: one blank row and one carrying free T 634.
+  if (typeof G._labEntryOnDate === 'function') {
+    const _peSave = G._tcBwEntries;
+    const _done = {id:'done', date:'2026-09-15', free_t:634, total_t:43.3, shbg:39};
+    const _pend = {id:'pend', date:'2026-09-15', free_t:null, total_t:null, shbg:null};
+    G._tcBwEntries = [_done, _pend];
+    check('  …preferring the draw still awaiting results, whatever the order',
+      G._labEntryOnDate('2026-09-15') === _pend, 'picked ' + (G._labEntryOnDate('2026-09-15')||{}).id);
+    G._tcBwEntries = [_pend, _done];
+    check('  …and the same the other way round',
+      G._labEntryOnDate('2026-09-15') === _pend);
+    // Every row on the date already has results: the save path refuses it and creates a
+    // new row, which is deliberate — silently overwriting real numbers is worse than a
+    // duplicate. The "is there a draw on this day" caller still gets a truthy answer.
+    G._tcBwEntries = [_done];
+    check('  …while a date with only completed draws still answers truthily',
+      G._labEntryOnDate('2026-09-15') === _done);
+    G._tcBwEntries = [_done, _pend];
+    check('  …and a date with nothing on it answers null',
+      G._labEntryOnDate('2026-01-01') === null);
+    G._tcBwEntries = _peSave;
+  }
+
   if (typeof G._labConfirmAdd === 'function') {
     // ⚠️ ASSERTED SYNCHRONOUSLY, AND THIS BLOCK CANNOT `await`.
     // It sits in the suite's synchronous section, so there is no await available here —
@@ -15391,9 +15490,24 @@ if (typeof G._labDrawStatus === 'function') {
     /_labDeleteEntry\(id\) \{[\s\S]{0,200}_labCloseDetail\(\)/.test(_ldSrc));
   // One draw per day: a second tap is a mis-tap, and two entries on one date would give
   // the curve two anchors for the same measurement.
-  check('a second draw on a day that already has one is refused',
-    /filter\(function\(e\)\{ return e && e\.date === d; \}\)\[0\]/.test(_ldSrc) &&
-    /if\(existing\)\{/.test(_ldSrc));
+  // ⚠️ ASSERT THE PROPERTY, NOT THE LINE. This pinned _labEntryOnDate's exact
+  // `filter(...)[0]` spelling, so teaching it to prefer a PENDING row broke the guard
+  // while the rule it guards — one draw per day — was never weakened. The rule is that
+  // the helper answers truthily for ANY entry on the date and that logBloodDraw returns
+  // on it; that survives however the helper picks between two rows.
+  check('a second draw on a day that already has one is refused', (function(){
+    if (typeof G._labEntryOnDate !== 'function') return /if\(existing\)\{/.test(_ldSrc);
+    const _sv = G._tcBwEntries;
+    const done = {id:'d', date:'2026-09-15', free_t:634};
+    const pend = {id:'p', date:'2026-09-15', free_t:null};
+    let ok = true;
+    G._tcBwEntries = [done];        ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [pend];        ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [done, pend];  ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [];            ok = ok && !G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = _sv;
+    return ok && /var existing = _labEntryOnDate\(d\);/.test(_ldSrc) && /if\(existing\)\{/.test(_ldSrc);
+  })());
   // A pending draw offers the one action that moves it forward, prefilled with ITS date
   // so the results stay tied to the day of the draw.
   check('a pending draw offers Add results, prefilled with the draw date',
@@ -16291,6 +16405,75 @@ if(typeof G._bcPrecision==='function'){
   check('every point carries its margin of error as a label',
     /^\u00b1\d+\.\d%$/.test(G._bcPrecisionLabel({method:'dexa',bf:14})),
     G._bcPrecisionLabel({method:'dexa',bf:14}));
+}
+
+// ── THE ERROR BARS ARE SOURCED, NOT EYEBALLED ────────────────────────
+// The anchors were read off a JPEG of Henrik's chart when this shipped, which is a poor
+// footing for an error bar: it is a claim about how much to trust a number, so it should
+// not itself be a claim read off a picture. He supplied the source text on 2026-09-18
+// (docs/bodyfat-measurement-uncertainty.md §3) and the curve is now bounded by it.
+if(typeof G._BC_SEE==='object'){
+  // ⚠️ STAGING-ONLY READ. Henrik, 2026-09-18: "Deploy fails due to CI."
+  // It did, twice, on the prod promotion branch:
+  //   ENOENT: open '.../docs/bodyfat-measurement-uncertainty.md'
+  // The suite is promoted to prod; docs/ is not, because prod is the deployed app and
+  // docs/ is development material. This read went in unscoped and failed a DEPLOY on a
+  // file that was never meant to be there.
+  //
+  // The fourth time this class of mistake has blocked a promotion — 2026-08-02, 2026-08-20
+  // and 2026-09-09 are all recorded further down, next to the structural guard that was
+  // built after the third. That guard's list now covers '../docs/' too, which is why this
+  // read is written in the direct readFileSync(path.join(...)) form: that is the shape it
+  // can see and verify _isProdCheckout on.
+  //
+  // The NUMBERS are asserted against _BC_SEE, which is promoted, so prod still checks the
+  // envelope the curve must honour. Only the prose behind it is staging-only.
+  const _seeDoc = _isProdCheckout(dir) ? null
+    : fs.readFileSync(path.join(__dirname, '../docs/bodyfat-measurement-uncertainty.md'), 'utf8');
+  // The documented Standard Error of Estimate per method, transcribed from §3. These are
+  // the figures the curve is bounded by, so they are pinned here rather than only in a
+  // file that does not travel.
+  const _seeDocumented={dexa:[1.2,2.5], navy:[3.5,4.5], caliper:[3.0,5.0], ai:[2.5,4.5]};
+  check('the error bars carry the documented envelope, not an invented one',
+    Object.keys(_seeDocumented).every(k=>{
+      const e=G._BC_SEE[k]||{};
+      return e.lo===_seeDocumented[k][0] && e.hi===_seeDocumented[k][1];
+    }), JSON.stringify(G._BC_SEE));
+  if(_seeDoc){
+    check('  …and the source text behind it is kept in the repo',
+      /SEE\) ≈ 1\.2% - 2\.5% BF/.test(_seeDoc)
+      && /SEE\) ≈ 3\.5% - 4\.5% BF/.test(_seeDoc)
+      && /SEE\) ≈ 2\.5% - 4\.5% BF/.test(_seeDoc));
+  }
+  check('  …and every method records the envelope and the model it comes from',
+    ['dexa','navy','caliper','ai'].every(k=>{
+      const e=G._BC_SEE[k];
+      return e && e.hi>e.lo && e.lo>0 && e.model && (e.refs||[]).length>=2;
+    }));
+  // ⚠️ THE CURVE MUST NOT LEAVE ITS OWN ENVELOPE. Two anchors did — navy@40 at 4.7 and
+  // ai@40 at 4.8, both at the far left edge of the chart where a pixel read is least
+  // reliable, both above a documented 4.5 ceiling. This is the check that would have
+  // caught them, and it is why the envelope is data rather than a comment.
+  check('  …and the curve stays inside it, end to end',
+    ['dexa','navy','ai'].every(k=>{
+      const e=G._BC_SEE[k];
+      for(let bf=4; bf<=45; bf++){
+        const pr=G._bcPrecision(k,bf);
+        if(!(pr>=e.lo-1e-9 && pr<=e.hi+1e-9))return false;
+      }
+      return true;
+    }), ['dexa','navy','ai'].map(k=>k+'@40='+G._bcPrecision(k,40)).join(' '));
+  // The calipers are the documented exception, and the exception is the whole point of a
+  // body-fat-DEPENDENT curve: the flat SEE is 3.0-4.0 for a skilled tester, but the
+  // method's own assumptions break down at the ends, where > 5.0 is documented. A check
+  // that forced the calipers inside 3.0-4.0 would be enforcing the flat figure the curve
+  // exists to improve on.
+  check('  …with the calipers allowed past it only where the method breaks down',
+    G._bcPrecision('jp3',20)<=4.0 && G._bcPrecision('jp3',5)>5.0);
+  if(_seeDoc){
+    check('  …which is what the source documents for an untrained tester',
+      /> 5\.0% BF \(Untrained\)/.test(_seeDoc));
+  }
 }
 {
   const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
