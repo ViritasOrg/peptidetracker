@@ -2401,6 +2401,98 @@ console.log('\n── Editing when a dose was taken ─────────�
     !/logged_at/.test(_tcJs2));
 }
 
+// ── CHANGING WHAT ACTUALLY WENT IN, FOR ONE DAY ───────────────────────
+// Henrik, 2026-09-18: "Add ability to change a dose in Today, IF I either run low on a
+// compound or want to over ride schedule."
+//
+// Both are one statement about one injection: the number the protocol planned is not the
+// number that went into the syringe. The only ways to say it before were to edit the
+// protocol — rewriting every future dose to answer a question about one past one — or to
+// say nothing and let the curve model a dose that was never given.
+{
+  console.log('\n── Today: changing one day\u2019s dose ────────────────────');
+  const _tdJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  const _iwJs = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+
+  // ⚠️ THE REQUEST BELONGS IN inj-writer. That file exists because ten call sites each
+  // spelled their own /injections request and none of them agreed; a third hand-rolled
+  // PUT in the page is how that comes back.
+  check('the dose write goes through inj-writer, not a raw fetch in the page',
+    /async function injSetDose\(/.test(_iwJs)
+    && /injSetDose\(id, next, 'todayDoseOverride'\)/.test(_tdJs));
+  check('  …addressing the row by id and sending only the dose',
+    /'\/injections\/' \+ injId/.test(_iwJs)
+    && /JSON\.stringify\(\{dose: String\(dose\)\}\)/.test(_iwJs));
+
+  const _dSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate};
+  const _puts = [];
+  G._viewDate = null;
+  G._injectionsCache = {'2026-09-18': [{id:'d1', date:'2026-09-18', compound_id:'enanthate',
+    compound_name:'Testosterone Enanthate', dose:'28.6', unit:'mg', tier:'trt',
+    logged:false, active:true, time_of_day:'AM'}]};
+  const _r = () => G._injectionsCache['2026-09-18'][0];
+
+  await (async () => {
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    await G._setInjectionDose('d1', 15);
+    check('a changed dose is written to that one row',
+      _puts.length===1 && /\/injections\/d1$/.test(_puts[0].url) && _puts[0].body.dose==='15',
+      JSON.stringify(_puts[0]||null));
+    check('  …and lands in the cache the screen reads', _r().dose==='15', String(_r().dose));
+    // A dose does not become taken, or untaken, because its size was wrong.
+    check('  …without ever sending a logged flag',
+      _puts.every(p => !('logged' in p.body) && !('logged_at' in p.body)));
+
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G._setInjectionDose('d1', 99);
+    check('a failed save puts the old dose back rather than keeping the new one',
+      _r().dose==='15', String(_r().dose));
+    G.fetch = _dSave.f;
+  })();
+
+  // ⚠️ A ZERO IS NOT AN OVERRIDE, IT IS A SKIP, and skipping has its own control
+  // (`active`). dose:0 leaves a row that reads as an injection and models as nothing.
+  check('zero and nonsense are refused rather than written',
+    /if\(!\(v>0\)\)\{ if\(err\)err\.textContent='Enter a dose above 0\.'; return; \}/.test(_tdJs));
+  // The same ordering trap saveInjectionTime carries: the close removes the input.
+  check('  …reading the field before the modal is torn down',
+    _tdJs.indexOf("var v=parseDec(inp?inp.value:'')") < _tdJs.indexOf('_closeInjectionDoseEditor();\n  if(id)'));
+
+  // ⚠️ THE PLAN IS NOT TOUCHED. Editing the protocol to answer a question about one
+  // day is the thing this exists to avoid, so nothing here may reach a compound.
+  {
+    const _fn = _tdJs.slice(_tdJs.indexOf('async function _setInjectionDose'));
+    const _body = _fn.slice(0, _fn.indexOf('\n}'));
+    check('changing one dose never writes the protocol',
+      !/dose_phases|_userStacks|injWriteBatch|saveStacks/.test(_body));
+  }
+  // An unlogged row is a PLAN row, and injWriteBatch prunes this compound's unlogged
+  // future and rewrites it. Saying so in the sheet is the difference between a caveat
+  // and a silent loss.
+  check('an unticked dose says a regenerated schedule will replace it',
+    /This dose is not ticked yet\. Generating a schedule/.test(_tdJs)
+    && /row\.logged\?''/.test(_tdJs));
+  // THE RECORD CHANGED — RE-READ IT. _tcHistory is fetched once per session, so a logged
+  // dose changed here and not re-read leaves the curve on the old milligrams.
+  check('  …and changing a dose already taken re-reads the curve\'s history',
+    /if\(row\.logged && typeof _tcFetchHistory==='function'\)/.test(_tdJs));
+
+  // The legacy peptide-log fallback rows showDayInline builds have fabricated ids that
+  // no PUT can address — a tappable dose there looks live and does nothing.
+  {
+    const _mkCell = (dose) => { const el={style:{},onclick:null,textContent:''};
+                                G._todayDoseCell(el, dose); return el; };
+    check('a real row gets a tappable dose',
+      !!_mkCell(_r()).onclick && _mkCell(_r()).style.cursor==='pointer');
+    check('  …and a legacy log row with no record behind it does not',
+      !_mkCell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', dose:'', logged:true}).onclick);
+  }
+  G._injectionsCache = _dSave.c; G._viewDate = _dSave.vd;
+}
+
 
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
@@ -6097,15 +6189,37 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // The ramp editor and the solver moved out of the transition panel and behind the
     // switch, so the scope and parity checks follow them. The window stays where it is:
     // it is not a fourth strategy, it is when this compound runs.
+    // ⚠️ THE MODE IS FORCED, NOT INFERRED. 'ramp' is withheld from the chip row, so
+    // _trtPlanMode maps a stored ramp onto 'target' and the ramp editor would never
+    // render here again — the checks below would all pass by rendering nothing. The
+    // override is what keeps the hidden branch genuinely under test, which is the whole
+    // condition Henrik attached to hiding it: "leave the code and test to not let it rot
+    // away".
     const ePlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'edit',
-      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>');
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>',m);
     const wPlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'wiz',
-      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>');
-    check('the plan switch offers exactly the three strategies', (function(){
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>',m);
+    // ── DOSE RAMP IS HIDDEN, NOT DELETED ──────────────────────────
+    // Henrik, 2026-09-18: "I used free T target to create cycle but when I hit edit it is
+    // using dose ramp. Remove dose ramp totally (hide in UI but leave the code and test
+    // to not let it rot away".
+    //
+    // Only two of the three were ever things a user DECIDES. A ramp is what a target-T
+    // solve produces, so offering it as a peer strategy is what made a solved compound
+    // come back looking hand-built.
+    check('the plan switch offers the two strategies a user chooses', (function(){
       const h=ePlan('fixed');
-      return ['Fixed dose','Dose ramp','Target free T'].every(k=>h.includes(k))
-          && G._TRT_PLAN_MODES.length===3;
+      return h.includes('Fixed dose') && h.includes('Target free T')
+          && !h.includes('Dose ramp')
+          && G._trtPlanModesVisible().length===2;
     })());
+    // ⚠️ AND THE RAMP IS STILL THERE. Every phase reader in the app runs on
+    // dose_phases and this editor is the only screen that can show what a solve wrote;
+    // deleting the branch would leave that data with no view onto it. If this check ever
+    // fails, the code rotted away — which is the exact thing hiding it was meant to avoid.
+    check('  …with the ramp still implemented behind it',
+      G._TRT_PLAN_MODES.length===3 && G._TRT_PLAN_HIDDEN.ramp===true
+      && G._TRT_PLAN_SUPERSEDED_BY.ramp==='target');
     check('  …in both scopes, neither leaking the other\'s',
       /trtSetPlanMode\('edit'/.test(ePlan('fixed')) && !/'wiz'/.test(ePlan('fixed')) &&
       /trtSetPlanMode\('wiz'/.test(wPlan('fixed'))  && !/'edit'/.test(wPlan('fixed')));
@@ -6152,9 +6266,21 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // unset mode must read. A protocol opened after this ships shows the strategy it was
     // already running, rather than silently reverting to a flat dose.
     check('a compound saved before the switch keeps the strategy it was running',
-      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp' &&
       G._trtPlanMode({id:'x',dose:'100'})==='fixed' &&
       G._trtPlanMode({id:'x',dose:'100',dose_phases:[],plan_mode:'target'})==='target');
+    // ⚠️ THIS IS THE HALF OF THE FIX THAT REACHES PROTOCOLS ALREADY SAVED. Stamping
+    // plan_mode in trtSolveApply only helps solves run from here on; his cycle was
+    // already on the backend carrying phases and nothing else, and phases used to derive
+    // to 'ramp'. With the chip withheld, the only thing that writes dose_phases is a
+    // solve — so phases mean 'target'.
+    check('  …and a solved compound with no plan_mode reads as Target free T, not a ramp',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='target',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]}));
+    // A stored 'ramp' is shown where its data now lives, while the stored value itself is
+    // left alone — nothing saved is rewritten by opening it.
+    check('  …as does a compound that explicitly stored the hidden ramp mode',
+      G._trtPlanMode({id:'x',plan_mode:'ramp',dose_phases:[{w:0,d:'50',u:'mg'}]})==='target' &&
+      G._trtPlanModeStored({id:'x',plan_mode:'ramp',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp');
 
     // ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK — the rule the cadence
     // switch in this file already carries, and it matters more here: a ramp can be a
@@ -6601,6 +6727,49 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     })(), 'label and schedule must not disagree');
     check('  …while a genuine weekly compound still reads as weekdays',
       G._trtCadenceLabel({id:'enanthate',cadence:'days',days:[1]})==='M');
+
+    // ── A RAMP IS NOT A DOSE ON A DAY ─────────────────────────────────
+    // Henrik, 2026-09-18: "Testosterone injections are planned using free T target, but
+    // in the protocol details it is shown as a daily injection (which it isn't) and with
+    // a very low daily dose (changes during the 12weeks so untrue)."
+    //
+    // The row printed c.dose beside the cadence label. On a target-T solve c.dose is the
+    // maintenance dose of ONE shot and the cadence is the dither pattern's daily grid, so
+    // the two together read as a flat 39.3 mg every day for twelve weeks — none of which
+    // the protocol does. mg/week is the only figure a ramp is comparable across.
+    {
+      const ramp={id:'enanthate',cadence:'interval',freqVal:1,freqUnit:'days',dose:'39.3',
+        dose_phases:[
+          {w:0, d:'35.7',u:'mg',pattern:['35.7','35.7','35.7','35.7','35.7','35.7','35.7']},
+          {w:4, d:'42.9',u:'mg',pattern:['42.9','42.9','42.9','42.9','42.9','42.9','42.9']},
+          {w:8, d:'50',  u:'mg',pattern:['50','50','50','50','50','50','50']},
+          {w:12,d:'64.3',u:'mg',pattern:['64.3','64.3','64.3','64.3','64.3','64.3','64.3']}]};
+      check('a ramped testosterone states its weekly span, not one day of it',
+        G._trtRampSpanLabel(ramp,16)==='16w \u00b7 250 mg/week \u2192 450 mg/week',
+        G._trtRampSpanLabel(ramp,16));
+      // ⚠️ A PHASE THAT STARTS AFTER THE LAST WEEK NEVER RUNS. A 12-week cycle covers
+      // week indices 0-11, so w:12 is never the phase in force on any day the generator
+      // visits — quoting its dose as the destination promises a dose never given.
+      check('  …ending at the last phase the cycle actually reaches',
+        G._trtRampSpanLabel(ramp,12)==='12w \u00b7 250 mg/week \u2192 350 mg/week',
+        G._trtRampSpanLabel(ramp,12));
+      // The dither pattern IS the week's load. Reading ph.d would report one day as seven.
+      check('  …summing a dithered week rather than multiplying one of its days',
+        Math.round(G._phaseWeeklyMg(ramp.dose_phases[0],ramp))===250);
+      // Per-phase intervals are the other shape a solve emits.
+      check('  …and honouring a per-phase interval when there is no pattern',
+        G._trtRampSpanLabel({id:'enanthate',dose_phases:[
+          {w:0,d:'125',u:'mg',iv:3.5},{w:6,d:'225',u:'mg',iv:3.5}]},12)
+          ==='12w \u00b7 250 mg/week \u2192 450 mg/week');
+      // A one-ended range is a range that says the same number twice.
+      check('  …collapsing to one figure when the ramp does not move',
+        G._trtRampSpanLabel({id:'enanthate',dose_phases:[
+          {w:0,d:'125',u:'mg',iv:3.5},{w:6,d:'125',u:'mg',iv:3.5}]},12)==='12w \u00b7 250 mg/week');
+      // ⚠️ A FLAT DOSE GENUINELY IS ONE DOSE ON ONE CADENCE and must keep saying so —
+      // the span replaces the old line only where the old line was untrue.
+      check('  …while a flat compound keeps its dose-and-cadence line',
+        G._trtRampSpanLabel({id:'enanthate',cadence:'interval',freqVal:2,freqUnit:'days',dose:'100'},12)==='');
+    }
 
     // A split compound keeps its dose in dose_am/dose_pm; c.dose is whatever the
     // catalogue seeded and is NOT the configured dose.
@@ -16007,6 +16176,147 @@ if(typeof G.caliperBF==='function'){
 if(typeof G._bcEntryDetail==='function'){
   check('entry detail: tape entry shows Neck', /Neck/.test(G._bcEntryDetail({method:'navy',neck:42,belly:94})));
   check('entry detail: caliper entry shows method label', /Jackson-Pollock 3-site/.test(G._bcEntryDetail({method:'jp3',skinfolds:{chest:10,abdomen:18,thigh:14}})));
+  // ⚠️ A NEW METHOD MUST NOT PRINT ITS OWN ID AT THE USER.
+  // The detail line looked its label up in the CALIPER table only, so anything outside
+  // it fell through to `e.method` — a history row reading "dexa" and a Latest Results
+  // line reading "ai", which is how the id becomes the label nobody chose.
+  check('entry detail: DEXA entry is named, not its id',
+    G._bcEntryDetail({method:'dexa',bf:14.2})==='DEXA scan', G._bcEntryDetail({method:'dexa',bf:14.2}));
+  check('entry detail: an AI estimate is named as one',
+    G._bcEntryDetail({method:'ai',bf:14.2})==='AI photo estimate', G._bcEntryDetail({method:'ai',bf:14.2}));
+}
+
+// ── DEXA AND AI ARE ENTERED, NOT COMPUTED ─────────────────────────────
+// Henrik, 2026-09-18: "Adding BF% needs two new inputs, one is Dexa and one is AI image
+// analysis", and on the photos: "the instructions is take a few photos and upload to any
+// chat bot, so the input is only a single field where the user enter BF %."
+//
+// Navy and caliper measure and then calculate. These two do neither: the percentage is
+// finished before it reaches the app. So the thing worth protecting is that they stay a
+// single field with instructions — no equation, no site list, no photo upload — and
+// that the entry still records WHICH of them produced the number.
+{
+  const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
+  const idxHtml=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  check('both new methods are offered as chips',
+    /setBcMethod\('dexa'\)/.test(idxHtml) && /setBcMethod\('ai'\)/.test(idxHtml));
+  check('  …and each has a section to reveal',
+    /id="bc-direct-section"/.test(idxHtml));
+  // ⚠️ FOUR CHIPS DO NOT FIT ONE PHONE ROW. Without a wrap they shrink until the
+  // labels are unreadable, which is the whole reason the row is declared to wrap.
+  check('  …on a row that wraps rather than crushing four chips together',
+    /flex-wrap:wrap;margin-bottom:2px"><div id="bc-method-navy"/.test(idxHtml));
+  // The old switcher named each chip and section in its own body; a third method left
+  // the previous one lit and its section open underneath.
+  check('the method switch is driven off the method list, not named pairs',
+    /_BC_METHODS\.forEach/.test(bodyJs) && /_BC_METHODS=\['navy','caliper','dexa','ai'\]/.test(bodyJs));
+  check('  …and DEXA and AI share the one entered-value section',
+    /dexa:'bc-direct-section',ai:'bc-direct-section'/.test(bodyJs));
+  check('  …reached by the log dispatcher',
+    /_BC_DIRECT_LABEL\[_bcMethod\]\)bcLogDirect\(\)/.test(bodyJs));
+  // The band the other two methods are already held to — one method must not be able to
+  // put a value on the chart that another would have refused.
+  check('  …held to the same 3-60% band as tape and caliper',
+    /bf>=3&&bf<=60/.test(bodyJs));
+  // What distinguishes them is the instructions, and the AI one has to say where the
+  // analysis actually happens, because the app does not do it.
+  check('  …with the AI method telling the user to take the photos elsewhere',
+    /_BC_DIRECT_HELP/.test(bodyJs) && /upload them to any chat assistant/.test(bodyJs));
+  // ⚠️ AND NOTHING HERE MAY GROW AN EQUATION. If a number needs deriving it was
+  // derived before it reached this file; a formula would make the label a lie.
+  check('  …and the entry records which method produced the number',
+    /method:_bcMethod/.test(bodyJs));
+}
+
+// ── FOUR METHODS, FOUR SERIES, AND AN ERROR BAR ON EVERY POINT ──────────────
+// Henrik, 2026-09-18: "The 4 different methods needs to be kept separate and preferably
+// with some color flag or something to highlight different methods. Thing is dexa is the
+// gold standard but expensive, us navy and caliper only give realistic values between
+// 30-15% BF. AI is consistent but +/- 5% still the only realistic for a low budget high
+// or low BF individual" — with a precision-vs-body-fat chart attached.
+//
+// Everything went into one line in one colour, so a DEXA scan next to a tape reading drew
+// a step that looked like the body changing when it was the instrument changing. And the
+// size of that artefact is not constant: tape and calipers are best near 20% and worst at
+// both ends, which is exactly where a lean or a heavy person is standing.
+if(typeof G._bcPrecision==='function'){
+  console.log('\n── Body-fat method separation ───────────────────────');
+  // ⚠️ THE GROUPER MUST BE IDEMPOTENT. Stored caliper methods are jp3/jp7/dw4; the
+  // string 'caliper' is a GROUP key and never a stored value. Without that case a group
+  // key fed back in returned 'navy' — a caliper series drawn in the tape colour.
+  check('the three caliper equations are one series',
+    G._bcMethodGroup('jp3')==='caliper' && G._bcMethodGroup('jp7')==='caliper' && G._bcMethodGroup('dw4')==='caliper');
+  check('  …and the grouper is idempotent on its own keys',
+    G._bcMethodGroup('caliper')==='caliper' && G._bcMethodGroup('dexa')==='dexa' && G._bcMethodGroup('ai')==='ai');
+  // An entry saved before `method` existed is a tape reading, not an unknown.
+  check('  …with a pre-method entry treated as tape',
+    G._bcMethodGroup(undefined)==='navy' && G._bcMethodGroup('')==='navy');
+
+  // DEXA is the gold standard and does not care where on the range you are.
+  check('DEXA precision is flat across the range',
+    G._bcPrecision('dexa',6)===G._bcPrecision('dexa',40) && G._bcPrecision('dexa',20)<2);
+  // ⚠️ THE WHOLE POINT OF THE CURVE: tape and calipers are worst at the ENDS. A flat
+  // per-method figure would have said a 5% reading is as trustworthy as a 20% one.
+  check('  …while tape and calipers are worst at both ends',
+    G._bcPrecision('navy',5)>G._bcPrecision('navy',20) &&
+    G._bcPrecision('navy',40)>G._bcPrecision('navy',20) &&
+    G._bcPrecision('jp3',5)>G._bcPrecision('jp3',20) &&
+    G._bcPrecision('jp3',40)>G._bcPrecision('jp3',20));
+  // His words: "AI is consistent but +/- 5% still the only realistic for a low budget
+  // high or low BF individual". At 5% body fat the calipers must lose to it.
+  check('  …and at the lean end the AI estimate beats the calipers',
+    G._bcPrecision('ai',5)<G._bcPrecision('jp3',5), G._bcPrecision('ai',5)+' vs '+G._bcPrecision('jp3',5));
+  check('  …as it does at the heavy end',
+    G._bcPrecision('ai',40)<G._bcPrecision('jp3',40));
+  // Interpolated, not stepped: a reading between two anchors gets a value between them.
+  // Measured on the caliper curve's steepest stretch (5%→7%): a flatter segment rounds
+  // to the same tenth at both ends and would pass whether or not it interpolated.
+  check('  …interpolating between anchors rather than stepping',
+    G._bcPrecision('jp3',6)<G._bcPrecision('jp3',5) && G._bcPrecision('jp3',6)>G._bcPrecision('jp3',7),
+    G._bcPrecision('jp3',5)+' / '+G._bcPrecision('jp3',6)+' / '+G._bcPrecision('jp3',7));
+  check('  …and clamping outside them instead of running negative',
+    G._bcPrecision('navy',1)>0 && G._bcPrecision('navy',95)>0);
+
+  // The range flag is the actionable half of what the curve says.
+  check('a tape reading below 15% is flagged as outside its range',
+    G._bcOutsideGoodRange({method:'navy',bf:12})===true);
+  check('  …and above 30%',
+    G._bcOutsideGoodRange({method:'jp3',bf:34})===true);
+  check('  …but not inside it',
+    G._bcOutsideGoodRange({method:'navy',bf:20})===false);
+  // DEXA and the AI estimate have no such band — they are the two that still work out
+  // there, which is exactly why they were added.
+  check('  …and DEXA and AI are never flagged',
+    G._bcOutsideGoodRange({method:'dexa',bf:6})===false && G._bcOutsideGoodRange({method:'ai',bf:45})===false);
+  check('every point carries its margin of error as a label',
+    /^\u00b1\d+\.\d%$/.test(G._bcPrecisionLabel({method:'dexa',bf:14})),
+    G._bcPrecisionLabel({method:'dexa',bf:14}));
+}
+{
+  const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
+  const idxHtml=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  // ⚠️ THE X AXIS HAS TO BE TIME, NOT THE ROW NUMBER. Index spacing is harmless with
+  // one line; with four it gives each series its own private axis, so a DEXA scan and a
+  // tape reading from the same morning land in different places and the lines cross
+  // where nothing crossed.
+  check('the body-fat chart plots one series per method',
+    /function bcDrawBfChart\(/.test(bodyJs) && /bcDrawBfChart\(arr\)/.test(bodyJs));
+  check('  …on a shared time axis, not on row index',
+    /_BC_GROUP_ORDER\.filter/.test(bodyJs) && !/bcDrawChart\('chart-bf'/.test(bodyJs));
+  // ⚠️ IDENTITY IS NEVER COLOUR ALONE. These accents are brighter than a general
+  // chart palette wants because the app is neon on black; the shapes and the named
+  // legend are what carry identity for anyone who cannot separate the hues.
+  check('  …each with its own marker shape, not colour alone',
+    /shape:'circle'/.test(bodyJs) && /shape:'square'/.test(bodyJs)
+    && /shape:'diamond'/.test(bodyJs) && /shape:'triangle'/.test(bodyJs));
+  check('  …and a legend that names them',
+    /id="bc-bf-legend"/.test(idxHtml) && /legend\.innerHTML=present\.map/.test(bodyJs));
+  // The whisker is the feature. A band sized only to the points would clip it, and a
+  // clipped error bar reads as a smaller uncertainty than the method actually has.
+  check('  …with the y band sized to hold the error bars',
+    /los\.push\(e\.bf-p\);his\.push\(e\.bf\+p\)/.test(bodyJs));
+  check('history rows carry the method colour and its margin of error',
+    /_BC_GROUP\[_bcMethodGroup\(e\.method\)\]/.test(bodyJs) && /_bcPrecisionLabel\(e\)/.test(bodyJs));
 }
 
 // ── Injection pharmacology stamp (_injPkMeta) ──────────────────────────────
@@ -17089,7 +17399,17 @@ console.log('\n─────────────────────�
 {
   const body = fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8');
   check('_bcLabel helper exists', /function _bcLabel\(e\)\{/.test(body));
-  check('the BF chart derives its labels', /arr\.map\(e=>_bcLabel\(e\)\)/.test(body));
+  // ⚠️ ASSERT THE PROPERTY, NOT ONE CALL SITE'S SPELLING. This matched the literal
+  // `arr.map(e=>_bcLabel(e))` of the single-series chart, so splitting the chart into one
+  // series per method broke the guard while the hazard it guards — reading e.dateLabel
+  // raw, which a synced entry does not have — was never reintroduced. Scoped to the BF
+  // chart and stated as "labels go through _bcLabel, dateLabel is never read here".
+  check('the BF chart derives its labels', (function(){
+    const i=body.indexOf('function bcDrawBfChart(');
+    if(i<0)return false;
+    const fn=body.slice(i, body.indexOf('\n}', i));
+    return /_bcLabel\(e\)/.test(fn) && !/\.dateLabel/.test(fn);
+  })());
   check('the BMI chart derives its labels', /bmiLabels=bmiData\.map\(e=>_bcLabel\(e\)\)/.test(body));
   check('no raw e.dateLabel read remains in a render path', !/\be\.dateLabel\b(?!\)return)/.test(
     body.replace(/function _bcLabel\(e\)\{[\s\S]*?\n\}/, '')));
@@ -17746,6 +18066,23 @@ console.log('\n── Deploy card: push status ───────────
     /function _showLiveProdVersion\(/.test(html)
     && /_showLiveProdVersion\(\);/.test(html)
     && /Prod is running/.test(html));
+
+  // ⚠️ AND THE TWO LINES MUST NOT DISAGREE ABOUT PROD.
+  // Henrik, 2026-09-17: "One line claims last push was one day ago with prod 327, but
+  // the line under is correctly showing prod being 330." The record said v1.797 →
+  // v1.327; the live fetch said v1.330. Both were true of their own source, only one
+  // was true of prod. Once the fresh read shows the recorded push has been overtaken,
+  // the collapsed line must stop printing that push's prod version as if it were the
+  // current one — it stays in the expanded detail, where it reads as history.
+  check('  …and a record prod has moved past is marked superseded, not shown as current',
+    /function _markSupersededPush\(/.test(html)
+    && /_markSupersededPush\(live\);/.test(html)
+    && /rec\.prodVer===live\)return;/.test(html)
+    && /id="push-to-prod-lbl"/.test(html));
+  // The mark has to reach the line the eye lands on — the collapsed summary — not just
+  // the detail rows inside the <details>.
+  check('  …on the collapsed summary line itself',
+    /<span id="push-to-prod-lbl">\$\{_lbl\}<\/span><\/summary>/.test(html));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
