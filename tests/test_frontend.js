@@ -415,15 +415,15 @@ if(typeof G._tcalcTrtSummary==='function'){
   check('_renderTcalcTrtCard: labels it as doses with no compound', /Doses with no compound/.test(_ttCard));
   check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
   check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
-  // _renderTRTViewTab shows the card and suppresses "No TRT configured"
+  // _renderTRTViewTab shows the card and suppresses "No Enhanced compounds configured"
   if(typeof G._renderTRTViewTab==='function'){
     var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
     check('_renderTRTViewTab: shows the orphan-dose card', /Doses with no compound/.test(_ttView));
-    check('_renderTRTViewTab: suppresses "No TRT configured" when T-Calc card shows', !/No TRT configured/.test(_ttView));
+    check('_renderTRTViewTab: suppresses "No Enhanced compounds configured" when T-Calc card shows', !/No Enhanced compounds configured/.test(_ttView));
     // with no tcalc plan, the empty message returns
     G._injectionsCache={};
     var _ttViewEmpty=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
-    check('_renderTRTViewTab: "No TRT configured" when nothing planned', /No TRT configured/.test(_ttViewEmpty));
+    check('_renderTRTViewTab: "No Enhanced compounds configured" when nothing planned', /No Enhanced compounds configured/.test(_ttViewEmpty));
   }
   // edit view (_renderEditTRT) shows the card above the compound list, regardless of toggle
   if(typeof G._renderEditTRT==='function'){
@@ -7506,10 +7506,22 @@ console.log('\n── The price of an injection ──────────�
     // screen could explain the hole.
     {
       const _d0=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+off+')',sandbox);
+      // ⚠️ DERIVED FROM TODAY'S WEEKDAY, NEVER HARDCODED.
+      // This said days:[1,3,5] — Henrik's own Mon/Wed/Fri — and then asserted that
+      // TODAY generates. Those agree only when the suite runs on a Mon, Wed or Fri, so
+      // the test was red on main four days in seven and blocked every unrelated PR that
+      // happened to land on the wrong day (caught 2026-09-29, a Tuesday). The note a few
+      // lines down already says an environment-sensitive test is worse than none; the
+      // day of the week is the same trap as the time of day. Every-other-day from today
+      // matches the -6/-4/-2 logged doses seeded below, which is what the cap reads.
+      const _dow=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return x.getDay();})('+off+')',sandbox);
+      const _capDays=[_dow(-4),_dow(-2),_dow(0)];
       const _capStack=(mode)=>({id:'cap', cycle_start:_d0(-6), cycle_length:13,
         trt:{enabled:true, compounds:[{id:'enanthate', name:'Test E', dose:'250',
-          unit:'mg', cadence:'days', days:[1,3,5], time:'AM',
+          unit:'mg', cadence:'days', days:_capDays.slice(), time:'AM',
           plan_mode:mode, max_inj_week:'3', load_mg:'300'}]}});
+      check('cap · today is a scheduled day whatever weekday the suite runs on',
+        _capDays.indexOf(_dow(0))>=0 && _capDays.length===3);
       // ⚠️ SET INSIDE THE SANDBOX, NOT THROUGH G.
       // This assigned G._injectionsCache. It passed here and FAILED on the promoted
       // tree, blocking a promotion — an environment-sensitive test is worse than none.
@@ -9209,10 +9221,21 @@ console.log('\n── dose dedup migration ────────────�
   if (typeof G.wizStepValidate === 'function') {
     const vb=_mkEl2(), vf=_mkEl2();
     G.wizStepValidate(vb,vf);
-    check('Validate shows a TRT heading when a plan exists', /TRT</.test(vb.innerHTML) || />TRT/.test(vb.innerHTML),
+    check('Validate shows an Enhanced heading when a plan exists', />Enhanced</.test(vb.innerHTML),
       vb.innerHTML.slice(0,200));
     check('  …and names the ester', /Enanthate|Testosterone/i.test(vb.innerHTML));
     check('  …alongside the peptides', /Retatrutide/.test(vb.innerHTML));
+    // ONE TIER, ONE HEADING. Testosterone and the rest of the compounds are the same
+    // tier since Phase 4, so a protocol carrying both must not print "Enhanced" twice.
+    G._wiz.goals=['trt','enhanced'];
+    G._wiz.enhanced={enabled:true,compounds:[{id:'masteron_e',name:'Masteron E',dose:'300',unit:'mg/week'}]};
+    const vb2=_mkEl2(), vf2=_mkEl2();
+    G.wizStepValidate(vb2,vf2);
+    check('  …and both compound blocks sit under ONE Enhanced heading',
+      (vb2.innerHTML.match(/>Enhanced</g)||[]).length===1,
+      'got ' + (vb2.innerHTML.match(/>Enhanced</g)||[]).length);
+    check('  …with the testosterone and the other compound both listed',
+      /Enanthate|Testosterone/i.test(vb2.innerHTML) && /Masteron/i.test(vb2.innerHTML));
   }
   if (typeof G.wizStepReview === 'function') {
     const rb=_mkEl2(), rf=_mkEl2();
@@ -10584,7 +10607,7 @@ console.log('\n── View & Edit tab render functions ────────�
       _stkSrc.indexOf('_fetchTRTLog') === -1 && _stkSrc.indexOf('_trtLogCache') === -1 &&
       _todaySrc.indexOf('_trtLogCache') === -1);
   }
-  check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No TRT configured'));
+  check('_renderTRTViewTab empty: mentions no Enhanced compounds configured', tvH1.includes('No Enhanced compounds configured'));
   // ⚠️ NO INJECTION LOG IN PROTOCOL DETAILS. Removed 2026-09-03 on request
   // ("Injection Log in Protocol details? Why?"). It listed date + compound name
   // for the cycle's logged TRT doses and was the third and weakest view of that
@@ -11710,7 +11733,7 @@ console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ─�
     G.TRT_CAT.forEach(function(c){
       var html=G._renderTRTGuide(c.id,150);
       check('_renderTRTGuide('+c.id+'): returns non-empty HTML', typeof html==='string'&&html.length>50);
-      check('_renderTRTGuide('+c.id+'): contains TRT Guide heading', html.includes('TRT Guide'));
+      check('_renderTRTGuide('+c.id+'): contains Enhanced Guide heading', html.includes('Enhanced Guide'));
       check('_renderTRTGuide('+c.id+'): contains halfLife from guide', html.includes('½-life'));
       check('_renderTRTGuide('+c.id+'): contains cadence rec', html.includes(G.TRT_GUIDE[c.id].cadence.rec.slice(0,10)));
     });
@@ -11726,6 +11749,15 @@ console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ─�
     var noSupra=G._renderTRTGuide('testoviron',200);
     check('_renderTRTGuide: no supraphysiological warning block at 200mg/wk',
       !noSupra.includes('Supraphysiological dose'));
+
+    // THE WARNING MUST NOT SEND ANYONE TO A TAB THAT NO LONGER EXISTS. Enhanced and
+    // TRT were folded into one Compounds tier (Phase 4), so "track this compound in
+    // the Enhanced tab instead" named a destination the app stopped having. Henrik
+    // reported it against a 525 mg/wk Test protocol, 2026-09-29.
+    check('_renderTRTGuide: supraphysiological warning no longer points at the Enhanced tab',
+      !/Enhanced tab/.test(supraNebido) && !/Enhanced tab/.test(supraTesto));
+    check('_renderTRTGuide: supraphysiological warning still states the dose and the range',
+      /300 mg\/week/.test(supraTesto) && /100\u2013200 mg\/wk|100–200 mg\/wk/.test(supraTesto));
 
     // --- Unknown compound returns empty string ---
     check('_renderTRTGuide unknown id returns empty string', G._renderTRTGuide('not-a-compound',100)==='');
@@ -15789,7 +15821,12 @@ if (typeof G._stackTierFlags === 'function') {
 }
 {
   const idxSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
-  check('stack card renders TRT + Enhanced chips', idxSrc.includes("_stackTierChip('TRT','#e05050')") && idxSrc.includes("_stackTierChip('ENHANCED'"));
+  // ONE CHIP FOR ONE TIER: testosterone and the rest of the compounds share it, so the
+  // card must not be able to grow a second chip for the same tier again.
+  check('stack card renders one Enhanced chip covering both compound blocks',
+    idxSrc.includes("if(_tf.trt||_tf.enhanced)_chips+=_stackTierChip('ENHANCED'"));
+  check('stack card has no separate TRT/Advanced chip',
+    !/_stackTierChip\('(TRT|ADVANCED)'/.test(idxSrc));
   check('stack card uses injection-aware tier flags',  idxSrc.includes('_stackTierFlags(st,isActive,_stackHasScheduledTrt(st.id))'));
 }
 
@@ -18484,6 +18521,212 @@ console.log('\n── Deploy card: push status ───────────
   // the detail rows inside the <details>.
   check('  …on the collapsed summary line itself',
     /<span id="push-to-prod-lbl">\$\{_lbl\}<\/span><\/summary>/.test(html));
+}
+
+// ── Screenshot-safe compound names in Today ──────────────────────────────────
+// Henrik, 2026-10-02: Today has to be screenshottable without putting a restricted
+// compound name on a social platform, where the post reads as unpaid drug advertising.
+console.log('\n── Screenshot-safe names (Today) ──────────────────────────');
+{
+  const _sfSave = G.getData('proto-safe-names', false);
+  const _sfSavePush = G.pushPepSettingsToAgent;
+  G.pushPepSettingsToAgent = () => {};
+
+  // OFF is the default, and off means untouched — not "mostly untouched".
+  G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+  check('off by default: the real name is returned unchanged',
+    G._safeCompoundName('Retatrutide') === 'Retatrutide');
+  check('  …and _sfxEnabled() reads false', G._sfxEnabled() === false);
+
+  G.setData('proto-safe-names', true); G._sfxMapCache = null; G._sfxMapKey = '';
+  check('on: _sfxEnabled() reads true', G._sfxEnabled() === true);
+  // THE NAME HENRIK ASKED FOR, EXACTLY. "Retatrutide is r3t@ or similar" — first
+  // letter, then a/e/i/o/s swapped, four characters. If the cap or the table moves,
+  // this is the assertion that says so.
+  check('on: Retatrutide shows as R3t@', G._safeCompoundName('Retatrutide') === 'R3t@',
+    'got ' + G._safeCompoundName('Retatrutide'));
+  check('  …and nothing is left that spells the real name',
+    !/retatrutide/i.test(G._safeCompoundName('Retatrutide')));
+
+  // Structure survives, so an ester is still tellable from its siblings.
+  check('a two-word name keeps both words', G._safeCompoundName('Testosterone Enanthate') === 'T35t En@n',
+    'got ' + G._safeCompoundName('Testosterone Enanthate'));
+  check('  …and the esters stay distinguishable',
+    G._safeCompoundName('Testosterone Enanthate') !== G._safeCompoundName('Testosterone Cypionate'));
+  check('digits and punctuation are left alone', /-157$/.test(G._safeCompoundName('BPC-157')),
+    'got ' + G._safeCompoundName('BPC-157'));
+
+  // ⚠️ AN ACRONYM MUST NOT PASS THROUGH AS ITSELF. HGH, HCG, BPC and TB have no
+  // a/e/i/o/s to swap, so without the fallback table they would render as the real
+  // name with the setting on — the one outcome the whole setting exists to prevent.
+  ['HGH', 'HCG', 'BPC-157', 'TB-500', 'NAD+', 'MOTS-C', 'GHK-Cu'].forEach(function(n){
+    check('acronym "' + n + '" is still changed', G._safeCompoundName(n) !== n,
+      'got ' + G._safeCompoundName(n));
+  });
+
+  // ⚠️ TWO COMPOUNDS MUST NEVER SHARE AN ALIAS. Four characters collapses Semaglutide
+  // and Semax onto S3m@; two Today rows with the same name and different doses is
+  // worse than showing the real names. The widening in _sfxAliasMap is what prevents
+  // it, and it has to hold for the whole catalogue, not just that known pair.
+  check('Semaglutide and Semax do not collide',
+    G._safeCompoundName('Semaglutide') !== G._safeCompoundName('Semax'),
+    G._safeCompoundName('Semaglutide') + ' vs ' + G._safeCompoundName('Semax'));
+  {
+    const _m = G._sfxAliasMap(), _seen = {}, _dups = [];
+    Object.keys(_m).forEach(function(n){
+      if (_seen[_m[n]]) _dups.push(_m[n] + ' = ' + _seen[_m[n]] + ' + ' + n);
+      _seen[_m[n]] = n;
+    });
+    check('no two catalogue names share an alias', _dups.length === 0, _dups.join('; '));
+    check('  …over a catalogue that is actually populated', Object.keys(_m).length >= 25,
+      'only ' + Object.keys(_m).length + ' names');
+  }
+  // Widening is order-independent: every member of a clashing group grows, so the
+  // alias cannot depend on which tier finished syncing first.
+  check('both halves of a clashing pair widen, not just one',
+    G._safeCompoundName('Semaglutide').length === G._safeCompoundName('Semax').length);
+
+  check('an unknown name still gets an alias', G._safeCompoundName('Enclomiphene') !== 'Enclomiphene');
+  check('blank input stays blank', G._safeCompoundName('') === '' && G._safeCompoundName(null) === '');
+
+  // ── The fun names: curated jokes from the backend win over the derived rule ──
+  // Henrik, on the leetspeak first cut: "Make it fun!" R3t@ is obvious but it is not
+  // funny, so the jokes come from GET /compound-nicknames and leetspeak drops to being
+  // the safety net for whatever that list has not reached.
+  {
+    const _nickSave = G._compNicknames;
+    G._compNicknames = {retatrutide:'Rita Tootsie', tren_a:'Trevor Short',
+                        test_u:'Big Yule', sustanon:'Four Horsemen', hcg:'Ball Boy'};
+    G._sfxMapCache = null; G._sfxMapKey = '';
+    check('the curated joke wins over the derived alias',
+      G._safeCompoundName('Retatrutide','retatrutide') === 'Rita Tootsie',
+      'got ' + G._safeCompoundName('Retatrutide','retatrutide'));
+    check('  …and it is fun, not leetspeak',
+      !/[@0135]/.test(G._safeCompoundName('Retatrutide','retatrutide')));
+    check('the id picks the joke, whatever the stored name says',
+      G._safeCompoundName('Testosterone Undecanoate (Nebido)','test_u') === 'Big Yule');
+    check('an id with no joke yet still falls back to the derived alias',
+      G._safeCompoundName('Semaglutide','semaglutide') === G._sfxAliasMap()['Semaglutide'],
+      'got ' + G._safeCompoundName('Semaglutide','semaglutide'));
+    check('  …so "on" never leaves the real name on screen',
+      G._safeCompoundName('Semaglutide','semaglutide') !== 'Semaglutide');
+    check('an id is matched case-insensitively',
+      G._safeCompoundName('Trenbolone Acetate','TREN_A') === 'Trevor Short');
+    check('a row with an id but no name still gets the joke',
+      G._safeCompoundName('','hcg') === 'Ball Boy');
+
+    // ⚠️ A JOKE THAT CARRIES THE REAL NAME DOES NOTHING. "Uncle Tren" is funny and
+    // obvious and still matches a keyword scan for `tren`. The backend suite enforces
+    // this over the real list; here we only prove the app does not reintroduce it.
+    Object.keys(G._compNicknames).forEach(function(id){
+      const nick = G._compNicknames[id].toLowerCase();
+      check('nickname for ' + id + ' does not echo its id', nick.indexOf(id.split('_')[0]) < 0,
+        G._compNicknames[id]);
+    });
+
+    // No network, or a cold start before the fetch lands: the setting must still work.
+    G._compNicknames = null; G._sfxMapCache = null; G._sfxMapKey = '';
+    check('with no nicknames cached at all, the derived rule still hides the name',
+      G._safeCompoundName('Retatrutide','retatrutide') === 'R3t@',
+      'got ' + G._safeCompoundName('Retatrutide','retatrutide'));
+    G._compNicknames = _nickSave; G._sfxMapCache = null; G._sfxMapKey = '';
+  }
+  check('source: the app fetches the jokes rather than hardcoding them',
+    /syncCompoundNicknames/.test(html) && /\/compound-nicknames/.test(html));
+  {
+    // SCOPED TO CODE, NOT COMMENTS. The first version of this matched the joke quoted
+    // in _safeCompoundName's own comment, and so failed on the change it exists to
+    // protect — the same trap as the gh_retry test that matched its own comment.
+    const _noCmt = html.split('\n')
+      .filter(function(l){ return !/^\s*(\/\/|\*|\/\*)/.test(l); }).join('\n');
+    check('source: no nickname table is hardcoded in the app',
+      !/Rita Tootsie|Trevor Short|Four Horsemen|Nipple Guard|Pippa Payne|Wind Troll/.test(_noCmt),
+      'a joke was pasted into the frontend — it is compound data, it belongs in the backend');
+  }
+  check('source: the fetched map is cached so the setting works offline',
+    /proto-compound-nicknames/.test(html));
+  check('source: every Today call site passes the compound id',
+    /_tdName\(dose\.compound_name,dose\.compound_id\)/.test(
+      fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8')));
+
+  // ── Today actually uses it, and stored data does not ──────────────────────
+  const _tdSrc = fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8');
+  check('source: the Today dose rows render through _tdName',
+    /nameEl\.textContent=_tdName\(dose\.compound_name,\s*dose\.compound_id\)/.test(_tdSrc));
+  check('source: no Today row prints compound_name raw',
+    !/nameEl\.textContent=dose\.compound_name/.test(_tdSrc));
+  check('source: _tdName falls back to the real name if the engine is missing',
+    /_safeCompoundName==='function'/.test(_tdSrc));
+
+  // ⚠️ DISPLAY ONLY. If an alias ever reached _injectionsCache it would be posted to
+  // the backend as the compound's name, and the curve, the bloodwork join and the
+  // history would all key on a joke. Render with the setting on, then prove the row
+  // still carries what the backend gave us.
+  {
+    const _origDoc = G.document, _stub = Object.create(_origDoc);
+    let _alert = '';
+    _stub.getElementById = (id) => {
+      const e = _origDoc.getElementById(id);
+      if (id !== 'today-alerts') return e;
+      return new Proxy(e, {get:(t,k)=> k==='innerHTML' ? _alert : t[k],
+                           set:(t,k,v)=>{ if(k==='innerHTML') _alert=v; else t[k]=v; return true; }});
+    };
+    const _save = {doc:G.document, stacks:G._userStacks, act:G._activeStackIndices,
+                   cache:G._injectionsCache, loaded:G._stacksLoaded, pend:G._syncPending,
+                   ready:G._injCacheReady, hidden:G._injHidden};
+    const _TD = G.dateKey(new Date(G.NOW));
+    G.document = _stub;
+    G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+    G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+    G._activeStackIndices = [0];
+    G._userStacks = [{id:'SFX', name:'P', cycle_start:_TD, cycle_length:12, peptides:[], trt:{},
+      enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'}]}}];
+    G._injectionsCache = {[_TD]:[
+      {id:'sfx1', compound_id:'reta', compound_name:'Retatrutide', tier:'peptide', cycle_id:'SFX',
+       date:_TD, dose:'2', unit:'mg', active:true, logged:false, time_of_day:'AM'}]};
+
+    _alert = ''; try { G.buildToday(); } catch(e) { _alert = 'THREW: ' + e.message; }
+    check('Today renders with the setting on without throwing', !/^THREW/.test(_alert), _alert.slice(0,140));
+    // The "not scheduled" banner names the configured ester, and it is capturable.
+    check('the Today banner shows the alias, not the compound',
+      !/Nebido|Undecanoate/.test(_alert), _alert.slice(0,200));
+    check('  …and the banner still names something', /Und3|N3b1|T35t/.test(_alert), _alert.slice(0,200));
+    check('the cached row keeps its real compound_name',
+      G._injectionsCache[_TD][0].compound_name === 'Retatrutide');
+
+    // Off again → the real name is back on screen, from the same untouched row.
+    G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+    _alert = ''; try { G.buildToday(); } catch(e) { _alert = 'THREW: ' + e.message; }
+    check('turning it off puts the real name back', /Nebido|Undecanoate/.test(_alert), _alert.slice(0,200));
+
+    G.document = _save.doc; G._userStacks = _save.stacks; G._activeStackIndices = _save.act;
+    G._injectionsCache = _save.cache; G._stacksLoaded = _save.loaded; G._syncPending = _save.pend;
+    G._injCacheReady = _save.ready; G._injHidden = _save.hidden;
+  }
+
+  // ── The setting itself ───────────────────────────────────────────────────
+  check('source: the Settings row is in the App section and calls toggleSafeNames',
+    /id="s-safenames-btn"[^>]*onclick="toggleSafeNames\(\)"/.test(html));
+  check('source: loadSettings paints the row', /loadSettings\(\)\{[^]{0,200}buildSafeNamesRow\(\)/.test(html));
+  check('source: the toggle follows the account through /user-settings',
+    /pushPepSettingsToAgent\(\{'proto-safe-names':v\}\)/.test(html)
+    && /s\['proto-safe-names'\]/.test(html));
+  {
+    let _pushed = null;
+    G.pushPepSettingsToAgent = (kv) => { _pushed = kv; };
+    G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+    try { G.toggleSafeNames(); } catch(e) {}
+    check('toggleSafeNames turns it on', G._sfxEnabled() === true);
+    check('  …and pushes the new value to the backend',
+      !!_pushed && _pushed['proto-safe-names'] === true, JSON.stringify(_pushed));
+    try { G.toggleSafeNames(); } catch(e) {}
+    check('  …and toggles back off', G._sfxEnabled() === false);
+    check('  …pushing false too', !!_pushed && _pushed['proto-safe-names'] === false);
+  }
+
+  G.setData('proto-safe-names', _sfSave === true);
+  G._sfxMapCache = null; G._sfxMapKey = '';
+  G.pushPepSettingsToAgent = _sfSavePush;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
