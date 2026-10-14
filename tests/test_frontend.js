@@ -9005,6 +9005,91 @@ console.log('\n── Injection site (Today) ───────────�
       (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 2);
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
+
+    // ── A body like the user's (Henrik, 2026-10-13) ──────────────────────────
+    // Men at 10/20/35 %, women at 15/20/35 %, each front and back; the closest figure
+    // to the latest LOGGED body fat, and the 20 % figure when none is logged.
+    check('body: a lean man gets the 10 % figure', G._injBodyFor('male', 14).key === 'm10');
+    check('body: a man at 28 % gets the 35 % figure', G._injBodyFor('male', 28).key === 'm35');
+    check('body: a woman at 33 % gets the 35 % figure', G._injBodyFor('female', 33).key === 'f35');
+    check('body: a woman at 16 % gets the 15 % figure', G._injBodyFor('female', 16).key === 'f15');
+    check('body: no body fat logged shows the 20 % figure for both sexes',
+      G._injBodyFor('male', null).key === 'm20' && G._injBodyFor('female', undefined).key === 'f20' &&
+      G._injBodyFor('male', 0).key === 'm20' && G._injBodyFor('male', NaN).key === 'm20');
+    check('body: an unknown sex falls back to the male set, as user_sex does everywhere',
+      G._injBodyFor('', 10).key === 'm10');
+    {
+      const bodies = [...G.INJ_BODIES.male, ...G.INJ_BODIES.female];
+      check('body: six figures, each with a front and a back image that ships with the app',
+        bodies.length === 6 && bodies.every(b =>
+          ['front', 'back'].every(v => /^inject-body-[mf]\d+-(front|back)\.webp$/.test(b[v]) &&
+            fs.existsSync(path.join(base, b[v])))),
+        bodies.map(b => b.front + '/' + b.back).join(' '));
+      // promote-to-prod.yml copies ROOT-level images only, and its asset check reads
+      // quoted names from the source — so every name must be a literal at the root.
+      check('body: every image name is written out literally in inj-site.js',
+        bodies.every(b => siteSrc.includes("'" + b.front + "'") && siteSrc.includes("'" + b.back + "'")));
+      // Every site the picker offers on a view has a spot on every body for that view,
+      // and nothing else — a missing entry would silently drop a button.
+      const missing = [];
+      bodies.forEach(b => ['front', 'back'].forEach(v => {
+        const want = G._injSitesFor(v).map(x => x.id).sort().join(',');
+        const have = Object.keys((G.INJ_BODY_SPOTS[b.key] || {})[v] || {}).sort().join(',');
+        if (want !== have) missing.push(b.key + '.' + v + ': ' + have);
+      }));
+      check('body: every figure places every site of each view, and only those', missing.length === 0,
+        missing.join(' | '));
+      // The mirroring rule from INJ_SITES, per figure: front r_ on the image's left, back r_ on its right.
+      const wrongSide = [];
+      bodies.forEach(b => ['front', 'back'].forEach(v => {
+        Object.entries(G.INJ_BODY_SPOTS[b.key][v]).forEach(([id, [x, y]]) => {
+          const right = id.startsWith('r_');
+          const ok = v === 'front' ? (right ? x < 50 : x > 50) : (right ? x > 50 : x < 50);
+          if (!ok || !(y > 0 && y < 100)) wrongSide.push(b.key + '.' + v + '.' + id + '=' + x + ',' + y);
+        });
+      }));
+      check('body: right is the user\'s right on every figure (front mirrored, back not)',
+        wrongSide.length === 0, wrongSide.join(' '));
+    }
+
+    // ── Staging-only override (Henrik, 2026-10-14) ───────────────────────────
+    check('override: staging honours a pinned figure', G._injBodyOverrideFor(true, 'f35').key === 'f35' &&
+      G._injBodyOverrideFor(true, 'm10').key === 'm10');
+    check('override: prod ignores it entirely', G._injBodyOverrideFor(false, 'f35') === null);
+    check('override: "auto" or junk falls back to sex + body fat',
+      G._injBodyOverrideFor(true, 'auto') === null && G._injBodyOverrideFor(true, 'x9') === null &&
+      G._injBodyOverrideFor(true, '') === null);
+    check('override: the picker asks the override before sex and body fat',
+      /function _injBody\(\)\{\s*var ov=_injBodyOverride\(\); if\(ov\) return ov;/.test(siteSrc));
+    {
+      const _pushSave = G.pushPepSettingsToAgent; let pushed = null;
+      G.pushPepSettingsToAgent = (kv) => { pushed = kv; };
+      G.setInjBodyOverride('m35');
+      check('override: choosing a figure is saved to the backend, not only to this device',
+        pushed && pushed['inj-body-override'] === 'm35', JSON.stringify(pushed));
+      G.setInjBodyOverride('auto');
+      G.pushPepSettingsToAgent = _pushSave;
+    }
+    check('override: the Settings row is hidden by default and only shown on staging',
+      /id="s-injbody-row" style="display:none;/.test(html) &&
+      /if\(IS_STAGING\)\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html));
+    check('override: the settings sync restores it on a new device',
+      /s\['inj-body-override'\]/.test(html));
+    // ── Needle length: the backend's answer, printed as given ────────────────
+    {
+      const html = G._injNeedleHtml({muscles:{
+        deltoid:{mm_min:25,mm_max:38,label:'25–38 mm'}, thigh:{mm_min:38,mm_max:38,label:'38 mm'},
+        ventrogluteal:{mm_min:null,mm_max:null,label:'No sourced figure below BMI 25'},
+        dorsogluteal:{mm_min:null,mm_max:null,label:'No sourced figure below BMI 25'},
+        lat:{mm_min:null,mm_max:null,label:'No published guidance'}}});
+      check('needle: every muscle row is printed with the backend\'s own words',
+        /25–38 mm/.test(html) && /38 mm/.test(html) && /No sourced figure below BMI 25/.test(html) &&
+        /No published guidance/.test(html) && /Delts/.test(html) && /Lats/.test(html));
+      check('needle: it says it is an estimate from sex, weight and height', /ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT/.test(html));
+      check('needle: nothing to print without a response', G._injNeedleHtml(null) === '');
+      check('needle: no number is written in the frontend — it comes from /injection-needles',
+        /\/injection-needles/.test(siteSrc) && !/\b(16|25|38)\s*mm/.test(siteSrc.replace(/\/\/.*$/gm, '')));
+    }
     check('source: the write is optimistic WITH a rollback',
       /row\.site=prev; redraw\(\);/.test(tdSrc));
     // ⚠️ THE WRITE LIVES WITH THE OTHER TODAY WRITES, NOT IN THE PICKER. One module
@@ -19038,6 +19123,51 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
   G.setData('proto-safe-names', _sfSave === true);
   G._sfxMapCache = null; G._sfxMapKey = '';
   G.pushPepSettingsToAgent = _sfSavePush;
+}
+
+// ── Section: Retry a failed Push to Prod (2026-10-12) ────────────────────────
+// "Under the Deploy button for a red failed line show a small retry button" — GitHub's
+// own re-run of THAT run, via POST /promote-to-prod/retry.
+{
+  const RUN = 'https://github.com/ViritasOrg/peptidetracker-staging/actions/runs/38243649584';
+  check('retry: the run id is read off the stored run URL',
+    G._promoteRunIdOf(RUN) === '38243649584' && G._promoteRunIdOf('https://github.com/ViritasOrg/peptidetracker-staging/actions') === null);
+  const b = G._promoteRetryBtn(RUN, '1.259');
+  check('retry: the button names the version it will push again',
+    /↻ Retry v1\.259/.test(b) && /retryPromote\('38243649584','1\.259'\)/.test(b), b);
+  check('retry: no run id, no button', G._promoteRetryBtn('', '1.259') === '');
+  check('retry: a hostile version string cannot break out of the onclick',
+    G._promoteRetryBtn(RUN, "1');alert(1);//").indexOf('alert') < 0);
+
+  const el = { innerHTML: '' };
+  const steps = [{ name: 'Wait for CI and merge prod PR', status: 'completed', conclusion: 'failure' }];
+  G.renderPromoteStatus({ status: 'completed', conclusion: 'failure', run_url: RUN, steps }, el);
+  check('retry: a failed run shows the button under the red line', el.innerHTML.indexOf('retryPromote(') >= 0, el.innerHTML);
+  G.renderPromoteStatus({ status: 'in_progress', run_url: RUN, steps }, el);
+  check('retry: …a running push does not', el.innerHTML.indexOf('retryPromote(') < 0);
+  G.renderPromoteStatus({ status: 'completed', conclusion: 'success', run_url: RUN, steps: [] }, el);
+  check('retry: …nor does a successful one', el.innerHTML.indexOf('retryPromote(') < 0);
+
+  const src = String(G.buildLastPushDropdown);
+  check('retry: the Last push row offers it for a failed record, outside the collapsed details',
+    /<\/details>[^]*_promoteRetryBtn\(rec\.runUrl,rec\.stagingVer\)/.test(src) && /rec\.conclusion==='failure'&&rec\.runUrl/.test(src));
+
+  const calls = []; const _f = G.fetch;
+  G.fetch = (u, o) => { calls.push([String(u), o && o.method]); return new Promise(() => {}); };
+  G.retryPromote('38243649584', '1.259');
+  G.fetch = _f;
+  const post = calls.find(c => c[1] === 'POST');
+  check('retry: it POSTs the retry endpoint for that run, in this app\'s repo',
+    post && /\/promote-to-prod\/retry\?repo=ViritasOrg%2Fpeptidetracker-staging&run_id=38243649584$/.test(post[0]), JSON.stringify(calls));
+  check('retry: …and never dispatches a fresh promotion', !calls.some(c => /\/promote-to-prod(\?|$)/.test(c[0]) && c[1] === 'POST'));
+
+  const poll = String(G.pollPromoteStatus);
+  check('retry: the poller follows the retried run by id',
+    /&run_id='\+_promoteRunId/.test(poll));
+  check('retry: …and waits for the NEW attempt, not the old one\'s failure',
+    /_promoteRunId&&\(data\.run_attempt\|\|1\)<_promoteMinAttempt/.test(poll));
+  check('retry: a fresh Push to Prod stops following the old run',
+    /_promoteRunId=null;_promoteMinAttempt=0;/.test(String(G.pushToProd)));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
