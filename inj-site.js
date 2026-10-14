@@ -204,17 +204,31 @@ function _injNeedleQuery(){
   var sex=String(g('user_sex')||'male').toLowerCase()==='female'?'female':'male';
   var w=parseFloat(String(g('user_weight')).replace(',','.'))||0;
   var h=parseFloat(String(g('user_height')).replace(',','.'))||0;
-  return '?sex='+sex+(w>0?'&weight_kg='+w:'')+(h>0?'&height_cm='+h:'');
+  var a=parseFloat(String(g('user_age')).replace(',','.'))||0;
+  // Henrik, 2026-10-14: "use BF if it is available not just bmi". The latest logged body
+  // fat — the same reading that picks the picture — goes to the backend, which then uses
+  // it instead of BMI (Deurenberg 1991) so muscle no longer reads as fat.
+  var bf=null; try{ if(typeof _latestBodyFat==='function') bf=_latestBodyFat(); }catch(e){}
+  return '?sex='+sex+(w>0?'&weight_kg='+w:'')+(h>0?'&height_cm='+h:'')+(a>0?'&age='+a:'')
+    +((typeof bf==='number'&&isFinite(bf)&&bf>0)?'&body_fat='+bf:'');
 }
 function _injNeedleHtml(d){
   if(!d||!d.muscles) return '';
   return '<div style="font-size:11px;font-weight:700;letter-spacing:0.4px;color:var(--muted2);margin-bottom:4px">'
-      +'NEEDLE FOR IM — ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT</div>'
+      // The heading names what the backend actually used: a logged body fat outranks BMI.
+      +'NEEDLE FOR IM — ESTIMATE FROM YOUR '
+      +((d.inputs&&d.inputs.body_fat)?'BODY FAT, SEX AND AGE':'SEX, WEIGHT AND HEIGHT')+'</div>'
     +INJ_NEEDLE_ROWS.map(function(r){
       var m=d.muscles[r[0]]||{};
-      return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0">'
+      // The backend now answers with a RANGE (long enough for the fat, short enough to
+      // stay in the muscle); its basis and note say how it got there, in its own words.
+      var sub=[m.basis,m.note].filter(function(x){return !!x;}).join(' · ');
+      return '<div style="padding:3px 0">'
+        +'<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px">'
         +'<span style="color:var(--muted2)">'+r[1]+'</span>'
-        +'<span style="color:'+(m.mm_min!=null?'var(--text)':'var(--muted2)')+';text-align:right">'+_esc(m.label||'—')+'</span></div>';
+        +'<span style="color:'+(m.mm_min!=null?'var(--text)':'var(--muted2)')+';text-align:right">'+_esc(m.label||'—')+'</span></div>'
+        +(sub&&m.mm_min!=null?'<div style="font-size:10px;color:var(--muted2);line-height:1.35;margin-top:1px">'+_esc(sub)+'</div>':'')
+        +'</div>';
     }).join('');
 }
 async function _injLoadNeedles(){
