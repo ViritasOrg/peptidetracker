@@ -7,6 +7,13 @@ const vm   = require('vm');
 const path = require('path');
 
 const htmlPath = process.argv[2] || '/tmp/pt_live.html';
+// The Settings section helpers the food-log cards use, taken from the app itself, for the
+// food-log tests that run that block in a sandbox of its own.
+const _FL_SEC = (() => {
+  const t = fs.readFileSync(htmlPath, 'utf8');
+  const pick = n => (t.match(new RegExp('^function ' + n + '\\(.*$', 'm')) || [''])[0];
+  return 'var _sOpen={};function setData(){}\n' + pick('sSecHdr') + '\n' + pick('sSecBody') + '\n' + pick('toggleSSec') + '\n';
+})();
 const html = fs.readFileSync(htmlPath, 'utf8');
 const rawScript = html.slice(html.indexOf('<script>') + 8, html.indexOf('</script>'));
 
@@ -5791,6 +5798,37 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
         !/for f in \.\.\/staging\/tab-\*\.js/.test(y));
       check('  …failing loudly when a listed module is absent',
         /index\.html loads \$f but staging has no such file/.test(y));
+
+      // An image deleted on staging must be deleted on prod too (2026-10-22). The copy
+      // loop only ever added, so inject-sites-v2.webp / inject-sites-back.webp, retired
+      // on staging on 2026-10-14, stayed on prod and failed prod CI on PRs #440/#441 at
+      // the test asserting they are gone. Run the step itself against a throwaway
+      // staging/ and prod/ pair rather than grepping for it.
+      const _rmA = y.indexOf('# >>> stale-asset removal'), _rmB = y.indexOf('# <<< stale-asset removal');
+      check('the promotion removes images staging deleted', _rmA > 0 && _rmB > _rmA);
+      if (_rmA > 0 && _rmB > _rmA) {
+        const cp = require('child_process'), os = require('os');
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-'));
+        const stg = path.join(tmp, 'staging'), prd = path.join(tmp, 'prod');
+        fs.mkdirSync(stg); fs.mkdirSync(prd);
+        ['keep.webp', 'icon.png'].forEach(f => fs.writeFileSync(path.join(stg, f), 'x'));
+        ['keep.webp', 'icon.png', 'old.webp', 'gone.jpg', 'index.html'].forEach(f => fs.writeFileSync(path.join(prd, f), 'x'));
+        fs.mkdirSync(path.join(prd, 'css')); fs.writeFileSync(path.join(prd, 'css', 'bg.png'), 'x');
+        const step = y.slice(_rmA, _rmB).split('\n').map(l => l.replace(/^ {10}/, '')).join('\n');
+        let out = '';
+        try {
+          cp.execSync('git init -q && git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t commit -qm init', {cwd: prd});
+          out = cp.execSync('bash -e', {cwd: prd, input: step}).toString();
+        } catch (e) { out = 'ERROR ' + e.message; }
+        const has = f => fs.existsSync(path.join(prd, f));
+        check('  …running it deletes exactly the images staging no longer has',
+          !has('old.webp') && !has('gone.jpg') && has('keep.webp') && has('icon.png'), out);
+        check('  …and leaves everything else alone: pages, sub-folders',
+          has('index.html') && has('css/bg.png'), out);
+        check('  …staged as a deletion, so the promotion commit carries it',
+          /D  gone\.jpg/.test(cp.execSync('git status --porcelain', {cwd: prd}).toString()));
+        fs.rmSync(tmp, {recursive: true, force: true});
+      }
       check('  …and refusing to promote a prod tree that cannot load',
         /prod would be missing modules index\.html loads/.test(y));
 
@@ -8991,9 +9029,11 @@ console.log('\n── Injection site (Today) ───────────�
       (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
-    check('source: both images ship with the app',
-      fs.existsSync(path.join(base, 'inject-sites-v2.webp')) &&
-      fs.existsSync(path.join(base, 'inject-sites-back.webp')));
+    // The single generic figures were replaced by the body-fat figures (INJ_BODIES) and
+    // deleted on Henrik's say-so, 2026-10-14. Nothing may ask for them again.
+    check('source: the superseded generic figures are gone',
+      !fs.existsSync(path.join(base, 'inject-sites-v2.webp')) &&
+      !fs.existsSync(path.join(base, 'inject-sites-back.webp')));
     check('source: switching view only changes display, never the record',
       /function injSiteView/.test(siteSrc) && !/injSiteView[\s\S]{0,400}_setInjectionSite/.test(siteSrc));
     check('source: the superseded six-site artwork is gone',
@@ -9002,7 +9042,7 @@ console.log('\n── Injection site (Today) ───────────�
       /_injSitesFor\(view\)\.map/.test(siteSrc) && !/left:22\.45%/.test(siteSrc));
     check('source: both views come from INJ_VIEWS rather than a hardcoded <img>',
       /INJ_VIEWS\.map/.test(siteSrc) &&
-      (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 2);
+      (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 0);
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
 
@@ -17344,159 +17384,24 @@ if(typeof G._piCat==='function'){
 
 // ── Compound-aware macros (Batch 2) ────────────────────────────────────────
 console.log('\n── Compound-aware macros ──────────────────────────────────');
-if(typeof G.calcMacros==='function'){
-  // Since 2026-09-09 a calorie target needs a profile to compute a BMR from; these
-  // phase/androgen checks are about the macro split, so they pass one and stay on topic.
-  var _mProf={bodyFatPct:18, trainKcal:0, includeTraining:true};
-  var _mOff=G.calcMacros(90,'recomp',false,_mProf);
-  var _mOn =G.calcMacros(90,'recomp',true,_mProf);
-  check('calcMacros protein = 2.2 g/kg in a non-cut phase', _mOff.protein===Math.round(90*2.2), String(_mOff.protein));
-  check('calcMacros fat lower on injected androgens', _mOn.fat < _mOff.fat, _mOn.fat+' vs '+_mOff.fat);
-  check('calcMacros carbs energy-balanced & non-negative',
-    _mOn.carbs>0 && _mOff.carbs>0 &&
-    Math.abs(_mOn.kcal-(_mOn.protein*4+_mOn.carbs*4+_mOn.fat*9))<=4,
-    _mOn.kcal+' vs '+(_mOn.protein*4+_mOn.carbs*4+_mOn.fat*9));
-  check('calcMacros cut < recomp kcal', G.calcMacros(90,'cut',true,_mProf).kcal < G.calcMacros(90,'recomp',true,_mProf).kcal);
-  check('calcMacros flags onAndrogens through', G.calcMacros(90,'recomp',true,_mProf).onAndrogens===true && _mOff.onAndrogens===false);
-  // Phase-aware protein: a cut raises protein (deficit preserves muscle — Helms 2014),
-  // and being on androgens does NOT raise it further (nitrogen retention is already better).
-  check('calcMacros cut protein = 2.5 g/kg (raised for the deficit)', G.calcMacros(90,'cut',false).protein===Math.round(90*2.5), String(G.calcMacros(90,'cut',false).protein));
-  check('calcMacros cut protein > recomp protein', G.calcMacros(90,'cut',false).protein > G.calcMacros(90,'recomp',false).protein);
-  check('calcMacros protein independent of androgens within a phase', G.calcMacros(90,'cut',true).protein===G.calcMacros(90,'cut',false).protein);
+{
+  // 2026-10-21: the model itself moved to claude-agent-backend (GET /macro-targets),
+  // where its checks now live (tests/test_macro_targets.py, incl. 2160 cases replayed
+  // from the JavaScript it replaced). What stays here is the display of served targets.
+  check('the macro model is no longer computed in this app',
+    typeof G.calcMacros==='undefined' && !/370\s*\+\s*21\.6\s*\*/.test(_macSrc) && !/\bbw\s*\*\s*31\b/.test(_macSrc) && !/kcalBase/.test(_macSrc));
+  var _SV={pal:1.4,pctCut:0.15,pctSurplus:0.05,kcalPerKgFat:7700,mealsPerDay:4};
+  var _dmA={"protein":225,"carbs":205,"fat":81,"kcal":2450,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":33.2,"tier":"suboptimal"},"deficitMode":"absolute","phaseOffset":-300,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
+  var _dmP={"protein":225,"carbs":177,"fat":81,"kcal":2337,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":31.7,"tier":"suboptimal"},"deficitMode":"percent","phaseOffset":-413,"rate":{"kgPerMonth":-1.633,"pctBwPerWeek":0.417,"tooFast":false},"missing":[],"constants":_SV};
+  var _dmM={"protein":225,"carbs":150,"fat":81,"kcal":2227,"onAndrogens":false,"bmr":1805,"bmrMethod":"mifflin","tdee":2527,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.3151,"ffm":0,"ea":null,"deficitMode":"absolute","phaseOffset":-300,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
+  var _dmNone={"protein":198,"carbs":null,"fat":81,"kcal":null,"bmr":null,"missing":["body fat %","or height and age"],"constants":_SV};
   if(typeof G._macrosFatNote==='function'){
     check('_macrosFatNote cut mentions the raised protein + Helms', /2\.5 g\/kg/.test(G._macrosFatNote(false,'cut')) && /Helms 2014/.test(G._macrosFatNote(false,'cut')));
     check('_macrosFatNote non-cut keeps 2.2 g/kg', /2\.2 g\/kg/.test(G._macrosFatNote(false,'recomp')));
-  }
-  // ── THE CALORIE TARGET ───────────────────────────────────────────────────
-  // It used to be `bodyweight × 31` — a constant that appeared in no source, here or
-  // in the backend docs that cite every other number on this screen. Against Bhasin
-  // 1996's standardised maintenance of 36 kcal/kg it ran ~14% low before the phase
-  // deficit was applied, and the deficit then landed entirely on carbohydrate, which
-  // is the residual. Replaced 2026-09-09 with a real energy model.
-  var _emKatch = {bodyFatPct:18, trainKcal:0, includeTraining:true};
-  var _emMiff  = {heightCm:180, age:45, sex:'male', trainKcal:0, includeTraining:true};
-
-  // 1. NOTHING IS INVENTED. Without the profile to compute a BMR there is no target.
-  var _emNone = G.calcMacros(90,'recomp',false,{});
-  check('no body-fat and no height/age → NO calorie target rather than a guess',
-    _emNone.kcal===null && _emNone.carbs===null && _emNone.bmr===null);
-  check('  …and it says what is missing', _emNone.missing.length>0, _emNone.missing.join(' '));
-  check('  …while protein and fat, which need only bodyweight, are still given',
-    _emNone.protein>0 && _emNone.fat>0);
-  check('the 31 kcal/kg constant is gone from the source',
-    !/\bbw\s*\*\s*31\b/.test(_macSrc) && !/kcalBase/.test(_macSrc));
-
-  // 2. Katch-McArdle when body fat is known — the lean-mass equation.
-  var _emK = G.calcMacros(90,'recomp',false,_emKatch);
-  var _ffm90 = 90*0.82;
-  check('body fat on file → Katch-McArdle (370 + 21.6 × FFM)',
-    _emK.bmrMethod==='katch' && _emK.bmr===Math.round(370+21.6*_ffm90), String(_emK.bmr));
-  // 3. Mifflin-St Jeor otherwise — and it is where AGE enters the calorie target.
-  var _emM = G.calcMacros(90,'recomp',false,_emMiff);
-  check('no body fat but height+age → Mifflin-St Jeor',
-    _emM.bmrMethod==='mifflin' && _emM.bmr===Math.round(10*90+6.25*180-5*45+5), String(_emM.bmr));
-  // Henrik, 2026-09-09: "age should be a part of this". In the calorie half it is
-  // literally a term in the equation — assert it moves the answer.
-  var _emOld = G.calcMacros(90,'recomp',false,{heightCm:180, age:70, sex:'male'});
-  check('  …so age lowers the target: 70 vs 45 differs by exactly 5 kcal/yr of BMR',
-    _emM.bmr - _emOld.bmr === 5*25, String(_emM.bmr-_emOld.bmr));
-  check('  …and female uses the −161 constant, not +5',
-    G.calcMacros(90,'recomp',false,{heightCm:180,age:45,sex:'female'}).bmr
-      === Math.round(10*90+6.25*180-5*45-161));
-
-  // 4. BMR → maintenance via PAL, then the phase offset.
-  check('maintenance = BMR × PAL 1.40 (+ training)',
-    _emK.tdee===Math.round(_emK.bmr*G.MACROS_PAL_BASE), _emK.tdee+' vs '+Math.round(_emK.bmr*1.40));
-  check('  …recomp adds 100, cut takes 300, reset sits at maintenance',
-    _emK.kcal===_emK.tdee+100 &&
-    G.calcMacros(90,'cut',false,_emKatch).kcal===Math.round(G.calcMacros(90,'cut',false,_emKatch).tdee-300) &&
-    G.calcMacros(90,'reset',false,_emKatch).kcal===G.calcMacros(90,'reset',false,_emKatch).tdee);
-
-  // 5. TRAINING IS COUNTED NOW, and the toggle is the only thing that changes it.
-  // Excluding it silently is what made the real deficit on a training day 300 + burn.
-  var _emT  = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:true});
-  var _emNT = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:false});
-  check('training energy is added to the target by default',
-    _emT.kcal - _emNT.kcal === 400, String(_emT.kcal-_emNT.kcal));
-  check('  …and excluding it deepens the real deficit by exactly the burn',
-    _emNT.kcal === _emT.kcal - _emT.trainKcal);
-  check('  …with the choice reported, not hidden',
-    _emT.includeTraining===true && _emNT.includeTraining===false && _emT.trainKcal===400);
-
-  // 6. PROTEIN AND AGE. The age effect is real but it is a FLOOR on the per-meal dose,
-  // not a multiplier on the daily total — see the note in tab-macros.js. Assert both
-  // halves, because getting this wrong in the other direction (scaling the daily target
-  // by Moore's 1.67×) would put a 45-year-old at 3.3 g/kg, above every published bound.
-  check('per-meal protein threshold matches Moore 2015 at both measured endpoints',
-    Math.abs(G._macrosPerMealProtein(22)-0.24)<1e-9 && Math.abs(G._macrosPerMealProtein(71)-0.40)<1e-9,
-    G._macrosPerMealProtein(22)+' / '+G._macrosPerMealProtein(71));
-  check('  …rises with age between them, and is flat outside',
-    G._macrosPerMealProtein(45)>G._macrosPerMealProtein(30) &&
-    G._macrosPerMealProtein(18)===G._macrosPerMealProtein(22) &&
-    G._macrosPerMealProtein(90)===G._macrosPerMealProtein(71));
-  check('age does NOT inflate the daily protein target — 2.5 g/kg already saturates every meal',
-    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).protein===Math.round(90*2.5) &&
-    G.calcMacros(90,'cut',false,{age:25,heightCm:180}).protein===Math.round(90*2.5));
-  check('  …the floor is reported so the UI can say where age actually applies',
-    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).proteinFloorBound===false &&
-    G.calcMacros(90,'cut',false,{age:70,heightCm:180}).perMealProteinPerKg>0.39);
-  if(typeof G._macrosFatNote==='function'){
-    var _fn=G._macrosFatNote(false,'cut',G.calcMacros(90,'cut',false,{age:45,heightCm:180}));
+    var _fn=G._macrosFatNote(false,'cut',_dmM);
     check('  …and the note tells the user the per-meal dose, citing Moore',
       /g\/kg<\/b> to maximally stimulate/.test(_fn) && /Moore 2015/.test(_fn));
   }
-
-  // 7. ENERGY AVAILABILITY — the check that says whether the deficit is survivable.
-  var _emEA = G.calcMacros(90,'cut',false,{bodyFatPct:18, trainKcal:400, includeTraining:true});
-  check('energy availability = (intake − training) ÷ FFM',
-    _emEA.ea && Math.abs(_emEA.ea.value-((_emEA.kcal-400)/_ffm90))<1e-9,
-    _emEA.ea?String(_emEA.ea.value):'null');
-  check('  …tiered on the published thresholds (≤30 low, <45 suboptimal, else adequate)',
-    G.macrosEnergyAvailability(2000,0,80).tier==='low' &&
-    G.macrosEnergyAvailability(3000,0,80).tier==='suboptimal' &&
-    G.macrosEnergyAvailability(4000,0,80).tier==='adequate');
-  check('  …and is not reported at all without a measured FFM, never estimated',
-    G.calcMacros(90,'cut',false,{heightCm:180,age:45}).ea===null);
-
-  // ── THE PHASE OFFSET: FIXED kcal OR % OF MAINTENANCE ─────────────────────
-  // Henrik, 2026-09-09: "Give user a choice between % or standard numbers. If you want
-  // to loose 1kg fat per month the absolute number is probably more correct and
-  // consistent." Absolute stays the default for exactly that reason — a constant gap
-  // is a constant RATE, which is the thing being aimed at.
-  var _dmAbs={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'absolute'};
-  var _dmPct={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'percent'};
-  var _dmA=G.calcMacros(90,'cut',false,_dmAbs), _dmP=G.calcMacros(90,'cut',false,_dmPct);
-  check('absolute mode is the default when none is asked for',
-    G.calcMacros(90,'cut',false,{bodyFatPct:18}).deficitMode==='absolute');
-  check('  …and takes a flat 300 off maintenance whatever the maintenance is',
-    _dmA.phaseOffset===-300 && G.calcMacros(70,'cut',false,_dmAbs).phaseOffset===-300);
-  check('percent mode takes 15% of maintenance instead',
-    _dmP.phaseOffset===-Math.round(_dmP.tdee*G.MACROS_PCT_CUT), _dmP.phaseOffset+' of '+_dmP.tdee);
-  check('  …so it scales with the person and absolute does not',
-    G.calcMacros(70,'cut',false,_dmPct).phaseOffset !== _dmP.phaseOffset);
-  check('  …surplus is the small one, and reset is neither',
-    G.calcMacros(90,'recomp',false,_dmPct).phaseOffset===Math.round(_dmP.tdee*G.MACROS_PCT_SURPLUS) &&
-    G.calcMacros(90,'reset',false,_dmPct).phaseOffset===0 &&
-    G.calcMacros(90,'reset',false,_dmAbs).phaseOffset===0);
-  check('  …recomp is still +100 in absolute mode',
-    G.calcMacros(90,'recomp',false,_dmAbs).phaseOffset===100);
-
-  // THE RATE IS THE POINT. A deficit means nothing until it is kg per month.
-  check('the offset is reported as an expected rate of fat change',
-    _dmA.rate && Math.abs(_dmA.rate.kgPerMonth-(-300/G.MACROS_KCAL_PER_KG_FAT*30.44))<1e-9,
-    _dmA.rate?_dmA.rate.kgPerMonth.toFixed(3):'null');
-  check('  …a fixed 300 kcal/day is ~1.19 kg/month, near the 1 kg/month it is aimed at',
-    Math.abs(Math.abs(_dmA.rate.kgPerMonth)-1.186)<0.01, Math.abs(_dmA.rate.kgPerMonth).toFixed(3));
-  check('  …and the SAME absolute offset gives the SAME rate at any bodyweight',
-    Math.abs(G.calcMacros(70,'cut',false,_dmAbs).rate.kgPerMonth-_dmA.rate.kgPerMonth)<1e-9);
-  check('  …which percent mode does not — that is the trade-off the choice is about',
-    Math.abs(G.calcMacros(70,'cut',false,_dmPct).rate.kgPerMonth-_dmP.rate.kgPerMonth)>0.05);
-  check('  …reset has no rate at all', G.calcMacros(90,'reset',false,_dmAbs).rate===null);
-  // Helms 2014: 0.5–1% bodyweight per week preserves lean mass; past that it does not.
-  check('a rate past 1% of bodyweight per week is flagged, not silently served',
-    G.macrosRate(-1200,60).tooFast===true && G.macrosRate(-300,90).tooFast===false,
-    G.macrosRate(-1200,60).pctBwPerWeek.toFixed(2)+'%/wk vs '+G.macrosRate(-300,90).pctBwPerWeek.toFixed(2)+'%/wk');
-
   if(typeof G._macrosEnergyCard==='function'){
     var _ecP=G._macrosEnergyCard(_dmP), _ecA=G._macrosEnergyCard(_dmA);
     check('the energy card offers both modes and marks the active one',
@@ -17505,6 +17410,10 @@ if(typeof G.calcMacros==='function'){
       /Expected rate/.test(_ecA) && /kg\/month/.test(_ecA));
     check('  …and labels the offset as fixed or as a percentage',
       /fixed/.test(_ecA) && /15%/.test(_ecP));
+    check('  …prints the PAL the backend used, not a copy of its own',
+      /PAL 1\.40/.test(_ecA) && /2750 kcal/.test(_ecA) && /2450 kcal/.test(_ecA));
+    check('  …and without a profile says what is missing instead of a number',
+      /body fat %/.test(G._macrosEnergyCard(_dmNone)) && /Nothing is guessed/.test(G._macrosEnergyCard(_dmNone)));
   }
 
   // Training burn card: driven by _macrosTrainKcal, and now says whether it counts.
@@ -17512,7 +17421,6 @@ if(typeof G.calcMacros==='function'){
     G._macrosTrainKcal=270;
     check('_macrosBurnCard shows the burn kcal and offers the include/exclude toggle',
       /270/.test(G._macrosBurnCard()) && /setMacrosIncludeTraining/.test(G._macrosBurnCard()));
-    G._macrosTrainKcal=0;
     G._macrosTrainKcal=0;
     check('_macrosBurnCard with no data prompts to log workouts, not zero-burn scare', /log your workouts/i.test(G._macrosBurnCard()));
   }
@@ -19188,6 +19096,71 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
     /_promoteRunId&&\(data\.run_attempt\|\|1\)<_promoteMinAttempt/.test(poll));
   check('retry: a fresh Push to Prod stops following the old run',
     /_promoteRunId=null;_promoteMinAttempt=0;/.test(String(G.pushToProd)));
+}
+
+// ── The app is titled with the person using it ──────────────────────────────
+// Henrik 2026-10-16: "Add a Name field fir each account added in the whitelist ui. Use
+// this for app title instead of mine. So I see Henriks Training/Protocol but others see
+// their name IF I have added it in white list ui."
+// The name comes from the whitelist via GET /user/features, which login already calls.
+// No name means the PLAIN title — never anyone else's name, which is the whole point.
+// Same contract as the workout app (ownerTitle / ownerTitleHtml / applyOwnerName).
+console.log('\n── The app is titled with the person using it ───────────────');
+{
+  const src = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'index.html'), 'utf8');
+  const noComments = src.replace(/\/\/[^\n]*/g, '');
+
+  check('no hardcoded owner name is left in the markup',
+    !/HENRIK\\?.S|Henrik.s Protocol/.test(noComments),
+    (noComments.match(/HENRIK\\?.S|Henrik.s Protocol/g) || []).join(', '));
+  check('the document title starts plain — and no longer carries a frozen version',
+    /<title>Protocol<\/title>/.test(src) && !/<title>[^<]*v\d/.test(src));
+  check('the sign-in logo and header start plain',
+    /class="signin-logo">PROTOCOL</.test(src) && /class="hdr-title">PROTOCOL</.test(src));
+  check('the onboarding welcome is built from the name, not a literal',
+    String(G._obHtml0 || '').includes("ownerTitleHtml(_ownerName,'PROTOCOL')"));
+
+  const HAVE = typeof G.ownerTitle === 'function' && typeof G.ownerTitleHtml === 'function';
+  check('ownerTitle / ownerTitleHtml exist', HAVE);
+  if (HAVE) {
+    check('a name gives a possessive title',
+      G.ownerTitle('Henrik', 'Protocol') === 'Henrik’s Protocol');
+    check('…in caps when the noun is in caps, so the logo reads right',
+      G.ownerTitle('Henrik', 'PROTOCOL') === 'HENRIK’S PROTOCOL');
+    check('…and a name already ending in s takes the bare apostrophe',
+      G.ownerTitle('Thomas', 'Protocol') === 'Thomas’ Protocol');
+    check('NO name gives the plain title, never somebody else’s',
+      G.ownerTitle('', 'PROTOCOL') === 'PROTOCOL' &&
+      G.ownerTitle(null, 'Protocol') === 'Protocol' &&
+      G.ownerTitle('   ', 'PROTOCOL') === 'PROTOCOL');
+    check('whitespace around a name does not reach the title',
+      G.ownerTitle('  Suvi  ', 'PROTOCOL') === 'SUVI’S PROTOCOL');
+    check('the two-line welcome breaks after the name',
+      G.ownerTitleHtml('Henrik', 'PROTOCOL') === 'HENRIK’S<br>PROTOCOL' &&
+      G.ownerTitleHtml('', 'PROTOCOL') === 'PROTOCOL');
+    check('a name is escaped before it is written as markup',
+      !/<img/.test(G.ownerTitleHtml('<img src=x onerror=1>', 'PROTOCOL')),
+      G.ownerTitleHtml('<img src=x onerror=1>', 'PROTOCOL'));
+  }
+
+  const sync = String(G.syncFeaturesFromAgent || '');
+  check('the name is read from /user/features, with no extra request',
+    sync.includes('/user/features') && sync.includes("applyOwnerName(d.name||'')"));
+  check('…and cached against the account it came from',
+    sync.includes("setData('pt-owner-name',{id:d.user_id||_tokenEmail(),name:d.name||''})"));
+  check('the cache is only trusted when the signed-in account matches',
+    String(G._cachedOwnerName || '').includes('_tokenEmail()') &&
+    String(G._cachedOwnerName || '').includes('c.id'));
+  check('signing out drops the cached title with the token',
+    String(G.logout || '').includes("localStorage.removeItem('pt-owner-name')") &&
+    String(G.logout || '').includes("applyOwnerName('')"));
+  check('applyOwnerName writes all three visible places',
+    (() => { const f = String(G.applyOwnerName || '');
+             return f.includes('document.title') && f.includes('.signin-logo') &&
+                    f.includes('.hdr-title'); })());
+  check('the two apps agree on the helper names, so they stay in step',
+    typeof G.applyOwnerName === 'function' && typeof G._cachedOwnerName === 'function' &&
+    typeof G._possessive === 'function');
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -20897,47 +20870,76 @@ console.log('\n── zoom strip: offered levels are styled levels ──');
 // surfaces come to disagree about one quantity. macrosForUser is now the only path
 // that reads the profile, and both call it.
 console.log('\n── Macros: the tab and the wizard read one model ───────────');
-if(typeof G.macrosForUser==='function'){
-  var _mfSave={w:G.localStorage.getItem('user_weight'), h:G.localStorage.getItem('user_height'),
-               a:G.localStorage.getItem('user_age'), s:G.localStorage.getItem('user_sex'),
-               t:G.localStorage.getItem('macros-include-training'), tk:G._macrosTrainKcal};
-  G.localStorage.setItem('user_weight','90');
-  G.localStorage.setItem('user_height','180');
-  G.localStorage.setItem('user_age','45');
-  G.localStorage.setItem('user_sex','male');
-  G.localStorage.removeItem('macros-include-training');
-  G._macrosTrainKcal=400;
+{
+  // Since 2026-10-21 the numbers come from GET /macro-targets. Run tab-macros.js on its
+  // own with a recorded fetch, so these async checks cannot collide with the suite's.
+  const _mtDir=require('path').dirname(require('path').resolve(htmlPath));
+  const _mtSrc=require('fs').readFileSync(require('path').join(_mtDir,'tab-macros.js'),'utf8');
+  const _ls={user_weight:'90',user_height:'180',user_age:'45',user_sex:'male'};
+  const _calls=[]; let _fail=false; const _els={};
+  const _served={kcal:2627,protein:225,carbs:200,fat:54,tdee:2927,bmr:1805,bmrMethod:'mifflin',trainKcal:400,includeTraining:true,deficitMode:'absolute',phaseOffset:-300,rate:{kgPerMonth:-1.186,pctBwPerWeek:0.3,tooFast:false},ea:null,missing:[],perMealProteinPerKg:0.31,proteinFloorBound:false,constants:{pal:1.4,pctCut:0.15,pctSurplus:0.05}};
+  const M=vm.createContext({console,Promise,JSON,Math,String,Number,parseInt,parseFloat,isFinite,encodeURIComponent,
+    AGENT_URL:'https://agent',authHeaders:()=>({}),_currentTab:'macros',
+    localStorage:{getItem:k=>(k in _ls?_ls[k]:null),setItem:(k,v)=>{_ls[k]=String(v);},removeItem:k=>{delete _ls[k];}},
+    getData:(k,d)=>{try{return k in _ls?JSON.parse(_ls[k]):d;}catch(e){return d;}},setData:(k,v)=>{_ls[k]=JSON.stringify(v);},
+    pushPepSettingsToAgent:()=>{},parseDec:v=>parseFloat(v),
+    document:{getElementById:id=>{if(!_els[id]){let h='';_els[id]={};Object.defineProperty(_els[id],'innerHTML',{get:()=>h,set:v=>{h=v;}});}return _els[id];}},
+    fetch:async(url)=>{_calls.push(url);if(/training-energy/.test(url))return{ok:true,json:async()=>({avg_per_calendar_day:400})};
+      if(_fail)return{ok:false,json:async()=>({})};return{ok:true,json:async()=>Object.assign({},_served)};},
+  });
+  vm.runInContext(_mtSrc,M);
+  (async()=>{
+    M._macrosTrainKcal=400;
+    const _first=M.macrosForUser('cut',true,()=>{});
+    check('macros: the targets are fetched, never computed locally', _first===null && _calls.length===1 && /\/macro-targets\?/.test(_calls[0]));
+    const q=_calls[0];
+    check('  …from the stored profile and the training burn',
+      /bw=90/.test(q)&&/height_cm=180/.test(q)&&/age=45/.test(q)&&/sex=male/.test(q)&&/phase=cut/.test(q)&&/on_androgens=true/.test(q)&&/train_kcal=400/.test(q)&&/include_training=true/.test(q)&&/deficit_mode=absolute/.test(q));
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('  …and once served, the same inputs read from the cache without a second request',
+      M.macrosForUser('cut',true)&&M.macrosForUser('cut',true).kcal===2627&&_calls.length===1);
+    M.localStorage.setItem('macros-include-training','false');
+    M.macrosForUser('cut',true);
+    check('  …the training toggle is part of the request, so it changes the answer',
+      _calls.length===2&&/include_training=false/.test(_calls[1]));
+    M.localStorage.removeItem('macros-include-training');
+    // The Macros tab: a placeholder while waiting, the numbers once served.
+    _calls.length=0; M._macrosServed={}; M._macrosTrainKcal=0;
+    M.renderMacros(90,false);
+    check('macros tab: while the targets load it says so and shows no number',
+      /Calculating your targets/.test(_els['macros-body'].innerHTML) && M._macrosTargets===null);
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('  …then draws the served targets', /2627/.test(_els['macros-body'].innerHTML) && /DAILY TARGETS/.test(_els['macros-body'].innerHTML));
+    check('  …and publishes them for the food log', M._macrosTargets&&M._macrosTargets.kcal===2627&&M._macrosTargets.protein===225);
+    M.renderMacros(0,false);
+    check('  …with no body weight there are no targets to show against', M._macrosTargets===null);
+    _fail=true; M._macrosServed={};
+    M.renderMacros(90,false);
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('macros tab: when the backend cannot be reached it says so and offers a retry, inventing nothing',
+      /Could not load your targets/.test(_els['macros-body'].innerHTML) && /loadMacros\(\)/.test(_els['macros-body'].innerHTML) && !/2627/.test(_els['macros-body'].innerHTML));
+    const _nFail=_calls.length;
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('  …and does not keep retrying on its own', _calls.length===_nFail);
+    _fail=false; M._macrosFailed={}; M.loadMacros();
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('  …Try again clears the failure and loads the targets', /2627/.test(_els['macros-body'].innerHTML) && /_macrosFailed=\{\};loadMacros\(\)/.test(M._macrosPendingHtml(true,'loadMacros()')));
+    if(failed>0) process.exitCode=1;
+  })().catch(e=>{check('macros: async checks ran',false,String(e&&e.stack||e));process.exitCode=1;});
 
-  var _mf=G.macrosForUser('cut',true);
-  check('macrosForUser reads the stored profile', _mf.kcal>0 && _mf.protein===Math.round(90*2.5));
-  check('  …and counts training by default', _mf.includeTraining===true && _mf.trainKcal===400);
-  G.localStorage.setItem('macros-include-training','false');
-  var _mfOff=G.macrosForUser('cut',true);
-  check('  …the toggle is what removes it, and removes exactly it',
-    _mfOff.includeTraining===false && _mf.kcal-_mfOff.kcal===400, String(_mf.kcal-_mfOff.kcal));
-  G.localStorage.removeItem('macros-include-training');
-
-  var _stkSrc=require('fs').readFileSync(
-    require('path').join(require('path').dirname(require('path').resolve(htmlPath)),'tab-stack.js'),'utf8');
+  var _stkSrc=require('fs').readFileSync(require('path').join(_mtDir,'tab-stack.js'),'utf8');
   var _wizStep=_stkSrc.slice(_stkSrc.indexOf('function wizStepNutrition'),
                              _stkSrc.indexOf('function wizSetMacroPhase'));
-  check('the wizard step resolves its numbers through macrosForUser',
-    /macrosForUser\(_macrosPhase,onAndrogens\)/.test(_wizStep));
+  check('the wizard step resolves its numbers through macrosForUser, and re-renders when they arrive',
+    /macrosForUser\(_macrosPhase,onAndrogens,function\(\)\{[^}]*wizRender\(\)/.test(_wizStep));
+  check('  …shows the pending state rather than a local calculation while waiting',
+    /_macrosPendingHtml\(/.test(_wizStep) && !/calcMacros/.test(_wizStep.replace(/\/\/.*$/gm,'')));
   check('  …and reports the same maintenance and EA the Macros tab shows',
     /m\.tdee/.test(_wizStep) && /m\.ea/.test(_wizStep));
   check('  …and says what is missing rather than showing a number it cannot compute',
     /m\.kcal==null/.test(_wizStep) && /m\.missing/.test(_wizStep));
-  // The old copy asserted the burn was deliberately excluded. It is included now, and
-  // the wizard must not still be telling the user the opposite.
   check('  …no longer claims the training burn is not added',
     !/not<\/b> added to the target/.test(_wizStep));
-
-  G.localStorage.setItem('user_weight',_mfSave.w==null?'':_mfSave.w);
-  if(_mfSave.h==null) G.localStorage.removeItem('user_height'); else G.localStorage.setItem('user_height',_mfSave.h);
-  if(_mfSave.a==null) G.localStorage.removeItem('user_age'); else G.localStorage.setItem('user_age',_mfSave.a);
-  if(_mfSave.s==null) G.localStorage.removeItem('user_sex'); else G.localStorage.setItem('user_sex',_mfSave.s);
-  if(_mfSave.t==null) G.localStorage.removeItem('macros-include-training'); else G.localStorage.setItem('macros-include-training',_mfSave.t);
-  G._macrosTrainKcal=_mfSave.tk;
 }
 
 // ── ONE DAY'S ROWS, TWO SCREENS, ONE ANSWER ─────────────────────────────────
@@ -21533,4 +21535,509 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcAttrSeries === 'functi
 
   G.document.getElementById = _atSaveGE;
   G._tcp = _atSaveTp; G._tcBwEntries = _atSaveBw; G._tcGhStack = _atSaveGh;
+}
+
+// ── Food log (Macros): the shared block, 2026-10-21 ─────────────────────────
+// Same block as the other app; both talk to /food-log on the backend.
+console.log('\n── Food log ───────────────────────────────────────────────');
+{
+  const _flSrc = fs.readFileSync(htmlPath, 'utf8');
+  const _flBlock = _flSrc.slice(_flSrc.indexOf('// ── Food log (Macros)'), _flSrc.indexOf('// ── end food log ──'));
+  check('food log: block present', _flBlock.length > 1000);
+  check('food log: nothing kept in localStorage (backend is the record)',
+    !/localStorage\.|setData\(/.test(_flBlock));
+  check('food log: the eating day before 04:00 is the day before',
+    G._flDay(new Date(2026, 9, 22, 2, 30)) === '2026-10-21' && G._flDay(new Date(2026, 9, 22, 4, 0)) === '2026-10-22');
+  check('food log: totals add every row and round',
+    JSON.stringify(G._flTotals([{kcal: 280, protein: 46, carbs: 0, fat: 10}, {kcal: 264.2, protein: 5.8, carbs: 61, fat: 0.3}])) ===
+    JSON.stringify({kcal: 544, protein: 52, carbs: 61, fat: 10}));
+  const _flGuide = G._flGuideHtml();
+  check('food log: without a key the screen explains how to get one, in Chrome',
+    /id="fl-key-prov"/.test(_flGuide) && /aistudio\.google\.com/.test(_flGuide) && /Chrome/.test(_flGuide) && /flSaveKey\(\)/.test(_flGuide));
+  check('food log: the guide offers no way to log food', !/flSubmit\(/.test(_flGuide));
+  G._flKey = {set: true, last4: 'WXYZ'};
+  G._flRows = [{id: 'a', food: 'Steak <b>', amount: '202 g', kcal: 280, protein: 46, carbs: 0, fat: 10}];
+  G._flErr = ''; G._flPending = null; G._flBusy = false;
+  G._flListOpen = true;  // these checks read the list's rows
+  let _flMain = G._flMainHtml();
+  check('food log: with a key: text box, Log, Photo and today\'s total',
+    /id="fl-text"/.test(_flMain) && /flSubmit\(\)/.test(_flMain) && /fl-photo/.test(_flMain) && /280 kcal/.test(_flMain) && /P 46 g/.test(_flMain));
+  check('food log: the Macros page has no key line, only a button to the key settings',
+    !/ending …WXYZ/.test(_flMain) && !/flRemoveKey\(\)/.test(_flMain) && /API key settings/.test(_flMain) && /flOpenKeySettings\(\)/.test(_flMain));
+  G._flKeyChanging = false;
+  check('food log: the Settings card shows the key only by its last 4 characters, with Change and Remove',
+    /ending …WXYZ/.test(G._flKeyCardHtml()) && /flStartChange\(\)/.test(G._flKeyCardHtml()) && /flRemoveKey\(\)/.test(G._flKeyCardHtml()));
+  check('food log: food names are escaped', _flMain.indexOf('Steak <b>') < 0 && _flMain.indexOf('Steak &lt;b&gt;') >= 0);
+  G._flErr = 'Anthropic error 500. Try again.'; G._flPending = {text: '2 eggs', image_b64: ''};
+  _flMain = G._flMainHtml();
+  check('food log: a failure says nothing was saved, keeps the input and offers one-tap retry',
+    /Nothing was saved/.test(_flMain) && /flRetry\(\)/.test(_flMain) && />2 eggs<\/textarea>/.test(_flMain));
+  G._flErr = ''; G._flPending = null;
+  const _flEdit = G._flEditHtml([{id: 'r1', food: 'Steak', kcal: 280, protein: 46, carbs: 0, fat: 10}], '2026-10-21');
+  check('food edit: each row can be saved and deleted', /flEditSave\('r1'\)/.test(_flEdit) && /flEditDelete\('r1'\)/.test(_flEdit));
+  check('food edit: an empty day says where food is logged', /Macros tab/.test(G._flEditHtml([], '2026-10-21')));
+  check('food log: deletes go through confirmGlobalDelete',
+    /function flEditDelete[\s\S]*?confirmGlobalDelete\(/.test(_flBlock) && /function flRemoveKey[\s\S]*?confirmGlobalDelete\(/.test(_flBlock) && !/[^.]confirm\('/.test(_flBlock));
+
+  // Today's intake against the Macros tab's targets (2026-10-21).
+  const _flSaveT = G._macrosTargets;
+  G._flKey = {set: true, last4: 'WXYZ'}; G._flErr = ''; G._flPending = null; G._flBusy = false;
+  G._flRows = [{id: 'a', food: 'Steak', kcal: 280, protein: 46, carbs: 0, fat: 10}];
+  G._macrosTargets = {kcal: 2400, protein: 180};
+  let _flTg = G._flMainHtml();
+  check('food log: with targets, shows kcal and protein against them with what is left',
+    /Calories 280 of 2400 kcal/.test(_flTg) && /2120 kcal left/.test(_flTg) && /Protein 46 of 180 g/.test(_flTg) && /134 g left/.test(_flTg));
+  G._flRows = [{id: 'a', food: 'Feast', kcal: 2600, protein: 200, carbs: 0, fat: 10}];
+  _flTg = G._flMainHtml();
+  check('food log: past the target it says how far over, and the bar stops at full',
+    /200 kcal over/.test(_flTg) && /20 g over/.test(_flTg) && !/width:10[1-9]%/.test(_flTg));
+  G._macrosTargets = {kcal: null, protein: 180};
+  _flTg = G._flMainHtml();
+  check('food log: a target the Macros tab cannot compute is left out, not shown as 0',
+    !/Calories \d+ of/.test(_flTg) && /Protein 200 of 180 g/.test(_flTg));
+  G._macrosTargets = null;
+  check('food log: without targets only the totals show', !/ of \d+ /.test(G._flMainHtml()));
+  G._macrosTargets = _flSaveT; G._flRows = [];
+
+  // Behaviour: the auto-save flow, in its own sandbox holding only this block, so
+  // its recorded fetch cannot collide with the suite's other async tests.
+  (async () => {
+    const calls = [];
+    let estimateOk = true;
+    const els = {};
+    const F = vm.createContext({
+      AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true,
+      alert: () => {}, Promise, JSON, Date, Math, String, Number, encodeURIComponent, console,
+      document: {getElementById: (id) => {
+        if (!els[id]) { let h = ''; els[id] = {value: id === 'fl-text' ? '2 eggs' : '', files: null, click() {}}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); }
+        return els[id];
+      }},
+      fetch: async (url, opt) => {
+        const m = (opt && opt.method) || 'GET';
+        calls.push({url, m, body: opt && opt.body ? JSON.parse(opt.body) : null});
+        if (/\/food-log\/key$/.test(url)) return {ok: true, status: 200, json: async () => ({set: true, last4: 'WXYZ'})};
+        if (/\/food-log\/estimate$/.test(url)) return estimateOk
+          ? {ok: true, status: 200, json: async () => ({ok: true, rows: [{id: 'n1', food: 'Egg', kcal: 140, protein: 12, carbs: 1, fat: 10}]})}
+          : {ok: false, status: 502, json: async () => ({detail: 'Anthropic error 500. Try again.'})};
+        if (/\/food-log\?date=/.test(url)) return {ok: true, status: 200, json: async () => (estimateOk ? [{id: 'n1', food: 'Egg', kcal: 140, protein: 12, carbs: 1, fat: 10}] : [])};
+        return {ok: true, status: 200, json: async () => ({})};
+      },
+    });
+    vm.runInContext(_FL_SEC + _flBlock, F);
+    await F.buildFoodLog();
+    check('food log: opening the tab reads the key, then today\'s rows',
+      calls[0] && /\/food-log\/key$/.test(calls[0].url) && calls[1] && /\/food-log\?date=\d{4}-\d\d-\d\d$/.test(calls[1].url));
+    check('food log: with a key the screen shows today\'s total', /140 kcal/.test(els['food-log-body'].innerHTML));
+    calls.length = 0;
+    await F._flSend({text: '2 eggs', image_b64: ''});
+    const est = calls.find(c => /estimate$/.test(c.url));
+    check('food log: Log posts the text once, with the eating day and time, and no confirm step',
+      calls.filter(c => /estimate$/.test(c.url)).length === 1 && est.m === 'POST' && est.body.text === '2 eggs' &&
+      /^\d{4}-\d\d-\d\d$/.test(est.body.date) && /^\d\d:\d\d$/.test(est.body.time) && !est.body.image_b64);
+    check('food log: after a save the input is cleared for the next entry', F._flPending === null);
+    estimateOk = false; calls.length = 0;
+    await F._flSend({text: '2 eggs', image_b64: 'aGk='});
+    const est2 = calls.find(c => /estimate$/.test(c.url));
+    check('food log: a photo is sent as a JPEG', est2 && est2.body.image_b64 === 'aGk=' && est2.body.media_type === 'image/jpeg');
+    check('food log: a failed estimate shows the server\'s reason and keeps the input for retry',
+      /Anthropic error 500/.test(els['food-log-body'].innerHTML) && F._flPending && F._flPending.text === '2 eggs' && /flRetry\(\)/.test(els['food-log-body'].innerHTML));
+    calls.length = 0;
+    F.confirmGlobalDelete = () => false;
+    await F.flEditDelete('n1');
+    check('food edit: a cancelled delete sends nothing', calls.length === 0);
+    F.confirmGlobalDelete = () => true;
+    await F.flEditDelete('n1');
+    check('food edit: a confirmed delete calls DELETE /food-log/<id>', calls.some(c => c.m === 'DELETE' && /\/food-log\/n1$/.test(c.url)));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food log: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: a photo is attached, then Log sends it with the typed amount (2026-10-21) ──
+// Henrik: a photo of a 500 g tub of cottage cheese was logged as the whole tub, with no way
+// to say he ate 115 g. Picking a photo must not send anything on its own.
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  const calls = [], els = {};
+  const P = vm.createContext({console, Promise, JSON, Math, String, Number, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { calls.push({url, body: opt && opt.body ? JSON.parse(opt.body) : null});
+      if (/estimate$/.test(url)) return {ok: true, status: 200, json: async () => ({ok: true, rows: [{id: 'c1', food: 'Cottage cheese', amount: '115 g', kcal: 83}]})};
+      if (/\?date=/.test(url)) return {ok: true, status: 200, json: async () => [{id: 'c1', food: 'Cottage cheese', amount: '115 g', kcal: 83}]};
+      return {ok: true, status: 200, json: async () => ({})}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, P);
+  P._flShrink = async () => 'UEhPVE8=';
+  P._flKey = {set: true, last4: 'WXYZ'};
+  (async () => {
+    P.document.getElementById('fl-text').value = '';
+    await P.flPhotoPicked({files: [{}], value: 'x'});
+    let h = els['food-log-body'].innerHTML;
+    check('food log: picking a photo sends nothing on its own', calls.length === 0);
+    check('  …it shows the photo as attached, with Remove, and asks how much was eaten',
+      /Photo attached/.test(h) && /flClearPhoto\(\)/.test(h) && /How much of it did you eat/.test(h) && /data:image\/jpeg;base64,UEhPVE8=/.test(h));
+    P.document.getElementById('fl-text').value = '115 g';
+    await P.flSubmit();
+    const est = calls.find(c => /estimate$/.test(c.url));
+    check('  …and Log sends the photo together with the typed amount, once',
+      calls.filter(c => /estimate$/.test(c.url)).length === 1 && est.body.text === '115 g' && est.body.image_b64 === 'UEhPVE8=' && est.body.media_type === 'image/jpeg');
+    h = els['food-log-body'].innerHTML;
+    check('  …after it is saved, the photo is cleared for the next entry', P._flPhoto === '' && !/Photo attached/.test(h));
+    await P.flPhotoPicked({files: [{}], value: 'x'});
+    P.document.getElementById('fl-text').value = 'half of it';
+    P.flClearPhoto();
+    check('  …Remove drops the photo but keeps what was typed',
+      P._flPhoto === '' && />half of it<\/textarea>/.test(els['food-log-body'].innerHTML));
+    calls.length = 0;
+    P.document.getElementById('fl-text').value = '   ';
+    await P.flSubmit();
+    check('  …Log with no text and no photo sends nothing', calls.length === 0);
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food log photo: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: the API key lives in Settings, with a one-step Change (2026-10-22) ──
+// Henrik, on how to remove and update the key: "yes, and move this to Settings but provide
+// the button as well." Change swaps the key with one PUT: there is no moment without a key.
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  check('food key: Settings carries the key card', /<div id="fl-key-card"[^>]*><\/div>/.test(_src));
+  check('  …and opening Settings loads it', /'settings'\)\{loadSettings\(\);buildFlKeyCard\(\);\}/.test(_src));
+  const calls = [], els = {};
+  const K = vm.createContext({console, Promise, JSON, Math, String, Number, parseFloat, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; calls.push({url, method: m, body: opt && opt.body ? JSON.parse(opt.body) : null});
+      if (/\/food-log\/key$/.test(url) && m === 'PUT') { const k = JSON.parse(opt.body).api_key;
+        if (k === 'bad') return {ok: false, status: 400, json: async () => ({detail: 'That key was refused.'})};
+        return {ok: true, status: 200, json: async () => ({set: true, last4: k.slice(-4), provider: /^AIza/.test(k) ? 'gemini' : 'anthropic'})}; }
+      if (/\/food-log\/key$/.test(url) && m === 'DELETE') return {ok: true, status: 200, json: async () => ({set: false})};
+      if (/\/food-log\/key$/.test(url)) return {ok: true, status: 200, json: async () => ({set: true, last4: 'WXYZ', provider: 'anthropic'})};
+      return {ok: true, status: 200, json: async () => ([])}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, K);
+  (async () => {
+    await K.buildFlKeyCard();
+    let h = els['fl-key-card'].innerHTML;
+    check('food key: the card shows the stored key with Change and Remove', /Anthropic key ending …WXYZ/.test(h) && /flStartChange\(\)/.test(h) && /flRemoveKey\(\)/.test(h));
+    K.flStartChange();
+    h = els['fl-key-card'].innerHTML;
+    check('  …Change asks for the new key and says which one it replaces',
+      /id="fl-key-new"/.test(h) && /replaces the Anthropic key ending …WXYZ/.test(h) && /flSaveKey\('fl-key-new'\)/.test(h) && /flCancelChange\(\)/.test(h));
+    check('  …and explains how to get a new key, the picker set to the current provider (2026-10-22)',
+      /<option value="anthropic" selected>/.test(h) && /https:\/\/console\.anthropic\.com/.test(h) && /in Chrome/.test(h) && /placeholder="sk-ant-…"/.test(h));
+    K.flPickProvider('gemini');
+    h = els['fl-key-card'].innerHTML;
+    check('  …and picking another provider shows its steps instead', /https:\/\/aistudio\.google\.com\/apikey/.test(h) && !/console\.anthropic\.com/.test(h) && /id="fl-key-new"/.test(h));
+    K.flCancelChange();
+    check('  …Cancel goes back without sending anything', !/id="fl-key-new"/.test(els['fl-key-card'].innerHTML) && calls.filter(c => c.method !== 'GET').length === 0);
+    K.flStartChange();
+    K.document.getElementById('fl-key-new').value = 'bad';
+    await K.flSaveKey('fl-key-new');
+    h = els['fl-key-card'].innerHTML;
+    check('  …a refused key says why and keeps the old one', /That key was refused/.test(h) && /id="fl-key-new"/.test(h) && K._flKey.last4 === 'WXYZ');
+    calls.length = 0;
+    K.document.getElementById('fl-key-new').value = 'AIzaNEWKEYGEMI';
+    await K.flSaveKey('fl-key-new');
+    h = els['fl-key-card'].innerHTML;
+    check('  …saving swaps it with one PUT and no DELETE',
+      calls.filter(c => c.method === 'PUT' && c.body.api_key === 'AIzaNEWKEYGEMI').length === 1 && !calls.some(c => c.method === 'DELETE'));
+    check('  …and the card then shows the new key', /Gemini key ending …GEMI/.test(h) && !/id="fl-key-new"/.test(h));
+    await K.flRemoveKey();
+    h = els['fl-key-card'].innerHTML;
+    check('  …Remove leaves the card offering to add a key, with how to get one',
+      /No API key yet/.test(h) && /flSaveKey\('fl-key-new'\)/.test(h) && /https:\/\/aistudio\.google\.com\/apikey/.test(h));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food key: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: OpenAI, xAI and Azure OpenAI keys (2026-10-22) ──
+// Henrik: "lets add OpenAI, Grok/xAI Key support as well as Copilot/Microsoft".
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  const calls = [], els = {};
+  const V = vm.createContext({console, Promise, JSON, Math, String, Number, parseFloat, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; calls.push({url, method: m, body: opt && opt.body ? JSON.parse(opt.body) : null});
+      if (/\/food-log\/key$/.test(url) && m === 'PUT') { const b = JSON.parse(opt.body); return {ok: true, status: 200, json: async () => ({set: true, last4: b.api_key.slice(-4), provider: b.provider})}; }
+      if (/\/food-log\/key$/.test(url)) return {ok: true, status: 200, json: async () => ({set: false, last4: '', provider: ''})};
+      return {ok: true, status: 200, json: async () => ([])}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, V);
+  const steps = (id) => { V.flPickProvider(id); return V._flKeyHowTo(); };
+  let h = steps('openai');
+  check('food key: OpenAI steps, in Chrome, with its key prefix', /https:\/\/platform\.openai\.com/.test(h) && /in Chrome/.test(h) && /<code>sk-<\/code>/.test(h) && /<option value="openai" selected>/.test(h));
+  h = steps('xai');
+  check('  …xAI steps, in Chrome', /https:\/\/console\.x\.ai/.test(h) && /in Chrome/.test(h) && /API Keys/.test(h));
+  h = steps('azure');
+  check('  …Azure steps say Copilot has no key and ask for endpoint and deployment',
+    /Copilot has no API key/.test(h) && /https:\/\/portal\.azure\.com/.test(h) && /Keys and Endpoint/.test(h) &&
+    /id="fl-key-endpoint"/.test(h) && /id="fl-key-deployment"/.test(h));
+  check('  …only Azure asks for an endpoint', !/fl-key-endpoint/.test(steps('openai')) && !/fl-key-endpoint/.test(steps('gemini')));
+  check('  …an unknown provider id falls back to a real one', (V.flPickProvider('copilot'), V._flProv) === 'anthropic');
+  check('  …the Settings card names each provider', ['openai', 'xai', 'azure'].every(p => {
+    V._flKey = {set: true, last4: 'ABCD', provider: p}; V._flKeyChanging = false;
+    return new RegExp(({openai: 'OpenAI', xai: 'xAI', azure: 'Azure OpenAI'})[p] + ' key ending …ABCD').test(V._flKeyCardHtml()); }));
+  (async () => {
+    V._flKey = {set: false, last4: '', provider: ''};
+    V.flPickProvider('xai');
+    V.document.getElementById('fl-key-in').value = 'xai-' + 'k'.repeat(30) + 'GROK';
+    await V.flSaveKey();
+    const put = calls.filter(c => c.method === 'PUT').pop();
+    check('food key: Save sends the picked provider with the key', put.body.provider === 'xai' && put.body.api_key.endsWith('GROK') && !('endpoint' in put.body));
+    V.flPickProvider('azure');
+    V.document.getElementById('fl-key-in').value = 'a'.repeat(32);
+    V.document.getElementById('fl-key-endpoint').value = ' https://my-food.openai.azure.com/ ';
+    V.document.getElementById('fl-key-deployment').value = 'gpt-5-mini';
+    await V.flSaveKey();
+    const az = calls.filter(c => c.method === 'PUT').pop();
+    check('  …and for Azure, the endpoint and deployment name too',
+      az.body.provider === 'azure' && az.body.endpoint === 'https://my-food.openai.azure.com/' && az.body.deployment === 'gpt-5-mini');
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food key providers: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: import an old log from CSV or Excel (2026-10-22) ──
+// Henrik: "also need an "import" feature Button in Macros tab but actual feature in
+// Settings, so one can import a excel or csv file with an old log".
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  check('food import: Settings carries the import card', /<div id="fl-import-card"[^>]*><\/div>/.test(_src));
+  const calls = [], els = {};
+  let reply = {ok: true, status: 200, body: {ok: true, added: 3, duplicates: 2, skipped: 1, problems: [{row: 7, reason: 'no kcal'}]}};
+  const I = vm.createContext({console, Promise, JSON, Math, String, Number, parseFloat, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; calls.push({url, method: m, body: opt && opt.body ? JSON.parse(opt.body) : null});
+      if (/import-file$/.test(url)) return {ok: reply.ok, status: reply.status, json: async () => reply.body};
+      return {ok: true, status: 200, json: async () => ({set: true, last4: 'GEMI', provider: 'gemini'})}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, I);
+  I._flReadB64 = async () => 'Q1NW';
+  I._flKey = {set: true, last4: 'GEMI', provider: 'gemini'}; I._flRows = []; I._flErr = ''; I._flPending = null; I._flBusy = false;
+  const main = I._flMainHtml();
+  check('food import: the Macros page has an Import button that opens Settings', /Import old log/.test(main) && /flOpenImportSettings\(\)/.test(main) && !/fl-import-file/.test(main));
+  (async () => {
+    await I.buildFlKeyCard();
+    let h = els['fl-import-card'].innerHTML;
+    check('food import: opening Settings shows the card: CSV or Excel, needs Date and Kcal',
+      /type="file"/.test(h) && /accept="\.csv,\.xlsx,\.txt,\.tsv,/.test(h) && /<b>Date<\/b>/.test(h) && /<b>Kcal<\/b>/.test(h) && /importing the same file twice is safe/.test(h));
+    const inp = {files: [{name: 'old log.xlsx', size: 1200}], value: 'x'};
+    await I.flImportFile(inp);
+    const post = calls.find(c => /import-file$/.test(c.url));
+    check('  …picking a file sends its name and contents once', calls.filter(c => /import-file$/.test(c.url)).length === 1 &&
+      post.method === 'POST' && post.body.filename === 'old log.xlsx' && post.body.data_b64 === 'Q1NW' && inp.value === '');
+    h = els['fl-import-card'].innerHTML;
+    check('  …and says what was added, what was already there and which rows were skipped',
+      /Added 3 entries\. 2 were already in your log\. 1 row skipped: row 7 \(no kcal\)\./.test(h));
+    reply = {ok: false, status: 400, body: {detail: 'No header row with a date and a kcal column was found.'}};
+    await I.flImportFile({files: [{name: 'x.csv', size: 10}], value: 'x'});
+    h = els['fl-import-card'].innerHTML;
+    check('  …a refused file shows the reason and that nothing was imported', /No header row/.test(h) && /Nothing was imported/.test(h));
+    calls.length = 0;
+    await I.flImportFile({files: [{name: 'huge.csv', size: 6000000}], value: 'x'});
+    check('  …a file over 5 MB is refused without sending it', calls.length === 0 && /larger than 5 MB/.test(els['fl-import-card'].innerHTML));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food import: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: history as % of goals, average and median (2026-10-22) ──
+// Henrik: "average and median values for all macros and kcal section based on history …
+// as % of the goals". Goals change, so each day's goals are recorded and every past day is
+// measured against its own.
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  const calls = [], els = {};
+  let goalOk = true;
+  const S = vm.createContext({console, Promise, JSON, Math, String, Number, parseFloat, encodeURIComponent, Date,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; calls.push({url, method: m, body: opt && opt.body ? JSON.parse(opt.body) : null});
+      if (/\/goals$/.test(url)) return {ok: goalOk, status: goalOk ? 200 : 500, json: async () => ({})};
+      if (/\/stats\?/.test(url)) return {ok: true, status: 200, json: async () => ({days: 12, days_logged: 12, from: '2026-10-01', to: '2026-10-21', before_first_goal: 0, first_goal_date: '2026-10-01',
+        metrics: {kcal: {avg: 96.4, median: 98.6, days: 12}, protein: {avg: 88, median: 91, days: 12}, carbs: null, fat: {avg: 110, median: 104, days: 12}}})};
+      if (/\/key$/.test(url)) return {ok: true, status: 200, json: async () => ({set: true, last4: 'GEMI', provider: 'gemini'})};
+      return {ok: true, status: 200, json: async () => ([])}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, S);
+  S._flStats = {days: 5, days_logged: 7, from: '2026-09-28', to: '2026-10-21', before_first_goal: 3, first_goal_date: '2026-10-19',
+    metrics: {kcal: {avg: 101.4, median: 99.5, days: 5}, protein: {avg: 87.6, median: 90.2, days: 5}, carbs: null, fat: {avg: 120, median: 118, days: 5}}};
+  let h = S._flStatsHtml();
+  check('food stats: a card shows average and median as % of goals',
+    /History · % of your goals/.test(h) && />Average</.test(h) && />Median</.test(h) &&
+    />Kcal<\/td><td[^>]*>101 %<\/td><td[^>]*>100 %</.test(h) && />Protein<\/td><td[^>]*>88 %<\/td><td[^>]*>90 %</.test(h) && />Fat<\/td>/.test(h));
+  check('  …a macro with no goal gets no row', !/>Carbs</.test(h));
+  check('  …it says how many days, from when, that today is out, and that each day has its own goals',
+    /5 days logged, 28 Sep 2026 to 21 Oct 2026\. Today is not included\. Each day is measured against that day's goals\./.test(h));
+  check('  …and says which days used the first recorded goals', /The 3 days before 19 Oct 2026 use the goals recorded that day, the first on record\./.test(h));
+  S._flStats = {days: 0, days_logged: 4, metrics: {}};
+  check('food stats: food logged but no goals yet says when it starts', /start once your goals are set/.test(S._flStatsHtml()));
+  S._flStats = {days: 0, days_logged: 0, metrics: {}};
+  check('  …and with nothing logged there is no card', S._flStatsHtml() === '');
+  (async () => {
+    S._flKey = {set: true, last4: 'GEMI', provider: 'gemini'}; S._flRows = []; S._flErr = ''; S._flPending = null; S._flBusy = false;
+    await S.buildFoodLog();
+    const st = calls.find(c => /\/stats\?/.test(c.url));
+    check('food stats: opening Macros loads the stats with today left out', st && st.url.endsWith('/food-log/stats?today=' + S._flDay()) && /History · % of your goals/.test(els['food-log-body'].innerHTML));
+    calls.length = 0;
+    S._macrosTargets = {kcal: 2400, protein: 180, carbs: 250, fat: 70};
+    S._flRender(); S._flRender();
+    await new Promise(r => setTimeout(r, 0));
+    let puts = calls.filter(c => /\/goals$/.test(c.url));
+    check("food stats: the day's goals are recorded once, with today's date",
+      puts.length === 1 && puts[0].method === 'PUT' && puts[0].body.date === S._flDay() && puts[0].body.kcal === 2400 && puts[0].body.fat === 70);
+    S._macrosTargets = {kcal: 2200, protein: 180, carbs: 220, fat: 70};
+    S._flRender();
+    await new Promise(r => setTimeout(r, 0));
+    puts = calls.filter(c => /\/goals$/.test(c.url));
+    check('  …and again when the goals change', puts.length === 2 && puts[1].body.kcal === 2200);
+    goalOk = false; S._macrosTargets = {kcal: 2000, protein: 150};
+    S._flRender();
+    await new Promise(r => setTimeout(r, 0)); await new Promise(r => setTimeout(r, 0));
+    goalOk = true; S._flRender();
+    await new Promise(r => setTimeout(r, 0));
+    puts = calls.filter(c => /\/goals$/.test(c.url));
+    check('  …a failed save is tried again on the next render', puts.length === 4 && puts[3].body.kcal === 2000 && puts[3].body.carbs === null);
+    calls.length = 0; S._macrosTargets = null; S._flGoalSent = ''; S._flRender();
+    check('  …and without goals nothing is recorded', calls.filter(c => /\/goals$/.test(c.url)).length === 0);
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food stats: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: the Settings cards follow the Settings design (2026-10-22) ──
+// Henrik: "These Settings sections u added isn't following the design if the others, they
+// should be default collapsed like all others".
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  const els = {};
+  const C = vm.createContext({console, Promise, JSON, Math, String, Number, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: '', classList: {toggle() {}}, previousElementSibling: {classList: {toggle() {}}}}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async () => ({ok: true, status: 200, json: async () => ({})}),
+  });
+  vm.runInContext(_FL_SEC + _blk, C);
+  C._flKey = {set: true, last4: 'CwAA', provider: 'anthropic'};
+  const key = C._flKeyCardHtml(), imp = C._flImportCardHtml();
+  check('food settings: the API key card is a Settings section, collapsed by default',
+    /class="s-sec-hdr" onclick="toggleSSec\('flkey'\)">Food log · API key/.test(key) && /class="s-sec-body collapsed" id="s-sec-flkey"/.test(key) && /Anthropic key ending …CwAA/.test(key));
+  check('  …and so is the import card', /onclick="toggleSSec\('flimport'\)">Food log · Import old log/.test(imp) && /class="s-sec-body collapsed" id="s-sec-flimport"/.test(imp));
+  check('  …neither carries its own boxed title any more', !/font-weight:700;color:var\(--text\);margin-bottom:8px">Food logging/.test(key + imp));
+  C.flOpenImportSettings();
+  check('  …the Macros buttons open the section they point at', C._sOpen.flimport === true && /class="s-sec-hdr open"/.test(C._flImportCardHtml()));
+  C.flOpenImportSettings();
+  check('  …and never close it again', C._sOpen.flimport === true);
+  C.flOpenKeySettings();
+  check('  …the API key button opens its own', C._sOpen.flkey === true);
+}
+
+// ── Food Edit: every entry has an editable amount, and correcting it rescales (2026-10-21) ──
+// Henrik: "each entry needs a grams total also, a typo for chicken breast should be possible
+// to Edit instead of forcing me to delete the line".
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _blk = _src.slice(_src.indexOf('// ── Food log (Macros)'), _src.indexOf('// ── end food log ──'));
+  const puts = [], els = {};
+  const E = vm.createContext({console, Promise, JSON, Math, String, Number, parseFloat, encodeURIComponent,
+    AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), confirmGlobalDelete: () => true, alert: () => {},
+    document: {getElementById: (id) => { if (!els[id]) { let h = ''; els[id] = {value: ''}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+    fetch: async (url, opt) => { if (opt && opt.method === 'PUT') puts.push({url, body: JSON.parse(opt.body)});
+      return {ok: true, status: 200, json: async () => []}; },
+  });
+  vm.runInContext(_FL_SEC + _blk, E);
+  const chick = {id: 'k1', food: 'Raw chicken breast', amount: '300g', kcal: 330, protein: 69, carbs: 0, fat: 4};
+  const coffee = {id: 'k2', food: 'Coffee', amount: '300ml', kcal: 68, protein: 5, carbs: 7, fat: 2};
+  const cups = {id: 'k3', food: 'Tea', amount: '2 cups', kcal: 4, protein: 0, carbs: 1, fat: 0};
+  const html = E._flEditHtml([chick, coffee, cups], '2026-10-21');
+  check('food edit: every entry shows its amount, in its own unit',
+    /id="fle-grams-k1" value="300"/.test(html) && /Amount \(g\)/.test(html) && /id="fle-grams-k2" value="300"/.test(html) && /Amount \(ml\)/.test(html));
+  check('  …an amount with no number to scale from is left empty, with the stored text as a hint',
+    /id="fle-grams-k3" value="" inputmode="decimal" placeholder="2 cups"/.test(html));
+  const fill = (r, grams, over) => { E._flEditRows = [chick, coffee, cups]; const v = Object.assign({food: r.food, kcal: r.kcal, protein: r.protein, carbs: r.carbs, fat: r.fat, grams}, over || {});
+    Object.keys(v).forEach(k => { E.document.getElementById('fle-' + k + '-' + r.id).value = String(v[k]); }); };
+  (async () => {
+    E._flEditRows = [chick, coffee, cups];
+    fill(chick, '200'); await E.flEditSave('k1');
+    let b = puts[0] && puts[0].body;
+    check('  …correcting 300 g to 200 g rescales kcal and macros by 2/3 and stores the new amount',
+      b && b.amount === '200 g' && b.kcal === 220 && b.protein === 46 && b.carbs === 0 && b.fat === 2.7, JSON.stringify(b));
+    puts.length = 0; fill(chick, '200', {kcal: 250}); await E.flEditSave('k1');
+    b = puts[0] && puts[0].body;
+    check('  …but numbers typed over by hand are kept as typed', b && b.amount === '200 g' && b.kcal === 250 && b.protein === 69, JSON.stringify(b));
+    puts.length = 0; fill(coffee, '150'); await E.flEditSave('k2');
+    b = puts[0] && puts[0].body;
+    check('  …ml stays ml', b && b.amount === '150 ml' && b.kcal === 34, JSON.stringify(b));
+    puts.length = 0; fill(cups, '500'); await E.flEditSave('k3');
+    b = puts[0] && puts[0].body;
+    check('  …an amount added where there was none is stored without guessing a rescale', b && b.amount === '500 g' && b.kcal === 4, JSON.stringify(b));
+    puts.length = 0; fill(chick, '300'); await E.flEditSave('k1');
+    b = puts[0] && puts[0].body;
+    check('  …an unchanged amount changes nothing', b && b.amount === '300 g' && b.kcal === 330 && b.protein === 69, JSON.stringify(b));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('food edit grams: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Food log: each entry shows when it was logged (2026-10-21) ──
+// Henrik: "show time of logged entry in the list, it helps to check when one ate last".
+{
+  G._flKey = {set: true, last4: 'WXYZ'}; G._flErr = ''; G._flPending = null; G._flBusy = false;
+  G._flRows = [{id: 't1', time: '07:40', food: 'Oats', amount: '80 g', kcal: 300}, {id: 't2', time: '', food: 'Daily total', amount: '', kcal: 2000}];
+  G._flListOpen = true;
+  const _h = G._flMainHtml();
+  check('food log: the list shows each entry\'s time before the food', /07:40<\/span>Oats/.test(_h));
+  check('  …and an entry with no time (an imported daily total) shows none', /<span>Daily total/.test(_h));
+  check('food edit: each card shows its time', />07:40<\/div>/.test(G._flEditHtml([G._flRows[0]], '2026-10-21')));
+  G._flRows = [];
+}
+
+// ── Food log: a free Gemini key is the default, Anthropic the alternative (2026-10-21) ──
+// Henrik: "add support for Google Gemini API key also and provide instructions for how to
+// obtain a free one, this should be the default option".
+{
+  const _g = G._flGuideHtml();
+  const _fold = _g.indexOf('<details');
+  check('food log: the guide leads with the free Gemini key, in Chrome',
+    /<option value="gemini" selected>Google Gemini \(free\)/.test(_g) && /https:\/\/aistudio\.google\.com\/apikey/.test(_g) &&
+    /Chrome/.test(_g) && /starts with <code>AIza<\/code>/.test(_g) && /placeholder="AIza…"/.test(_g));
+  check('  …and offers Anthropic, OpenAI, xAI and Azure OpenAI as paid alternatives (2026-10-22)',
+    /value="anthropic">Anthropic Claude \(paid\)/.test(_g) && /value="openai">OpenAI ChatGPT \(paid\)/.test(_g) &&
+    /value="xai">xAI Grok \(paid\)/.test(_g) && /value="azure">Microsoft Azure OpenAI \(paid\)/.test(_g) && _fold < 0);
+  G._flErr = ''; G._flPending = null; G._flBusy = false; G._flRows = [];
+  G._flKey = {set: true, last4: 'GEMI', provider: 'gemini'};
+  check('  …the Settings card names the provider: Gemini', /Gemini key ending …GEMI/.test(G._flKeyCardHtml()));
+  G._flKey = {set: true, last4: 'WXYZ', provider: 'anthropic'};
+  check('  …or Anthropic', /Anthropic key ending …WXYZ/.test(G._flKeyCardHtml()));
+  G._flKey = {set: true, last4: 'WXYZ'};
+  check('  …and a key stored before Gemini existed reads as Anthropic', /Anthropic key ending …WXYZ/.test(G._flKeyCardHtml()));
+}
+
+// ── Macros page tweaks (2026-10-22): carbs and fat bars; the day's list starts collapsed ──
+{
+  G._flKey = {set: true, last4: 'GEMI', provider: 'gemini'}; G._flErr = ''; G._flPending = null; G._flBusy = false;
+  G._flRows = [{id: 'a', time: '07:40', food: 'Oats', amount: '80 g', kcal: 300, protein: 10, carbs: 50, fat: 6},
+               {id: 'b', time: '12:15', food: 'Chicken', amount: '200 g', kcal: 220, protein: 46, carbs: 0, fat: 3}];
+  const _saveT = G._macrosTargets;
+  G._macrosTargets = {kcal: 2574, protein: 213, carbs: 250, fat: 70};
+  G._flListOpen = false;
+  let _h = G._flMainHtml();
+  check('macros: carbs and fat get progress bars too',
+    /Carbs 50 of 250 g/.test(_h) && /200 g left/.test(_h) && /Fat 9 of 70 g/.test(_h) && /61 g left/.test(_h));
+  check('  …in the order calories, protein, carbs, fat',
+    _h.indexOf('Calories 520') < _h.indexOf('Protein 56') && _h.indexOf('Protein 56') < _h.indexOf('Carbs 50') && _h.indexOf('Carbs 50') < _h.indexOf('Fat 9'));
+  G._macrosTargets = {kcal: 2574, protein: 213};
+  check('  …and a target that is not set shows no bar', !/Carbs \d+ of/.test(G._flMainHtml()) && !/Fat \d+ of/.test(G._flMainHtml()));
+  check('macros: the day\'s list starts collapsed, saying how many and when you last ate',
+    /2 entries today · last at 12:15/.test(_h) && /flToggleList\(\)/.test(_h) && /Show ▼/.test(_h) && !/Oats/.test(_h));
+  G.flToggleList();
+  _h = G._flMainHtml();
+  check('  …one tap opens it', G._flListOpen === true && /Oats/.test(_h) && /Chicken/.test(_h) && /Hide ▲/.test(_h));
+  G.flToggleList();
+  check('  …and a second closes it', G._flListOpen === false && !/Oats/.test(G._flMainHtml()));
+  G._macrosTargets = _saveT; G._flRows = [];
 }
