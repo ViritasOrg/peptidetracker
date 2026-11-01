@@ -88,7 +88,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['inj-writer.js','inj-site.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js','tab-meds.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -15413,7 +15413,7 @@ if (typeof G._blBuildLines === 'function') {
     check('timeline nav: it is its own primary group',
       /PRIMARY_GROUPS=\{[^;]*timeline:\['timeline'\]/.test(rawScript));
     check('timeline nav: and no longer a sub-tab of Plan',
-      /plan:\['stacks','supplements','recon'\]/.test(rawScript));
+      /plan:\['stacks','meds','supplements','recon'\]/.test(rawScript));
     check('timeline nav: it sits immediately after Plan',
       /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','more'\]/.test(rawScript));
     check('timeline nav: the bottom-nav button is placed after Plan',
@@ -19173,6 +19173,210 @@ console.log('\n── The app is titled with the person using it ─────
     typeof G._possessive === 'function');
 }
 
+// ── Onboarding tour + "What's new" card (2026-10-24) ─────────────────────────────
+// Built for Workout first ("I want a animated movie running as onboarding showing the main
+// features incl macro tracking" / "ask the onboarding questions first" / "in settings/More add a
+// button on top to re run the intro"), then Henrik said "yes" to the same here.
+console.log('\n── Onboarding tour + What\'s new ────────────────────────────');
+{
+  const S = G.TOUR_SCENES;
+  check('tour: five scenes, protocol → today → levels → macros → tabs',
+    S.map(s => s.id).join(',') === 'protocol,today,levels,macros,tabs');
+  check('  …each animated scene plays for at least 5 s and the last one stays',
+    S.slice(0, -1).every(s => s.ms >= 5000 && s.title && s.cap) && S[S.length - 1].ms === 0);
+  check('  …the tour step comes after the goals and stats questions and before the starting point',
+    G._OB_ORDER.indexOf('tour') > G._OB_ORDER.indexOf('goals') && G._OB_ORDER.indexOf('tour') > G._OB_ORDER.indexOf('stats') && G._OB_ORDER.indexOf('tour') < G._OB_ORDER.indexOf('start'));
+  check('  …obRender starts the tour on its step and stops it elsewhere', /if\(_OB_ORDER\[_obStep\]==='tour'\)_tourShow\(0\);else _tourStop\(\);/.test(String(G.obRender)));
+  check('  …finishing the wizard stops the timer', /^function obFinish\(\)\{\s*_tourStop\(\);/m.test(rawScript));
+  check('  …the welcome step promises the tour', /animated tour/.test(G._obHtml0()));
+  // The six bottom-bar tabs are the closing scene; the list is read from the HTML so it cannot go stale.
+  const navBar = [...html.matchAll(/id="navbtn-([a-z]+)"[^>]*><span class="navic">[^<]*<\/span>([^<]+)</g)].map(m => m[2].trim());
+  const tabNames = G.TOUR_TABS.map(t => t[1]);
+  check('TOUR_TABS names every button in the bottom bar, in order', navBar.length === 6 && navBar.join(',') === tabNames.join(','), navBar.join(',') + ' vs ' + tabNames.join(','));
+  check('  …and tells the user about the food log and the injection-site pictures',
+    G.TOUR_TABS.some(t => /photo/.test(t[2])) && G.TOUR_TABS.some(t => /injection site/.test(t[2])));
+
+  const saveOb = G._obData, saveTpl = G._protocolTemplates;
+  const scenes = h => [...h.matchAll(/data-tour-scene="([a-z]+)"/g)].map(m => m[1]);
+  // The protocol scene follows the goal ticked on step 3 and names the plan the backend's templates rank first.
+  G._protocolTemplates = [
+    { id: 'a', name: 'Recovery Plan A', tagline: 'Joints first', goals: ['recovery'], peptides: [{}, {}] },
+    { id: 'b', name: 'Hormone Plan B', tagline: 'Steady', goals: ['hormone'], trt: { compounds: [{}] } },
+    { id: 'c', name: 'Cut Plan C', tagline: 'Lean', goals: ['fatloss'], peptides: [{}] }];
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: ['recovery'] });
+  let h = G._obHtmlTour();
+  check('male with the recovery goal: the scene starts the recovery plan the templates rank first',
+    scenes(h).join(',') === 'protocol,today,levels,macros,tabs' && /Goal<b>Recovery &amp; healing</.test(h) && /Recovery Plan A/.test(h) && /Joints first/.test(h) && /Start this protocol/.test(h) && !/Hormone Plan B/.test(h));
+  check('  …and counts its compounds', /<span>Compounds<\/span><b>2</.test(h));
+  G._obData = Object.assign({}, saveOb, { sex: 'female', goals: [] });
+  h = G._obHtmlTour();
+  check('female with no goal ticked: the fat-loss plan', /Goal<b>Fat loss</.test(h) && /Cut Plan C/.test(h) && !/Recovery Plan A/.test(h));
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: [] });
+  h = G._obHtmlTour();
+  check('male with no goal ticked: the hormone plan', /Goal<b>Hormone health \/ TRT</.test(h) && /Hormone Plan B/.test(h));
+  G._protocolTemplates = [];
+  h = G._obHtmlTour();
+  check('no templates loaded yet: a neutral label, never a compound name written into this repo',
+    /Your suggested plan/.test(h) && /Vetted plan for your goal/.test(h) && /<span>Compounds<\/span><b>—</.test(h));
+  check('the scenes carry no compound, peptide or dose data of their own',
+    !/(mg|µg|IU)\b/.test(h.replace(/pmol\/L/g, '')) && !/(BPC|TB-?500|semaglutide|tirzepatide|testosterone|nebido|HGH|CJC|ipamorelin)/i.test(h));
+  check('today scene: three rows ticked, the ring fills, adherence shown',
+    (h.match(/tour-chk/g) || []).length === 3 && /tourRing/.test(h) && /Adherence this week/.test(h) && /Dose 1/.test(h));
+  check('levels scene: the curve draws in pmol/L with bloodwork on top', /Free T/.test(h) && /pmol\/L/.test(h) && /tourDraw/.test(h) && /bloodwork/.test(h) && !/mg\/day/.test(h));
+  check('macros scene: typing what you ate, Photo, Log, then the bars fill',
+    /What did you eat\?/.test(h) && /202 g steak/.test(h) && /Photo/.test(h) && /tourFill/.test(h) && /kcal/.test(h));
+  check('the closing scene and the list under it name every tab', tabNames.every(n => h.includes('<b>' + n + '</b>')) && /6 tabs along the bottom/.test(h));
+  G._protocolTemplates = saveTpl;
+
+  // The scheduler flips one scene on, moves the dot and shows the tab list only on the last scene.
+  const _els = {}; const trk = id => { const cls = new Set(); _els[id] = { _classes: cls, style: {}, classList: { add: c => cls.add(c), remove: c => cls.delete(c), contains: c => cls.has(c) }, set textContent(v) { this._t = v; }, get textContent() { return this._t || ''; } }; return _els[id]; };
+  const _gebi = G.document.getElementById; G.document.getElementById = id => _els[id] || _gebi(id);
+  const st = trk('tour-stage'), s0 = trk('tour-s0'), s2 = trk('tour-s2'), s4 = trk('tour-s4'), d2 = trk('tour-d2'), tl = trk('tour-tablist'), cap = trk('tour-cap');
+  G._tourShow(2);
+  check('_tourShow(2) shows scene 2 only and marks its dot', s2._classes.has('on') && !s0._classes.has('on') && !s4._classes.has('on') && d2._classes.has('active') && !tl._classes.has('on') && cap.textContent === S[2].cap);
+  G._tourShow(4);
+  check('  …the last scene shows the tab list under the stage', s4._classes.has('on') && !s2._classes.has('on') && tl._classes.has('on') && !d2._classes.has('active'));
+  G._tourShow(1);
+  check('  …and an earlier scene hides it again', !tl._classes.has('on'));
+  G._tourToggle();
+  check('tap pauses the animations', st._classes.has('paused') && G._tour.paused === true);
+  G._tourToggle();
+  check('  …a second tap resumes', !st._classes.has('paused') && G._tour.paused === false);
+  G._tourShow(4); G._tourToggle();
+  check('  …the last scene has nothing to pause', !st._classes.has('paused'));
+  G._tourStop();
+
+  // "Watch the intro again" at the top of Settings: tour only, nothing saved.
+  check('Settings opens with a "Watch the intro again" button, before the first section',
+    /id="tab-settings">\s*<button id="tour-replay-btn" onclick="openTour\(\)"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(html));
+  const ov = trk('onboarding-overlay'); ov.classList.add('hidden');
+  const dots = trk('ob-dots'), backB = trk('ob-back'), nextB = trk('ob-next'), skipB = trk('ob-skip-btn'), body = trk('ob-body');
+  Object.defineProperty(body, 'innerHTML', { set() {}, get() { return ''; } }); Object.defineProperty(dots, 'innerHTML', { set() {}, get() { return ''; } });
+  const ls = G.localStorage;
+  const _savedProfile = ls.getItem('pep-profile'), _savedSeen = ls.getItem('pep-whatsnew-seen');
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true, sex: 'female', goals: ['muscle'] })); ls.removeItem('pep-whatsnew-seen');
+  G._obData = Object.assign({}, saveOb, { sex: null, goals: [] });
+  const pushes = []; const _sp = G.pushPepSettingsToAgent; G.pushPepSettingsToAgent = kv => { pushes.push(kv); };
+  G.openTour();
+  check('openTour opens the overlay straight on the tour with the saved sex and goals',
+    !ov._classes.has('hidden') && G._OB_ORDER[G._obStep] === 'tour' && G._obData.sex === 'female' && G._obData.goals.join() === 'muscle' && G._obTourOnly === true);
+  check('  …no Back, no dots, and the button says Done', backB.style.display === 'none' && dots.style.visibility === 'hidden' && nextB.textContent === 'Done');
+  G.obNext();
+  check('  …Done closes it without saving anything', ov._classes.has('hidden') && G._obTourOnly === false && pushes.length === 0);
+  G.openTour(); G.obSkip();
+  check('  …Skip closes it the same way', ov._classes.has('hidden') && pushes.length === 0);
+  G.openOnboarding();
+  check('a real re-run of the wizard clears tour-only mode and starts at the welcome step', G._obTourOnly === false && G._obStep === 0 && dots.style.visibility === '');
+  ov.classList.add('hidden');
+
+  // What's new: rows, filter, dismissal, wiring.
+  const WN = G.WHATS_NEW;
+  check('WHATS_NEW: every row has a version, a title and a text', Array.isArray(WN) && WN.length >= 3 && WN.every(e => /^\d+\.\d+$/.test(e.v) && e.title && e.text));
+  check('  …sorted newest first', WN.every((e, i) => i === 0 || G._verNum(WN[i - 1].v) > G._verNum(e.v)));
+  check('  …none further ahead than the next bump', WN.every(e => G._verNum(e.v) <= G._verNum(G.VERSION) + 1));
+  check('  …it names the food log, the injection pictures and the tour',
+    WN.some(e => /Macros/.test(e.title) && /photo/.test(e.text)) && WN.some(e => /Injection-site/.test(e.title)) && WN.some(e => /tour/i.test(e.title) && /top of Settings/.test(e.text)));
+  const reached = WN.filter(e => G._verNum(e.v) <= G._verNum(G.VERSION));
+  check('version compare is numeric, not lexical', G._verNum('1.100') > G._verNum('1.99'));
+  // Nothing seen, no profile, no history: a brand-new account gets no card.
+  ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen');
+  const histKeys = Object.keys(ls._s).filter(k => k.startsWith('proto-chk-')); const histSaved = {}; histKeys.forEach(k => { histSaved[k] = ls._s[k]; delete ls._s[k]; });
+  check('a brand-new account gets no card', G._whatsNewEntries().length === 0 && G._whatsNewHtml([]) === '');
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
+  check('an onboarded account that never saw the card gets every row the build has reached', G._whatsNewEntries().length === reached.length);
+  ls.removeItem('pep-profile'); ls.setItem('proto-chk-2026-01-01', '1');
+  check('  …so does an account with dose history but no profile', G._whatsNewEntries().length === reached.length);
+  ls.removeItem('proto-chk-2026-01-01'); ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
+  h = G._whatsNewHtml(G._whatsNewEntries());
+  check('  …the card is titled WHAT\'S NEW with a Got it button and lists them', /WHAT'S NEW/.test(h) && /dismissWhatsNew\(\)/.test(h) && reached.every(e => h.includes(e.title)));
+  check('  …text is escaped', G._whatsNewHtml([{ v: '1.1', title: 'a<b', text: 'c&d' }]).includes('a&lt;b'));
+  ls.setItem('pep-whatsnew-seen', JSON.stringify(G.VERSION));
+  check('seen at the current version: nothing to show', G._whatsNewEntries().length === 0);
+  ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  const wn = trk('whats-new'); Object.defineProperty(wn, 'innerHTML', { set(v) { this._h = v; }, get() { return this._h || ''; } });
+  G.dismissWhatsNew();
+  check('Got it stores the current version as seen and pushes it to /user-settings', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.length === 1 && pushes[0]['pep-whatsnew-seen'] === G.VERSION && wn.innerHTML === '');
+  check('Today builds the card right after the rings', /^function buildToday\(\)\{if\(typeof buildTodayRings==='function'\)buildTodayRings\(\);if\(typeof buildWhatsNewCard==='function'\)buildWhatsNewCard\(\);/m.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-today.js'), 'utf8')));
+  check('the seen version comes back from the backend after a cache wipe',
+    String(G.syncPepSettingsFromAgent).includes("setData('pep-whatsnew-seen',String(s['pep-whatsnew-seen']))") && String(G.syncPepSettingsFromAgent).includes('buildWhatsNewCard()'));
+  check('the Today page has the slot the card renders into', /id="tab-today">\s*<div id="whats-new"><\/div>/.test(html));
+  // obFinish marks a NEW account as seen; an existing account re-running the wizard keeps its card.
+  ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: [], experience: '', startChoice: 'explore' });
+  G.obFinish();
+  check('finishing the wizard on a new account marks the current version as seen', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.some(kv => kv['pep-whatsnew-seen'] === G.VERSION));
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true })); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  G.obFinish();
+  check('re-running the wizard on an onboarded account does NOT mark the card seen', ls.getItem('pep-whatsnew-seen') === null && !pushes.some(kv => 'pep-whatsnew-seen' in kv));
+  // Restore.
+  G.pushPepSettingsToAgent = _sp; G.document.getElementById = _gebi; G._obData = saveOb;
+  if (_savedProfile === null) ls.removeItem('pep-profile'); else ls.setItem('pep-profile', _savedProfile);
+  if (_savedSeen === null) ls.removeItem('pep-whatsnew-seen'); else ls.setItem('pep-whatsnew-seen', _savedSeen);
+  Object.keys(histSaved).forEach(k => { ls._s[k] = histSaved[k]; });
+}
+
+
+// ── Macro targets per day (2026-10-24) ─────────────────────────────────────────────
+// Henrik: "I imported my old logs but the targets has changed since … the targets must be
+// saved for each day so real stats can be generated later." Food Edit shows the goals in force
+// on a day and saves a row on that date; /food-log/stats then measures every later day against
+// it until the next recorded change.
+console.log('\n── Macro targets per day ───────────────────────────────────');
+{
+  const goals = [{ date: '2026-10-20', kcal: 2400, protein: 213, carbs: 285, fat: 51 },
+                 { date: '2026-07-15', kcal: 2100, protein: 190, carbs: 200, fat: 55 }];
+  check('_flGoalFor: a row on the day is exact', JSON.stringify(G._flGoalFor('2026-10-20', goals)) === JSON.stringify({ goal: goals[0], origin: 'exact' }));
+  check('  …a later day inherits the latest row on or before it', G._flGoalFor('2026-09-01', goals).goal.kcal === 2100 && G._flGoalFor('2026-09-01', goals).origin === 'inherited');
+  check('  …a day before every row uses the first on record, as /stats does', G._flGoalFor('2026-06-01', goals).goal.kcal === 2100 && G._flGoalFor('2026-06-01', goals).origin === 'first');
+  check('  …no rows at all is null', G._flGoalFor('2026-06-01', []) === null && G._flGoalFor('2026-06-01', null) === null);
+  check('  …and the input order does not matter', G._flGoalFor('2026-10-25', goals.slice().reverse()).goal.kcal === 2400);
+
+  const saveGoals = G._flGoals, saveDate = G._flEditDate;
+  G._flGoals = goals; G._flEditDate = '2026-09-01';
+  let h = G._flEditHtml([], '2026-09-01');
+  check('Food Edit shows the targets card even on a day with nothing logged',
+    /Targets from this day/.test(h) && h.indexOf('Targets from this day') < h.indexOf('Nothing logged on this day'));
+  check('  …prefilled with the goals in force and saying where they come from',
+    /id="flg-kcal" value="2100"/.test(h) && /id="flg-protein" value="190"/.test(h) && /Inherited from 15 Jul 2026/.test(h) && /flGoalSave\(\)/.test(h) && !/flGoalDelete/.test(h));
+  h = G._flEditHtml([], '2026-10-20');
+  check('  …a day with its own row offers Remove this change', /Set on this day\./.test(h) && /flGoalDelete\(\)/.test(h) && /id="flg-kcal" value="2400"/.test(h));
+  h = G._flEditHtml([], '2026-06-01');
+  check('  …a day before the first row says so', /first on record \(15 Jul 2026\)/.test(h));
+  G._flGoals = [];
+  check('  …and no rows yet is said plainly', /No targets recorded yet/.test(G._flEditHtml([], '2026-06-01')) && /value=""/.test(G._flEditHtml([], '2026-06-01')));
+  G._flGoals = goals;
+  check('  …today says the Macros page re-records it', /re-recorded from the Macros page/.test(G._flEditHtml([], G._flDay())));
+
+  // Save PUTs a goal row on the edit date. flGoalSave is async, but its first await IS the
+  // fetch, so the request is observable synchronously; the global fetch is restored at once so
+  // no other test's recording is disturbed (the continuation then runs on the default stub).
+  const calls = []; const _fetch = G.fetch;
+  const vals = { kcal: '2100', protein: '190', carbs: '', fat: '55,5' };
+  const _gebi = G.document.getElementById;
+  G.document.getElementById = id => (id.indexOf('flg-') === 0 ? { value: vals[id.slice(4)] } : _gebi(id));
+  G._flEditDate = '2026-07-15';
+  G.fetch = async (url, opt) => { calls.push({ url, opt }); return { ok: true, status: 200, json: async () => ({ goals: [] }) }; };
+  G.flGoalSave(); G.fetch = _fetch;
+  const put = calls.find(c => c.opt && c.opt.method === 'PUT');
+  check('Save targets PUTs /food-log/goals for the edited date, with blanks as null and a comma decimal read',
+    calls.length === 1 && !!put && /\/food-log\/goals$/.test(put.url) && JSON.stringify(JSON.parse(put.opt.body)) === JSON.stringify({ date: '2026-07-15', kcal: 2100, protein: 190, carbs: null, fat: 55.5 }));
+  check('  …then reloads the goals, the stats, the Macros page and Food Edit',
+    /_flLoadGoals\(\)/.test(String(G._flGoalsChanged)) && /_flLoadStats\(\)/.test(String(G._flGoalsChanged)) && /buildFoodEdit\(_flEditDate\)/.test(String(G._flGoalsChanged)) && /await _flGoalsChanged\(\)/.test(String(G.flGoalSave)));
+  calls.length = 0; vals.kcal = '';
+  const alerts = []; const _alert = G.alert; G.alert = m => alerts.push(String(m));
+  G.fetch = async (url, opt) => { calls.push({ url, opt }); return { ok: false, json: async () => ({}) }; };
+  G.flGoalSave(); G.fetch = _fetch; G.alert = _alert;
+  check('  …no kcal: nothing is sent and the user is told', calls.length === 0 && alerts.length === 1 && /kcal/.test(alerts[0]));
+  G.fetch = async (url, opt) => { calls.push({ url, opt }); return { ok: false, json: async () => ({}) }; };
+  G.flGoalDelete(); G.fetch = _fetch;
+  check('Remove this change asks the global-delete confirmation first (declined here: nothing sent)',
+    calls.length === 0 && /confirmGlobalDelete\('the target change recorded on this day'\)/.test(String(G.flGoalDelete)));
+  check('  …and deletes /food-log/goals/<date> when confirmed', /\/food-log\/goals\/'\+_flEditDate/.test(String(G.flGoalDelete)) && /method:'DELETE'/.test(String(G.flGoalDelete)));
+  check('buildFoodEdit loads the recorded goals before rendering', /if\(_flGoals===null\)await _flLoadGoals\(\);/.test(String(G.buildFoodEdit)));
+  check('WHATS_NEW announces it', G.WHATS_NEW.some(e => /Macro targets per day/.test(e.title) && /Food Edit/.test(e.text)));
+  G.document.getElementById = _gebi; G._flGoals = saveGoals; G._flEditDate = saveDate;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
@@ -22050,4 +22254,180 @@ console.log('\n── Food log ────────────────�
   G.flToggleList();
   check('  …and a second closes it', G._flListOpen === false && !/Oats/.test(G._flMainHtml()));
   G._macrosTargets = _saveT; G._flRows = [];
+}
+
+// ── Water on the Macros page (2026-11-01) ───────────────────────────────────
+// Same block in both apps; drinks go to /water-log, the target comes from /water-log/target.
+console.log('\n── Water ───────────────────────────────────────────────────');
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _wb = _src.slice(_src.indexOf('// ── Water (Macros)'), _src.indexOf('async function wlSetOwn'));
+  check('water: block present and outside the food-log block',
+    _wb.length > 1000 && _src.indexOf('// ── Water (Macros)') > _src.indexOf('// ── end food log ──'));
+  check('water: a water card sits above the food log on the Macros page',
+    /<div id="water-log-body"><\/div>\s*<div id="food-log-body">/.test(_src));
+  check('water: opening Macros builds it', /buildWaterLog\(\);buildFoodLog\(\)/.test(_src));
+  check('water: litres parse, empty means "use the research target"',
+    G._wlParseLitres('3.5') === 3500 && G._wlParseLitres('3,5') === 3500 && G._wlParseLitres('3500') === 3500 &&
+    G._wlParseLitres('') === 0 && G._wlParseLitres('0.1') === -1 && G._wlParseLitres('abc') === -1 && G._wlParseLitres('20') === -1);
+  G._wlRows = [{id: 'a', ml: 500, created_at: 1}, {id: 'b', ml: 250, created_at: 2}];
+  G._wlTarget = {ml: 3100}; G._wlOwn = 0; G._wlBusy = false; G._wlErr = '';
+  let _h = G._wlHtml();
+  check('water: shows the day\'s total against the target', /0\.8 L<\/b> \/ 3\.1 L/.test(_h) && /width:24%/.test(_h));
+  check('  …says where the target comes from', /Yamada 2022/.test(_h) && /Set my own/.test(_h));
+  check('  …with one-tap amounts and an undo', /wlAdd\(250\)/.test(_h) && /wlAdd\(500\)/.test(_h) && /wlUndo\(\)/.test(_h));
+  G._wlOwn = 3500;
+  _h = G._wlHtml();
+  check('  …and an own target replaces the research one', /\/ 3\.5 L/.test(_h) && /your own target/.test(_h) && !/Yamada/.test(_h));
+  G._wlOwn = 0; G._wlTarget = null; G._wlRows = [];
+  _h = G._wlHtml();
+  check('  …without a weight it asks for one instead of inventing a target', /add your weight/.test(_h) && !/Undo last/.test(_h));
+  check('water: the target uses the newest weigh-in, not the profile weight (dates are not zero-padded)',
+    G._wlLatestWeight([{date:'2026-6-12',weight:89.8},{date:'2026-10-25',weight:88.0},{date:'2026-10-3',weight:87}]).weight === 88 &&
+    G._wlLatestWeight([]) === null && /fetch\(AGENT_URL\+'\/weights'/.test(_wb));
+  check('water: undo is a global delete and says so', /confirmGlobalDelete\(/.test(_wb));
+  check('water: the own target is written to the backend with the device copy',
+    /\/user-settings',\{method:'POST'/.test(_src.slice(_src.indexOf('async function wlSetOwn'), _src.indexOf('async function wlSetOwn') + 1200)));
+}
+
+// ── Medication tab and the folding Today sections (2026-11-01) ───────────────
+console.log('\n── Medication ──────────────────────────────────────────────');
+{
+  const _html = fs.readFileSync(htmlPath, 'utf8');
+  const _ib = (id) => _html.indexOf('id="' + id + '"');
+  check('meds: a Medication tab between Protocols (injections) and Supplements',
+    _ib('tab-btn-stacks') < _ib('tab-btn-meds') && _ib('tab-btn-meds') < _ib('tab-btn-supplements') &&
+    JSON.stringify(G.PRIMARY_GROUPS.plan.slice(0, 3)) === JSON.stringify(['stacks', 'meds', 'supplements']));
+  check('meds: Today shows medication as the middle section',
+    _ib('today-checklist') < _ib('today-meds') && _ib('today-meds') < _ib('today-supplements'));
+  check('meds: tab-meds.js is loaded after tab-supplements.js',
+    _html.indexOf('tab-supplements.js?v=') < _html.indexOf('tab-meds.js?v='));
+  check('meds: tablets per day read as people say them',
+    G._medFmtTablets(0.25) === '¼ tablet' && G._medFmtTablets(0.5) === '½ tablet' && G._medFmtTablets(1) === '1 tablet' &&
+    G._medFmtTablets(1.5) === '1½ tablets' && G._medFmtTablets(3) === '3 tablets' && G._medFmtTablets(2, 'capsule') === '2 capsules');
+  check('meds: the per-day choices are quarters and whole numbers, ¼ to 10',
+    G.MED_TABLETS[0] === 0.25 && G.MED_TABLETS.indexOf(0.5) >= 0 && G.MED_TABLETS.indexOf(1) >= 0 &&
+    G.MED_TABLETS.every(n => Math.abs(n * 4 - Math.round(n * 4)) < 1e-9) && G.MED_TABLETS[G.MED_TABLETS.length - 1] === 10);
+  // the package photo only fills the form, and only with what it read
+  const _f = {'med-name': {value: ''}, 'med-strength': {value: 'typed'}, 'med-form': {value: 'tablet'}};
+  const _gid = G.document.getElementById;
+  G.document.getElementById = id => _f[id] || null;
+  G._medApplyRead({name: 'Lisinopril (lisinopril)', strength: '', form: 'film-coated tablet'});
+  check('meds: a read package fills the name and keeps a strength it could not see',
+    _f['med-name'].value === 'Lisinopril (lisinopril)' && _f['med-strength'].value === 'typed' && _f['med-form'].value === 'film-coated tablet');
+  // Today section renders the ticks and starts folded
+  const _w = {innerHTML: ''};
+  G.document.getElementById = id => id === 'today-meds' ? _w : null;
+  const _d = new Date(2026, 10, 1);
+  G._meds = [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, start_date: '2026-10-01'},
+             {id: 'm2', name: 'Later', tablets_per_day: 1, start_date: '2026-12-01'}];
+  G._medLog = {'m1|2026-11-01': true};
+  G.renderTodayMeds(_d);
+  check('meds: Today lists what is due that day with strength and amount',
+    /Lisinopril/.test(_w.innerHTML) && /10 mg · ½ tablet/.test(_w.innerHTML) && !/Later/.test(_w.innerHTML));
+  check('  …ticked from the log, counted in the badge', /checked-item/.test(_w.innerHTML) && /1 \/ 1/.test(_w.innerHTML));
+  check('  …and folded by default', /id="today-sec-meds" style="display:none"/.test(_w.innerHTML) && /toggleTodaySec\('meds'\)/.test(_w.innerHTML));
+  G._meds = [];
+  G.renderTodayMeds(_d);
+  check('  …nothing at all when there is no medication', _w.innerHTML === '');
+  G.document.getElementById = _gid;
+  // folding: injections open, the rest folded; a tap flips one
+  check('today: injections expanded, medication and supplements folded by default',
+    G._todayOpen.doses === true && G._todayOpen.meds === false && G._todayOpen.supps === false);
+  check('today: the doses card folds from its heading',
+    /onclick="toggleTodaySec\('doses'\)"/.test(_html) && _ib('today-sec-doses') < _ib('today-checklist'));
+  const _b = {style: {display: 'none'}}, _c = {textContent: '▸'};
+  G.document.getElementById = id => id === 'today-sec-meds' ? _b : (id === 'today-chev-meds' ? _c : null);
+  G.toggleTodaySec('meds');
+  check('today: a tap opens a folded section', G._todayOpen.meds === true && _b.style.display === '' && _c.textContent === '▾');
+  G.toggleTodaySec('meds');
+  check('  …and a second tap folds it again', G._todayOpen.meds === false && _b.style.display === 'none');
+  G.document.getElementById = _gid;
+  check('today: supplements use the same folding header', /todaySecHeader\('supps'/.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-supplements.js'), 'utf8')));
+  const _mj = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-meds.js'), 'utf8');
+  check('meds: a delete says it is global', /confirmGlobalDelete\('this medication'\)/.test(_mj));
+  check('meds: no compound data or prices in the tab', !/price|usd|€/i.test(_mj));
+}
+
+// ── The profile weight follows the newest weigh-in (2026-11-01) ──────────────
+// loadUserWeight/saveUserWeight called /weight, which the backend never had: every call 404'd and
+// user_weight stayed at the onboarding value (85.2 kg) while the weight log said 88.0.
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  check('profile weight: nothing calls the /weight route the backend does not have',
+    !/AGENT_URL\+'\/weight'[,)]/.test(_src));
+  const _f = G.fetch, _ls = G.localStorage, _pp = G.pushPepSettingsToAgent, _store = {user_weight: '85.2'}, _pushed = [];
+  G.localStorage = {getItem: k => (k in _store ? _store[k] : null), setItem: (k, v) => { _store[k] = String(v); }, removeItem: k => { delete _store[k]; }};
+  G.pushPepSettingsToAgent = kv => { _pushed.push(kv); };
+  let _url = '';
+  G.fetch = async url => { _url = url; return {ok: true, json: async () => [{date: '2026-6-12', weight: 89.8}, {date: '2026-10-25', weight: 88.0}]}; };
+  const _p = G.loadUserWeight();
+  G.fetch = _f;   // restored at once: other async checks share this sandbox
+  (async () => {
+    await _p;
+    G.localStorage = _ls; G.pushPepSettingsToAgent = _pp;
+    check('profile weight: loading reads the weight log', /\/weights$/.test(_url));
+    check('  …and takes the newest weigh-in', G._userWeight === 88 && _store.user_weight === '88');
+    check('  …and writes it to the backend profile too', _pushed.length === 1 && _pushed[0].user_weight === 88);
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('profile weight: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── The Today rings count medication (2026-11-01: "the rings dont include meds tracking") ──
+{
+  const _sv = {c: G._injectionsCache, s: G._supplements, m: G._meds, l: G._medLog, p: G._syncPending, r: G._injCacheReady, g: G.document.getElementById};
+  const _rd = new Date(2026, 10, 1);
+  G._injectionsCache = {}; G._injectionsCache[G.dateKey(_rd)] = [{id: 'a', compound_id: 'a', time_of_day: 'AM', active: true, logged: true},
+                                                              {id: 'b', compound_id: 'b', time_of_day: 'AM', active: true, logged: false}];
+  G._supplements = [];
+  G._meds = [{id: 'm1', name: 'A', tablets_per_day: 1, start_date: '2026-10-01'}, {id: 'm2', name: 'B', tablets_per_day: 0.5, start_date: '2026-10-01'}];
+  G._medLog = {'m1|2026-11-01': true};
+  const st = G._ringStats(_rd);
+  check('rings: medication is counted, one tick per medication a day', st.mTot === 2 && st.mDone === 1, JSON.stringify(st));
+  const _el = {innerHTML: ''};
+  G._syncPending = false; G._injCacheReady = true;
+  G.document.getElementById = id => id === 'today-rings' ? _el : null;
+  const _NOW = G.NOW; G.NOW = _rd;
+  G.buildTodayRings();
+  const h = _el.innerHTML;
+  check('rings: a Medication ring and legend row, between Doses and Supplements',
+    /Medication/.test(h) && (h.match(/<circle /g) || []).length === 8 && h.indexOf('Doses') < h.indexOf('Medication'));
+  check('  …and the total % includes it (2 of 4 ticked = 50%)', />50%</.test(h));
+  G._meds = [];
+  G.buildTodayRings();
+  check('  …with no medication the card keeps its three rings', !/Medication/.test(_el.innerHTML) && (_el.innerHTML.match(/<circle /g) || []).length === 6);
+  check('rings: ticking a medication refreshes them', /toggleMedDose[\s\S]*?buildTodayRings\(\)/.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-meds.js'), 'utf8')));
+  G.NOW = _NOW;
+  G._injectionsCache = _sv.c; G._supplements = _sv.s; G._meds = _sv.m; G._medLog = _sv.l; G._syncPending = _sv.p; G._injCacheReady = _sv.r; G.document.getElementById = _sv.g;
+}
+
+// ── Water from drinks logged as food (2026-11-01: "the water in milk needs to be counted") ──
+{
+  const _svF = G._flRows, _svW = G._wlRows, _svT = G._wlTarget, _svO = G._wlOwn;
+  G._wlRows = [{id: 'w', ml: 500, created_at: 1}]; G._wlTarget = {ml: 3000}; G._wlOwn = 0; G._wlBusy = false; G._wlErr = '';
+  G._flRows = [{id: 'a', food: 'Milk', amount: '300 ml', kcal: 150, water_ml: 268}, {id: 'b', food: 'Bread', amount: '50 g', kcal: 130, water_ml: 0},
+               {id: 'c', food: 'Old row', amount: '200 ml', kcal: 90}];
+  const h = G._wlHtml();
+  check('water: drinks in the food log count (500 + 268 = 0.8 L)', /0\.8 L<\/b> \/ 3\.0 L/.test(h) && /Includes 268 ml from drinks in the food log/.test(h));
+  G._flRows = [];
+  check('  …and without drinks there is no such line', !/from drinks/.test(G._wlHtml()));
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  check('water: a change to the food log redraws the water card', /function _flRender\(\)\{if\(typeof _wlRender==='function'\)_wlRender\(\);/.test(_src));
+  check('food edit: a corrected amount rescales the water in a drink', /body\.water_ml=_flNum\(_flNum\(row\.water_ml\)\*gNew\/g0\.n\)/.test(_src));
+  G._flRows = _svF; G._wlRows = _svW; G._wlTarget = _svT; G._wlOwn = _svO;
+}
+
+// ── Water: a failed target request is said as such (2026-11-01) ──────────────
+// The backend restarted mid-request and the card told a user with 88 kg logged to add his weight.
+{
+  const _sv = {t: G._wlTarget, f: G._wlTargetFail, o: G._wlOwn, r: G._wlRows, fl: G._flRows};
+  G._wlTarget = null; G._wlOwn = 0; G._wlRows = []; G._flRows = []; G._wlBusy = false; G._wlErr = '';
+  G._wlTargetFail = true;
+  let h = G._wlHtml();
+  check('water: a failed target request says so and offers a retry, not "add your weight"',
+    /could not be loaded/.test(h) && /buildWaterLog\(\)/.test(h) && !/add your weight/.test(h));
+  G._wlTargetFail = false;
+  h = G._wlHtml();
+  check('  …while a missing weight still asks for one', /add your weight/.test(h) && !/could not be loaded/.test(h));
+  G._wlTarget = _sv.t; G._wlTargetFail = _sv.f; G._wlOwn = _sv.o; G._wlRows = _sv.r; G._flRows = _sv.fl;
 }

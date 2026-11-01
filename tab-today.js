@@ -66,7 +66,20 @@ function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(functio
 // further than a year ever did. Keep this window short.
 var WEEK_STRIP_BACK=7,WEEK_STRIP_FWD=6;
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';/* The calendar card sits at the far-left end of the strip, where scrolling back runs out: past is to the left, so this is the last card in that direction. With the window back to a week it is the only way to reach an older day. */var _calCard=document.createElement('div');_calCard.className='week-day week-cal';_calCard.style.cursor='pointer';_calCard.onclick=function(){showMonthCalendar();};_calCard.innerHTML='<div class="week-day-name">ALL</div>'+'<div class="week-day-num" style="font-family:inherit;font-size:16px">\u25a6</div>'+'<div class="week-dots"></div>';strip.appendChild(_calCard);const start=new Date(NOW);start.setDate(NOW.getDate()-WEEK_STRIP_BACK);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<WEEK_STRIP_BACK+1+WEEK_STRIP_FWD;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dk=dateKey(d);var dMid=new Date(d);dMid.setHours(0,0,0,0);var nMid=new Date(NOW);nMid.setHours(0,0,0,0);var isPast=dMid<nMid;var entries=_injectionsCache[dk]||[];var dots=[];var dotsDim=[];if(isPast){var logged=entries.filter(function(e){return e.logged;});if(logged.length){logged.forEach(function(e){dots.push(e.dot);});}else{var _act=entries.filter(function(e){return e.active;});if(_act.length){_act.forEach(function(e){dotsDim.push(e.dot);});}else if(!entries.length){var _pld=getPastDoses(d);if(_pld){var _bSeen={};_pld.forEach(function(di){var bid=di.substring(0,di.lastIndexOf('_'));if(!_bSeen[bid]){_bSeen[bid]=true;var inf=_findWeeklyItemInfo(bid);if(inf&&inf.dot)dots.push(inf.dot);}});}}}}else{entries.filter(function(e){return e.active;}).forEach(function(e){dots.push(e.dot);});}const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){var _tb=document.getElementById('tab-btn-today');if(_tb)switchTab('today',_tb);showDayInline(dd,ee);};})(d,el);var _dotSrc=dots.length?dots:dotsDim;var _dotDim=!dots.length&&dotsDim.length;const dotHtml=[...new Set(_dotSrc)].slice(0,3).map(function(col){return'<div class="week-dot" style="background:'+col+(_dotDim?';opacity:0.3':'')+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
-function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();if(typeof renderTodayLogDraw==='function')renderTodayLogDraw();if(typeof renderTodaySupplements==='function')renderTodaySupplements(NOW);const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";const _ci=document.getElementById('today-cycle-info');if(_ci){const _st=_userStacks[_activeStackIndices[0]];const _cs=_st&&_st.cycle_start;/* THE STORED LENGTH, NEVER AN INVENTED ONE. This read `_st.cycle_length||12`, so a protocol with no end date still printed "Week 12 of 12 · Ends <date>" — a cycle nobody had configured, stated as fact. It cost a full misdiagnosis on 2026-08-15: the header was taken as evidence the cycle had ended, and the search went to the wrong protocol entirely. A missing end date is a real state; say it. */const _cl=_st&&_st.cycle_length;if(_cs){const _sd=parseLocalDate(_cs);if(_cl>0){const _ed=new Date(_sd.getTime()+_cl*7*86400000);const _dd=Math.max(0,Math.floor((NOW-_sd)/86400000));const _wk=Math.min(_cl,Math.floor(_dd/7)+1);_ci.textContent='Started '+fmtDate(_sd)+' · Week '+_wk+' of '+_cl+' · Ends '+fmtDate(_ed);}else{const _d2=Math.max(0,Math.floor((NOW-_sd)/86400000));_ci.textContent='Started '+fmtDate(_sd)+' · Week '+(Math.floor(_d2/7)+1)+' · No end date';}}else{_ci.textContent='';}}if(_syncPending||!_injCacheReady){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';
+// ── Collapsible Today sections (Henrik, 2026-11-01: "make the sections on Today collapsible,
+// keeping meds and supplements minimised as default and injections expanded as default") ──
+// The state is for this visit only: every launch opens with injections expanded and the other
+// two folded, which is the default asked for.
+var _todayOpen={doses:true,meds:false,supps:false};
+function todaySecHeader(k,title,dot,done,total){
+  return '<div class="card-header" onclick="toggleTodaySec(\''+k+'\')" style="cursor:pointer"><div class="card-title-wrap">'+
+    '<span id="today-chev-'+k+'" style="color:var(--muted2);font-size:12px;width:12px;display:inline-block">'+(_todayOpen[k]?'▾':'▸')+'</span>'+
+    '<div class="card-dot" style="background:'+dot+'"></div><div class="card-title">'+title+'</div></div>'+
+    '<span class="card-badge '+(total&&done===total?'badge-done':'badge-today')+'">'+done+' / '+total+'</span></div>';
+}
+function todaySecBody(k,inner){return '<div id="today-sec-'+k+'"'+(_todayOpen[k]?'':' style="display:none"')+'>'+inner+'</div>';}
+function toggleTodaySec(k){_todayOpen[k]=!_todayOpen[k];var b=document.getElementById('today-sec-'+k);if(b)b.style.display=_todayOpen[k]?'':'none';var c=document.getElementById('today-chev-'+k);if(c)c.textContent=_todayOpen[k]?'▾':'▸';}
+function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();if(typeof buildWhatsNewCard==='function')buildWhatsNewCard();if(typeof renderTodayLogDraw==='function')renderTodayLogDraw();if(typeof renderTodayMeds==='function')renderTodayMeds(NOW);if(typeof renderTodaySupplements==='function')renderTodaySupplements(NOW);const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";const _ci=document.getElementById('today-cycle-info');if(_ci){const _st=_userStacks[_activeStackIndices[0]];const _cs=_st&&_st.cycle_start;/* THE STORED LENGTH, NEVER AN INVENTED ONE. This read `_st.cycle_length||12`, so a protocol with no end date still printed "Week 12 of 12 · Ends <date>" — a cycle nobody had configured, stated as fact. It cost a full misdiagnosis on 2026-08-15: the header was taken as evidence the cycle had ended, and the search went to the wrong protocol entirely. A missing end date is a real state; say it. */const _cl=_st&&_st.cycle_length;if(_cs){const _sd=parseLocalDate(_cs);if(_cl>0){const _ed=new Date(_sd.getTime()+_cl*7*86400000);const _dd=Math.max(0,Math.floor((NOW-_sd)/86400000));const _wk=Math.min(_cl,Math.floor(_dd/7)+1);_ci.textContent='Started '+fmtDate(_sd)+' · Week '+_wk+' of '+_cl+' · Ends '+fmtDate(_ed);}else{const _d2=Math.max(0,Math.floor((NOW-_sd)/86400000));_ci.textContent='Started '+fmtDate(_sd)+' · Week '+(Math.floor(_d2/7)+1)+' · No end date';}}else{_ci.textContent='';}}if(_syncPending||!_injCacheReady){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';
 // ── TESTOSTERONE CONFIGURED BUT NOT SCHEDULED ───────────────────────────────
 // Since 2026-08-14 T-Calc is the only thing that schedules testosterone: _genInjBatches
 // suppresses it in BOTH tiers (_isTestosteroneComp — the whole trt tier, and any
@@ -565,9 +578,15 @@ function _ringStats(refDate){
     var dstr=_suppDateKey(now);
     _supplementsForDay(now).forEach(function(s){_suppSlots(s.timing).forEach(function(slot){sTot++;if(_suppIsTaken(s.supp_id,dstr,slot))sDone++;});});
   }
+  // Medication (2026-11-01: "the rings dont include meds tracking"): one tick per medication a day.
+  var mTot=0,mDone=0;
+  if(typeof _medsForDay==='function'&&typeof _medDateKey==='function'){
+    var mstr=_medDateKey(now);
+    _medsForDay(now).forEach(function(m){mTot++;if(_medLog[_medLogKey(m.id,mstr)])mDone++;});
+  }
   var wTot=0,wDone=0;
   for(var i=0;i<7;i++){var day=new Date(now);day.setDate(day.getDate()-i);var wd=_dedupInjectionSlots((_injectionsCache[dateKey(day)]||[]).filter(function(e){return e.active;}));wTot+=wd.length;wDone+=wd.filter(function(e){return e.logged;}).length;}
-  return{dDone:dDone,dTot:dTot,sDone:sDone,sTot:sTot,wDone:wDone,wTot:wTot};
+  return{dDone:dDone,dTot:dTot,mDone:mDone,mTot:mTot,sDone:sDone,sTot:sTot,wDone:wDone,wTot:wTot};
 }
 // Consecutive fully-logged days. A day with scheduled doses counts when ALL are
 // logged and breaks the streak otherwise; an incomplete today is skipped (the day
@@ -591,25 +610,33 @@ function _calcDoseStreak(refDate){
   }
   return streak;
 }
-function _ringCircle(r,frac,color){
-  var c=2*Math.PI*r;var off=c*(1-Math.max(0,Math.min(1,frac)));
-  return '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:var(--surface2)" stroke-width="9"/>'+
-         '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:'+color+'" stroke-width="9" stroke-linecap="round" stroke-dasharray="'+c.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'"/>';
+function _ringCircle(r,frac,color,w){
+  w=w||9;var c=2*Math.PI*r;var off=c*(1-Math.max(0,Math.min(1,frac)));
+  return '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:var(--surface2)" stroke-width="'+w+'"/>'+
+         '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:'+color+'" stroke-width="'+w+'" stroke-linecap="round" stroke-dasharray="'+c.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'"/>';
 }
 function buildTodayRings(){
   var el=document.getElementById('today-rings');if(!el)return;
   if(_syncPending||!_injCacheReady){el.innerHTML='';return;}
   var st=_ringStats();
-  if(st.dTot+st.sTot===0){el.innerHTML='';return;}
-  var pct=Math.round(100*(st.dDone+st.sDone)/(st.dTot+st.sTot));
+  if(st.dTot+st.mTot+st.sTot===0){el.innerHTML='';return;}
+  var pct=Math.round(100*(st.dDone+st.mDone+st.sDone)/(st.dTot+st.mTot+st.sTot));
   var streak=_calcDoseStreak();
-  var svg='<svg width="120" height="120" viewBox="0 0 120 120" style="flex-shrink:0"><g transform="rotate(-90 60 60)">'+
-    _ringCircle(50,st.dTot?st.dDone/st.dTot:0,'var(--accent)')+
-    _ringCircle(38,st.sTot?st.sDone/st.sTot:0,'var(--teal)')+
-    _ringCircle(26,st.wTot?st.wDone/st.wTot:0,'var(--accent4)')+
-    '</g><text x="60" y="66" text-anchor="middle" style="fill:var(--text);font-family:var(--font-mono);font-size:17px">'+pct+'%</text></svg>';
+  // With medication there are four rings, so they are a little thinner and closer; without it the
+  // card is exactly as before.
+  var rings=st.mTot
+    ? _ringCircle(52,st.dTot?st.dDone/st.dTot:0,'var(--accent)',8)+
+      _ringCircle(42,st.mDone/st.mTot,'var(--accent2)',8)+
+      _ringCircle(32,st.sTot?st.sDone/st.sTot:0,'var(--teal)',8)+
+      _ringCircle(22,st.wTot?st.wDone/st.wTot:0,'var(--accent4)',8)
+    : _ringCircle(50,st.dTot?st.dDone/st.dTot:0,'var(--accent)')+
+      _ringCircle(38,st.sTot?st.sDone/st.sTot:0,'var(--teal)')+
+      _ringCircle(26,st.wTot?st.wDone/st.wTot:0,'var(--accent4)');
+  var svg='<svg width="120" height="120" viewBox="0 0 120 120" style="flex-shrink:0"><g transform="rotate(-90 60 60)">'+rings+
+    '</g><text x="60" y="'+(st.mTot?65:66)+'" text-anchor="middle" style="fill:var(--text);font-family:var(--font-mono);font-size:'+(st.mTot?14:17)+'px">'+pct+'%</text></svg>';
   function row(color,label,val){return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted2);margin-bottom:6px"><span style="width:7px;height:7px;border-radius:50%;background:'+color+';flex-shrink:0"></span>'+label+' <span style="font-family:var(--font-mono);color:var(--text)">'+val+'</span></div>';}
   var leg=row('var(--accent)','Doses',st.dDone+'/'+st.dTot);
+  if(st.mTot)leg+=row('var(--accent2)','Medication',st.mDone+'/'+st.mTot);
   if(st.sTot)leg+=row('var(--teal)','Supplements',st.sDone+'/'+st.sTot);
   if(st.wTot)leg+=row('var(--accent4)','7-day',Math.round(100*st.wDone/st.wTot)+'%');
   var chip=streak>=2?'<div style="margin-top:10px"><span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border-radius:20px;color:var(--accent);border:1px solid rgba(232,255,60,0.4);background:rgba(232,255,60,0.08)">\u26a1 '+streak+'-day streak</span></div>':'';
