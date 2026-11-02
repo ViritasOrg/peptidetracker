@@ -248,7 +248,7 @@
 const VERSION='1.354';
 // BUILD_NO counts staging builds and is never rewritten by Push to Prod (which resets VERSION to
 // prod's own counter). The What's new card is keyed to it, so its rows show in both apps (2026-11-01).
-const BUILD_NO='1.884';
+const BUILD_NO='1.887';
 const IS_STAGING=(window.location.pathname||'').startsWith('/peptidetracker-staging');
 // Backend data namespace, sent as X-App-Id on every call. Staging gets its own so
 // testing here cannot write over production data — before 2026-08-01 both sent no
@@ -3419,7 +3419,7 @@ function buildAppearanceCard(){
 }
 function buildRefsCard(){var card=document.getElementById('s-refs-card');if(!card)return;var n=Object.keys(_CITATIONS||{}).length;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('refs','Research & References')+sSecBody('refs')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.55">Every dose tier in this app carries an evidence grade and the sources behind it. '+(n?(n+' references loaded.'):'References load with the compound catalogue.')+'</div>'+'<div style="display:flex;gap:8px;flex-wrap:wrap">'+'<button onclick="openAllReferences()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">All references</button>'+'<button onclick="openGradeLegend()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Evidence grades</button>'+'</div></div></div></div>';}
 function buildCacheCard(){var card=document.getElementById('s-cache-card');if(!card)return;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('cache','Local Cache')+sSecBody('cache')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">All data is stored on the server. Clear the local cache to force a full re-sync.</div><button onclick="wipeLocalCache()" style="background:var(--danger,#ff3c3c);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Wipe local cache</button></div></div></div>';}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncCompoundNicknames();syncEnhancedCompoundsFromAgent();if(typeof _wizUserIsFemale==='function'&&_wizUserIsFemale()&&typeof syncFemaleAdviceFromAgent==='function')syncFemaleAdviceFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncMedsFromAgent==='function'){syncMedsFromAgent();syncMedLogFromAgent();}if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncCompoundNicknames();syncCatalogUntilLoaded();if(typeof _wizUserIsFemale==='function'&&_wizUserIsFemale()&&typeof syncFemaleAdviceFromAgent==='function')syncFemaleAdviceFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncMedsFromAgent==='function'){syncMedsFromAgent();syncMedLogFromAgent();}if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
 function initTabVis(){const saved=getData('proto-tab-vis',{});_tabVis=Object.assign({},TAB_DEFAULTS,saved);applyTabVis();}
 async function pushPepSettingsToAgent(kv){try{const r=await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:kv})});if(!r.ok)_logHttp('pushPepSettings',r.status,'/user-settings');}catch(e){_logErr('pushPepSettings',e);}}
 // Seed the staging environment with a copy of this account's production data.
@@ -3970,11 +3970,12 @@ function _wlFoodMl(){return(typeof _flRows!=='undefined'?_flRows:[]).reduce(func
 function _wlL(ml){return(Math.round(ml/100)/10).toFixed(1)+' L';}
 function _wlGoal(){return _wlOwn>0?_wlOwn:(_wlTarget&&_wlTarget.ml)||0;}
 function _wlHtml(){
+  if(_wlLoading)return '<div style="font-size:12px;color:var(--muted)">Water today: loading…</div>';
   var food=Math.round(_wlFoodMl()),tot=_wlTotal(_wlRows)+food,goal=_wlGoal();
   var pct=goal>0?Math.min(100,Math.round(tot/goal*100)):0;
   // A failed request is said as such, never as a missing weight (2026-11-01: the backend restarted
   // mid-request and the card told a user with 88 kg logged to add his weight).
-  var basis=_wlOwn>0?'your own target':(_wlTarget?'from your body weight, sex and age (Yamada 2022)':(_wlTargetFail?'the target could not be loaded <span onclick="buildWaterLog()" style="text-decoration:underline;cursor:pointer">Try again</span>':'add your weight in your profile to get a target'));
+  var basis=_wlOwn>0?'your own target':(_wlTarget?'from your body weight, sex and age (Yamada 2022)':(_wlTargetFail?'the target could not be loaded <span onclick="buildWaterLog()" style="text-decoration:underline;cursor:pointer">Try again</span>':(_wlTargetBusy?'loading your target…':'add your weight in your profile to get a target')));
   var h='<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:12px;color:var(--muted)">Water today</span>'+
     '<span style="font-size:15px;color:var(--text)"><b>'+_wlL(tot)+'</b>'+(goal?' / '+_wlL(goal):'')+'</span></div>';
   if(goal)h+='<div style="height:8px;border-radius:4px;background:var(--surface2);margin:8px 0 4px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:#4fb3ff"></div></div>';
@@ -3991,16 +3992,33 @@ function _wlRender(){var el=document.getElementById('water-log-body');if(el)el.i
 // (2026-11-01: the profile still said 85.2 kg while the weight log said 88.0).
 function _wlDateNum(d){var p=String(d||'').split('-');return p.length===3?(+p[0])*10000+(+p[1])*100+(+p[2]):0;}
 function _wlLatestWeight(rows){var best=null;(rows||[]).forEach(function(r){var w=parseFloat(r&&(r.weight!=null?r.weight:r.kg));if(!(w>=25))return;if(!best||_wlDateNum(r.date)>_wlDateNum(best.date))best={date:r.date,weight:w};});return best;}
-async function _wlLoadTarget(){var p=_wlProfile();_wlTarget=null;_wlTargetFail=false;
-  try{var rw=await fetch(AGENT_URL+'/weights',{headers:authHeaders()});if(rw.ok){var lw=_wlLatestWeight(await rw.json());if(lw)p.weight=lw.weight;}else _wlTargetFail=true;}catch(e){_wlTargetFail=true;}
+// A request that never answers counts as failed after WL_FETCH_MS (2026-11-02: a request
+// caught in a backend restart hung, and the card said "add your weight" meanwhile).
+var WL_FETCH_MS=15000,_wlTargetBusy=false;
+function _wlFetchWithin(url,opts,ms){var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;var tid=null;
+  var late=new Promise(function(_,rej){tid=setTimeout(function(){try{if(ctrl)ctrl.abort();}catch(e){}rej(new Error('timeout'));},ms);});
+  var o=Object.assign({},opts||{});if(ctrl)o.signal=ctrl.signal;
+  return Promise.race([fetch(url,o),late]).then(function(r){clearTimeout(tid);return r;},function(e){clearTimeout(tid);throw e;});}
+async function _wlLoadTarget(){_wlTargetBusy=true;try{await _wlLoadTargetNow();}finally{_wlTargetBusy=false;}}
+async function _wlLoadTargetNow(){var p=_wlProfile();_wlTarget=null;_wlTargetFail=false;
+  try{var rw=await _wlFetchWithin(AGENT_URL+'/weights',{headers:authHeaders()},WL_FETCH_MS);if(rw.ok){var lw=_wlLatestWeight(await rw.json());if(lw)p.weight=lw.weight;}else _wlTargetFail=true;}catch(e){_wlTargetFail=true;}
   if(!(p.weight>=25))return;_wlTargetFail=false;
   var q='weight_kg='+encodeURIComponent(p.weight)+'&sex='+encodeURIComponent(p.sex)+(p.age?'&age='+encodeURIComponent(p.age):'')+'&athlete=true';
-  try{var r=await fetch(AGENT_URL+'/water-log/target?'+q,{headers:authHeaders()});if(r.ok)_wlTarget=await r.json();else _wlTargetFail=true;}catch(e){_wlTargetFail=true;}}
+  try{var r=await _wlFetchWithin(AGENT_URL+'/water-log/target?'+q,{headers:authHeaders()},WL_FETCH_MS);if(r.ok)_wlTarget=await r.json();else _wlTargetFail=true;}catch(e){_wlTargetFail=true;}}
 async function _wlLoadOwn(){_wlOwn=parseInt(localStorage.getItem('water-goal-ml')||'0')||0;
   try{var r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(r.ok){var s=await r.json();var v=parseInt((s||{})['water-goal-ml'])||0;_wlOwn=v;if(v)localStorage.setItem('water-goal-ml',String(v));else localStorage.removeItem('water-goal-ml');}}catch(e){}}
-async function buildWaterLog(){_wlErr='';_wlRender();
-  try{var r=await fetch(AGENT_URL+'/water-log?date='+_flDay(),{headers:authHeaders()});if(r.ok)_wlRows=await r.json();else _wlErr='Water could not be loaded: the server answered '+r.status+'.';}catch(e){_wlErr='Water could not be loaded: no connection.';}
-  await Promise.all([_wlLoadTarget(),_wlLoadOwn()]);_wlRender();}
+// While the card loads it says so, never the last load's numbers (2026-11-02, Henrik: "Training isn't showing water
+// progress and is also missing 500cl water": the card showed the morning's rows and "add your weight" while the new
+// ones were on their way). Coming back to the app reloads it, since the other app may have added water meanwhile.
+var _wlLoading=false;
+async function buildWaterLog(){_wlErr='';_wlLoading=true;_wlRender();
+  try{
+    try{var r=await _wlFetchWithin(AGENT_URL+'/water-log?date='+_flDay(),{headers:authHeaders()},WL_FETCH_MS);if(r.ok)_wlRows=await r.json();else _wlErr='Water could not be loaded: the server answered '+r.status+'.';}catch(e){_wlErr='Water could not be loaded: no connection.';}
+    await Promise.all([_wlLoadTarget(),_wlLoadOwn()]);
+  }finally{_wlLoading=false;}
+  _wlRender();}
+function _wlReloadIfShown(){if(typeof document==='undefined'||document.hidden)return;var el=document.getElementById('water-log-body');if(el&&el.offsetParent!==null)buildWaterLog();}
+if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('visibilitychange',_wlReloadIfShown);
 async function wlAdd(ml){if(_wlBusy)return;_wlBusy=true;_wlErr='';_wlRender();
   var n=new Date(),t=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
   try{var r=await fetch(AGENT_URL+'/water-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:_flDay(),ml:ml,time:t})});
@@ -4019,23 +4037,23 @@ async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
     if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
   _wlOwn=ml;if(ml)localStorage.setItem('water-goal-ml',String(ml));else localStorage.removeItem('water-goal-ml');_wlRender();}
 </script>
-<script src="inj-writer.js?v=1.353"></script>
-<script src="tab-cycles.js?v=1.353"></script>
-<script src="tab-macros.js?v=1.353"></script>
-<script src="tab-stack.js?v=1.353"></script>
-<script src="tab-today.js?v=1.353"></script>
-<script src="inj-site.js?v=1.353"></script>
-<script src="tab-schedule.js?v=1.353"></script>
-<script src="tab-timeline.js?v=1.353"></script>
-<script src="tab-body.js?v=1.353"></script>
-<script src="tab-recon.js?v=1.353"></script>
-<script src="tab-blood.js?v=1.353"></script>
-<script src="tab-labs.js?v=1.353"></script>
-<script src="tab-tcalc.js?v=1.353"></script>
-<script src="tab-thist.js?v=1.353"></script>
-<script src="tab-tdose.js?v=1.353"></script>
-<script src="tab-supplements.js?v=1.353"></script>
-<script src="tab-meds.js?v=1.353"></script>
+<script src="inj-writer.js?v=1.354"></script>
+<script src="tab-cycles.js?v=1.354"></script>
+<script src="tab-macros.js?v=1.354"></script>
+<script src="tab-stack.js?v=1.354"></script>
+<script src="tab-today.js?v=1.354"></script>
+<script src="inj-site.js?v=1.354"></script>
+<script src="tab-schedule.js?v=1.354"></script>
+<script src="tab-timeline.js?v=1.354"></script>
+<script src="tab-body.js?v=1.354"></script>
+<script src="tab-recon.js?v=1.354"></script>
+<script src="tab-blood.js?v=1.354"></script>
+<script src="tab-labs.js?v=1.354"></script>
+<script src="tab-tcalc.js?v=1.354"></script>
+<script src="tab-thist.js?v=1.354"></script>
+<script src="tab-tdose.js?v=1.354"></script>
+<script src="tab-supplements.js?v=1.354"></script>
+<script src="tab-meds.js?v=1.354"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}if(IS_STAGING){const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
