@@ -21837,6 +21837,56 @@ console.log('\n── Food log ────────────────�
   check('food log: deletes go through confirmGlobalDelete',
     /function flEditDelete[\s\S]*?confirmGlobalDelete\(/.test(_flBlock) && /function flRemoveKey[\s\S]*?confirmGlobalDelete\(/.test(_flBlock) && !/[^.]confirm\('/.test(_flBlock));
 
+  // Token cost (Henrik, 2026-11-03: "Both apps needs a token cost view, calculated weekly and monthly
+  // token spend in users choice of currency (default EUR)").
+  {
+    const wk = (label, calls, cost) => ({label, start: '2026-11-02', calls, input_tokens: 1200, output_tokens: 800, cost, unpriced_calls: 0});
+    G._tkErr = '';
+    G._tkCost = {currency: 'SEK', rate: 9.2, currencies: ['EUR', 'SEK', 'USD'],
+                 weeks: [wk('Week 45', 3, 1.5), wk('Week 44 <b>', 0, 0)], months: [wk('November 2026', 3, 12.25)]};
+    const h = G._tkCostCardHtml();
+    check('token cost: weekly and monthly tables with calls, tokens and cost in the chosen currency',
+      /Weekly/.test(h) && /Monthly/.test(h) && /Week 45/.test(h) && /November 2026/.test(h) && /2\.0 k/.test(h) && /SEK/.test(h) && /12[.,]25/.test(h));
+    check('token cost: the currency picker lists the currencies with the chosen one selected and saves on change',
+      /<option selected>SEK<\/option>/.test(h) && /<option>EUR<\/option>/.test(h) && /tkSetCurrency\(this\.value\)/.test(h));
+    check('token cost: labels are escaped', h.indexOf('Week 44 <b>') < 0 && h.indexOf('Week 44 &lt;b&gt;') >= 0);
+    G._tkCost = Object.assign({}, G._tkCost, {rate: null, weeks: [wk('Week 45', 1, null)]});
+    const n = G._tkCostCardHtml();
+    check('token cost: no exchange rate shows no figure and says why, never a guessed amount',
+      /No exchange rate for SEK/.test(n) && /–/.test(n));
+    G._tkCost = null; G._tkErr = '';
+  }
+  // The load and the currency save, in their own sandbox holding only this block, so the
+  // recorded fetch cannot collide with the suite's other async tests.
+  (async () => {
+    const _tkSrc = fs.readFileSync(htmlPath, 'utf8');
+    const _tkBlock = _tkSrc.slice(_tkSrc.indexOf('// Token cost (Henrik'), _tkSrc.indexOf('function flOpenKeySettings('));
+    const seen = [];
+    let mode = 'ok';
+    const T = vm.createContext({
+      AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), JSON, Intl, encodeURIComponent,
+      _flEsc: (x) => String(x), _flSecCard: (id, label, body) => body,
+      document: {getElementById: () => null},
+      fetch: async (url, opt) => {
+        seen.push({url, m: (opt && opt.method) || 'GET', body: opt && opt.body});
+        if (mode === 'fail') return {ok: false, status: 500, json: async () => ({})};
+        if (/\/token-cost\/currency$/.test(url)) return {ok: true, status: 200, json: async () => ({ok: true})};
+        return {ok: true, status: 200, json: async () => ({currency: seen.some(x => x.m === 'PUT') ? 'USD' : 'EUR', rate: 1, currencies: ['EUR', 'USD'], weeks: [], months: []})};
+      },
+    });
+    vm.runInContext(_tkBlock, T);
+    await T.buildTokenCostCard();
+    const first = T._tkCost && T._tkCost.currency;
+    await T.tkSetCurrency('USD');
+    check('token cost: loads the cost (EUR by default) with the device\'s time zone',
+      first === 'EUR' && /\/token-cost\?tz=/.test(seen[0].url));
+    check('token cost: a picked currency is saved on the backend and the view reloads in it',
+      seen.some(x => x.m === 'PUT' && /\/token-cost\/currency$/.test(x.url) && JSON.parse(x.body).currency === 'USD') && T._tkCost.currency === 'USD');
+    check('token cost: nothing is kept in localStorage (the backend keeps the choice)', !/localStorage|setData\(/.test(_tkBlock));
+    mode = 'fail';
+    await T.buildTokenCostCard();
+    check('token cost: a failed load says so', /HTTP 500/.test(T._tkCostCardHtml()));
+  })();
   // Today's intake against the Macros tab's targets (2026-10-21).
   const _flSaveT = G._macrosTargets;
   G._flKey = {set: true, last4: 'WXYZ'}; G._flErr = ''; G._flPending = null; G._flBusy = false;
@@ -22555,4 +22605,45 @@ console.log('\n── Medication ───────────────�
     release();
     if (failed > 0) process.exitCode = 1;
   })().catch(e => { check('water: loading checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
+// ── Water: a request that fails before it leaves the phone is tried again (2026-11-02 21:11) ──
+// "Water could not be loaded: no connection." while the backend logged no /water-log at all, and the /weights sent a
+// moment later arrived: the first request after the phone woke the app failed on the phone.
+{
+  const _src = require('fs').readFileSync(htmlPath, 'utf8');
+  const _a = _src.indexOf('// ── Water (Macros)'), _b = _src.indexOf('async function wlAdd(');
+  const mk = (failures) => {
+    const els = {}, calls = [];
+    let left = failures;
+    const W = require('vm').createContext({Promise, Object, Error, JSON, Math, Number, String, parseInt, parseFloat,
+      _flBtn: () => '', _flCard: (h) => h, _flEsc: (s) => String(s), _flNum: (v) => Number(v) || 0,
+      AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), _flDay: () => '2026-11-02', _flRows: [],
+      AbortController: class { constructor() { this.signal = {}; } abort() {} },
+      setTimeout: (f, ms) => { if (ms < 5000) Promise.resolve().then(f); return 1; }, clearTimeout: () => {},
+      localStorage: {getItem: () => null, setItem: () => {}, removeItem: () => {}}, getData: (k, d) => d,
+      document: {hidden: false, addEventListener: () => {},
+        getElementById: id => { if (!els[id]) { let h = ''; els[id] = {offsetParent: {}}; Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; }}); } return els[id]; }},
+      fetch: (url) => { calls.push(url);
+        if (/\/water-log\?/.test(url)) { if (left-- > 0) return Promise.reject(new TypeError('Load failed'));
+          return Promise.resolve({ok: true, json: async () => [{id: 'a', ml: 500}, {id: 'b', ml: 500}]}); }
+        if (/\/weights/.test(url)) return Promise.resolve({ok: true, json: async () => [{date: '2026-11-02', weight: 88}]});
+        if (/\/water-log\/target/.test(url)) return Promise.resolve({ok: true, json: async () => ({ml: 3100})});
+        return Promise.resolve({ok: true, json: async () => ({})}); },
+    });
+    require('vm').runInContext(_src.slice(_a, _b), W);
+    return {W, els, calls};
+  };
+  (async () => {
+    const one = mk(1);
+    await one.W.buildWaterLog();
+    const h = one.els['water-log-body'].innerHTML;
+    check('water: a request that fails on the phone is tried again and the card loads',
+      /1\.0 L<\/b> \/ 3\.1 L/.test(h) && !/could not be loaded/.test(h) && one.calls.filter(u => /\/water-log\?/.test(u)).length === 2);
+    const all = mk(9);
+    await all.W.buildWaterLog();
+    check('  …three tries at most, then it says so',
+      /no connection/.test(all.els['water-log-body'].innerHTML) && all.calls.filter(u => /\/water-log\?/.test(u)).length === 3);
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('water: retry checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }

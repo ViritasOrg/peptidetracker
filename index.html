@@ -163,6 +163,7 @@
       </div>
     </div>
     <div id="fl-key-card" style="margin-top:14px"></div>
+    <div id="fl-cost-card" style="margin-top:14px"></div>
     <div id="fl-import-card" style="margin-top:14px"></div>
     <div id="s-deploy-card" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;display:none;">
       <div class="s-sec-hdr" onclick="toggleSSec('deploy')">Deploy<span class="s-chev">▾</span></div>
@@ -248,7 +249,7 @@
 const VERSION='1.355';
 // BUILD_NO counts staging builds and is never rewritten by Push to Prod (which resets VERSION to
 // prod's own counter). The What's new card is keyed to it, so its rows show in both apps (2026-11-01).
-const BUILD_NO='1.887';
+const BUILD_NO='1.891';
 const IS_STAGING=(window.location.pathname||'').startsWith('/peptidetracker-staging');
 // Backend data namespace, sent as X-App-Id on every call. Staging gets its own so
 // testing here cannot write over production data — before 2026-08-01 both sent no
@@ -3263,6 +3264,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
+  {v:'1.891',title:'Token cost',text:'Settings → AI · Token cost shows what the AI calls on your own key cost each week and each month, in the currency you pick (EUR to start with).'},
   {v:'1.875',title:'Medication and water',text:'Plan → Medication: take a photo of a medicine package to fill in its name and strength, pick how many tablets a day, and tick it on Today. Macros now logs water, with a daily target worked out from your body weight. Today\'s sections fold: tap a heading.'},
   {v:'1.863',title:'Macro targets per day',text:'Food Edit shows the targets in force on any day and lets you set them from that day onward, so the history card measures each day against the right goals. Use it to fill in the periods of an imported log.'},
   {v:'1.862',title:'Animated tour',text:'The Setup Wizard now ends with a short animated tour: starting a protocol, ticking doses, your levels and tracking macros. Watch it again from the button at the top of Settings.'},
@@ -3789,7 +3791,7 @@ function _flKeyCardHtml(){
 // by default (Henrik, 2026-10-22: "they should be default collapsed like all others").
 function _flSecCard(id,label,body){return'<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr(id,label)+sSecBody(id)+'<div style="padding:14px 16px">'+body+'</div></div></div>';}
 function _flRenderKeyCard(){var el=document.getElementById('fl-key-card');if(el)el.innerHTML=_flKeyCardHtml();}
-async function buildFlKeyCard(){_flRenderImportCard();try{var r=await fetch(AGENT_URL+'/food-log/key',{headers:authHeaders()});if(r.ok)_flKey=await r.json();}catch(e){}_flRenderKeyCard();}
+async function buildFlKeyCard(){_flRenderImportCard();try{var r=await fetch(AGENT_URL+'/food-log/key',{headers:authHeaders()});if(r.ok)_flKey=await r.json();}catch(e){}_flRenderKeyCard();buildTokenCostCard();}
 function flStartChange(){_flKeyChanging=true;_flErr='';_flProv=_flProvOf(_flKey&&_flKey.provider||'gemini').id;_flRenderKeyCard();}
 function flCancelChange(){_flKeyChanging=false;_flErr='';_flRenderKeyCard();}
 function _flOpenSettingsAt(id,sec){
@@ -3797,6 +3799,33 @@ function _flOpenSettingsAt(id,sec){
   else if(typeof switchTab==='function')switchTab('settings',document.getElementById('tab-btn-settings'));
   if(!_sOpen[sec])toggleSSec(sec);                    // the button opens the section it points at
   var c=document.getElementById(id);if(c&&c.scrollIntoView)c.scrollIntoView({block:'start'});}
+// Token cost (Henrik, 2026-11-03: "Both apps needs a token cost view, calculated weekly and monthly
+// token spend in users choice of currency (default EUR)"). The backend records each AI call made on
+// the user's own key (food estimates, medicine packages) and sums it per week and per month in the
+// currency chosen here; the choice is kept on the backend for every app and device.
+var _tkCost=null,_tkErr='';
+function _tkMoney(v,cur){if(v===null||v===undefined)return '–';var d=v>0&&v<1?4:2;try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur,minimumFractionDigits:2,maximumFractionDigits:d}).format(v);}catch(e){return v.toFixed(d)+' '+cur;}}
+function _tkTok(n){n=n||0;return n>=1e6?(n/1e6).toFixed(1)+' M':n>=1e3?(n/1e3).toFixed(n>=1e4?0:1)+' k':String(n);}
+function _tkTable(title,rows,cur){var th='padding:4px 6px;font-size:11px;color:var(--muted);font-weight:600',td='padding:4px 6px;font-size:13px;color:var(--text)';
+  return '<div style="font-size:12px;font-weight:700;color:var(--text);margin:12px 0 4px">'+title+'</div><table style="width:100%;border-collapse:collapse"><tr><th style="'+th+';text-align:left"></th><th style="'+th+';text-align:right">Calls</th><th style="'+th+';text-align:right">Tokens</th><th style="'+th+';text-align:right">Cost</th></tr>'+
+  rows.map(function(r){return '<tr><td style="'+td+'">'+_flEsc(r.label)+'</td><td style="'+td+';text-align:right">'+r.calls+'</td><td style="'+td+';text-align:right">'+_tkTok((r.input_tokens||0)+(r.output_tokens||0))+'</td><td style="'+td+';text-align:right">'+_tkMoney(r.cost,cur)+'</td></tr>';}).join('')+'</table>';}
+function _tkCostCardHtml(){
+  var b;
+  if(_tkErr)b='<div style="font-size:13px;color:var(--danger,#ff3b30)">'+_flEsc(_tkErr)+'</div>';
+  else if(!_tkCost)b='<div style="font-size:13px;color:var(--muted)">Loading…</div>';
+  else{var c=_tkCost,cur=c.currency;
+    b='<label style="font-size:13px;color:var(--text)">Currency <select id="tk-cur" onchange="tkSetCurrency(this.value)" style="margin-left:6px;padding:6px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px">'+
+      (c.currencies||[cur]).map(function(x){return '<option'+(x===cur?' selected':'')+'>'+_flEsc(x)+'</option>';}).join('')+'</select></label>'+
+      (c.rate===null?'<div style="font-size:12px;color:var(--danger,#ff3b30);margin-top:8px">No exchange rate for '+_flEsc(cur)+' yet, so costs cannot be shown.</div>':'')+
+      _tkTable('Weekly',c.weeks||[],cur)+_tkTable('Monthly',c.months||[],cur)+
+      '<div style="font-size:11px;color:var(--muted);margin-top:8px">AI calls on your own key, at the provider\'s list prices. A free-tier key is not charged.</div>';}
+  return _flSecCard('tkcost','AI · Token cost',b);}
+function _tkRenderCostCard(){var el=document.getElementById('fl-cost-card');if(el)el.innerHTML=_tkCostCardHtml();}
+async function buildTokenCostCard(){_tkErr='';var tz='';try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||'';}catch(e){}
+  try{var r=await fetch(AGENT_URL+'/token-cost?tz='+encodeURIComponent(tz),{headers:authHeaders()});if(r.ok)_tkCost=await r.json();else _tkErr='Could not load the token cost (HTTP '+r.status+').';}catch(e){_tkErr='Could not load the token cost. Check your connection.';}
+  _tkRenderCostCard();}
+async function tkSetCurrency(cur){try{var r=await fetch(AGENT_URL+'/token-cost/currency',{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({currency:cur})});if(!r.ok){_tkErr='Could not save the currency (HTTP '+r.status+').';_tkRenderCostCard();return;}}catch(e){_tkErr='Could not save the currency. Check your connection.';_tkRenderCostCard();return;}
+  await buildTokenCostCard();}
 function flOpenKeySettings(){_flOpenSettingsAt('fl-key-card','flkey');}
 function flOpenImportSettings(){_flOpenSettingsAt('fl-import-card','flimport');}
 // Import an old log from a CSV or Excel file (Henrik, 2026-10-22: "an "import" feature
@@ -3994,7 +4023,7 @@ function _wlDateNum(d){var p=String(d||'').split('-');return p.length===3?(+p[0]
 function _wlLatestWeight(rows){var best=null;(rows||[]).forEach(function(r){var w=parseFloat(r&&(r.weight!=null?r.weight:r.kg));if(!(w>=25))return;if(!best||_wlDateNum(r.date)>_wlDateNum(best.date))best={date:r.date,weight:w};});return best;}
 // A request that never answers counts as failed after WL_FETCH_MS (2026-11-02: a request
 // caught in a backend restart hung, and the card said "add your weight" meanwhile).
-var WL_FETCH_MS=15000,_wlTargetBusy=false;
+var WL_FETCH_MS=15000,WL_RETRY_MS=1000,_wlTargetBusy=false;
 function _wlFetchWithin(url,opts,ms){var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;var tid=null;
   var late=new Promise(function(_,rej){tid=setTimeout(function(){try{if(ctrl)ctrl.abort();}catch(e){}rej(new Error('timeout'));},ms);});
   var o=Object.assign({},opts||{});if(ctrl)o.signal=ctrl.signal;
@@ -4013,7 +4042,13 @@ async function _wlLoadOwn(){_wlOwn=parseInt(localStorage.getItem('water-goal-ml'
 var _wlLoading=false;
 async function buildWaterLog(){_wlErr='';_wlLoading=true;_wlRender();
   try{
-    try{var r=await _wlFetchWithin(AGENT_URL+'/water-log?date='+_flDay(),{headers:authHeaders()},WL_FETCH_MS);if(r.ok)_wlRows=await r.json();else _wlErr='Water could not be loaded: the server answered '+r.status+'.';}catch(e){_wlErr='Water could not be loaded: no connection.';}
+    // The first request after the phone wakes the app can fail before it leaves the phone (2026-11-02 21:11: "Water
+    // could not be loaded: no connection." while the backend logged no /water-log at all, and the /weights sent a moment
+    // later arrived). Such a failure is tried again, twice, a second apart; a request that timed out is not.
+    for(var _wa=0;_wa<3;_wa++){
+      try{var r=await _wlFetchWithin(AGENT_URL+'/water-log?date='+_flDay(),{headers:authHeaders()},WL_FETCH_MS);_wlErr='';if(r.ok)_wlRows=await r.json();else _wlErr='Water could not be loaded: the server answered '+r.status+'.';break;}
+      catch(e){_wlErr='Water could not be loaded: no connection.';if((e&&e.message)==='timeout'||_wa===2)break;await new Promise(function(res){setTimeout(res,WL_RETRY_MS);});}
+    }
     await Promise.all([_wlLoadTarget(),_wlLoadOwn()]);
   }finally{_wlLoading=false;}
   _wlRender();}
@@ -4037,23 +4072,23 @@ async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
     if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
   _wlOwn=ml;if(ml)localStorage.setItem('water-goal-ml',String(ml));else localStorage.removeItem('water-goal-ml');_wlRender();}
 </script>
-<script src="inj-writer.js?v=1.354"></script>
-<script src="tab-cycles.js?v=1.354"></script>
-<script src="tab-macros.js?v=1.354"></script>
-<script src="tab-stack.js?v=1.354"></script>
-<script src="tab-today.js?v=1.354"></script>
-<script src="inj-site.js?v=1.354"></script>
-<script src="tab-schedule.js?v=1.354"></script>
-<script src="tab-timeline.js?v=1.354"></script>
-<script src="tab-body.js?v=1.354"></script>
-<script src="tab-recon.js?v=1.354"></script>
-<script src="tab-blood.js?v=1.354"></script>
-<script src="tab-labs.js?v=1.354"></script>
-<script src="tab-tcalc.js?v=1.354"></script>
-<script src="tab-thist.js?v=1.354"></script>
-<script src="tab-tdose.js?v=1.354"></script>
-<script src="tab-supplements.js?v=1.354"></script>
-<script src="tab-meds.js?v=1.354"></script>
+<script src="inj-writer.js?v=1.355"></script>
+<script src="tab-cycles.js?v=1.355"></script>
+<script src="tab-macros.js?v=1.355"></script>
+<script src="tab-stack.js?v=1.355"></script>
+<script src="tab-today.js?v=1.355"></script>
+<script src="inj-site.js?v=1.355"></script>
+<script src="tab-schedule.js?v=1.355"></script>
+<script src="tab-timeline.js?v=1.355"></script>
+<script src="tab-body.js?v=1.355"></script>
+<script src="tab-recon.js?v=1.355"></script>
+<script src="tab-blood.js?v=1.355"></script>
+<script src="tab-labs.js?v=1.355"></script>
+<script src="tab-tcalc.js?v=1.355"></script>
+<script src="tab-thist.js?v=1.355"></script>
+<script src="tab-tdose.js?v=1.355"></script>
+<script src="tab-supplements.js?v=1.355"></script>
+<script src="tab-meds.js?v=1.355"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}if(IS_STAGING){const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
