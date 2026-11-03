@@ -1306,6 +1306,15 @@ G.wizSave().then(async ()=>{
     }
   }
 
+  // The app always opens on Today, the injections, whatever tab was used last (Henrik, 2026-11-03:
+  // "peptide default page should be Today and the injection tab"). Boot is inside init(), so this
+  // is a structural guard; the behaviour was checked in Chromium (old build opened on Settings).
+  {
+    const _bootSrc = fs.readFileSync(htmlPath, 'utf8');
+    const _boot = _bootSrc.slice(_bootSrc.indexOf('initTabVis();(function(){PRIMARY_ORDER'), _bootSrc.indexOf('_initSwipeNav();}'));
+    check('boot always opens on Today (never the last tab used)',
+      /var startTab='today';/.test(_boot) && !/getItem\('pep-last-tab'\)/.test(_boot));
+  }
   // ── init(): stale pep-last-tab cleanup ─────────────────────────────────────────
   console.log('\n── init(): stale pep-last-tab cleanup ─────────────────────────');
   {
@@ -21854,6 +21863,11 @@ console.log('\n── Food log ────────────────�
     const n = G._tkCostCardHtml();
     check('token cost: no exchange rate shows no figure and says why, never a guessed amount',
       /No exchange rate for SEK/.test(n) && /–/.test(n));
+    G._flKey = {set: true, last4: 'WXYZ'}; G._flKeyChanging = false;
+    G._tkCost = {currency: 'EUR', rate: 1, currencies: ['EUR'], weeks: [wk('Week 45', 1, 0.5)], months: []};
+    check('token cost: shown in the same Settings card as the API key',
+      /Food log · API key/.test(G._flKeyCardHtml()) && /Token cost/.test(G._flKeyCardHtml()) && /Week 45/.test(G._flKeyCardHtml()));
+    check('token cost: not a card of its own', !/fl-cost-card/.test(fs.readFileSync(htmlPath, 'utf8')));
     G._tkCost = null; G._tkErr = '';
   }
   // The load and the currency save, in their own sandbox holding only this block, so the
@@ -21865,7 +21879,7 @@ console.log('\n── Food log ────────────────�
     let mode = 'ok';
     const T = vm.createContext({
       AGENT_URL: 'https://agent', authHeaders: (x) => Object.assign({}, x || {}), JSON, Intl, encodeURIComponent,
-      _flEsc: (x) => String(x), _flSecCard: (id, label, body) => body,
+      _flEsc: (x) => String(x), _flRenderKeyCard: () => {},
       document: {getElementById: () => null},
       fetch: async (url, opt) => {
         seen.push({url, m: (opt && opt.method) || 'GET', body: opt && opt.body});
@@ -21887,6 +21901,17 @@ console.log('\n── Food log ────────────────�
     await T.buildTokenCostCard();
     check('token cost: a failed load says so', /HTTP 500/.test(T._tkCostCardHtml()));
   })();
+  // Opening the app straight onto Settings (the last page) runs buildFlKeyCard before the
+  // import card's state is declared; that threw and left both food-log cards blank (2026-11-03).
+  {
+    const _imSrc = fs.readFileSync(htmlPath, 'utf8');
+    const _imFn = _imSrc.slice(_imSrc.indexOf('function _flImportCardHtml(){'), _imSrc.indexOf('function _flRenderImportCard()'));
+    const I = vm.createContext({_flEsc: (x) => String(x), _flSecCard: (id, t, b) => '<h>' + t + '</h>' + b});
+    vm.runInContext(_imFn, I);
+    let html = '';
+    try { html = I._flImportCardHtml(); } catch (e) { html = 'THREW ' + e.message; }
+    check('food-log import card: draws before its state is declared (app opened on Settings)', /Import old log/.test(html));
+  }
   // Today's intake against the Macros tab's targets (2026-10-21).
   const _flSaveT = G._macrosTargets;
   G._flKey = {set: true, last4: 'WXYZ'}; G._flErr = ''; G._flPending = null; G._flBusy = false;
