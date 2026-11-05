@@ -249,7 +249,7 @@
 const VERSION='1.359';
 // BUILD_NO counts staging builds and is never rewritten by Push to Prod (which resets VERSION to
 // prod's own counter). The What's new card is keyed to it, so its rows show in both apps (2026-11-01).
-const BUILD_NO='1.900';
+const BUILD_NO='1.902';
 const IS_STAGING=(window.location.pathname||'').startsWith('/peptidetracker-staging');
 // Backend data namespace, sent as X-App-Id on every call. Staging gets its own so
 // testing here cannot write over production data — before 2026-08-01 both sent no
@@ -1134,7 +1134,7 @@ function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id)
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');localStorage.removeItem('pt-owner-name');applyOwnerName('');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
 function _renderAuthDebug(){var el=document.getElementById('s-session');if(!el)return;var st=localStorage.getItem('session_token')||'';var gt=localStorage.getItem('google_token')||'';var using=(_sessionToken?'session':(_googleToken?'google':'none'));el.textContent=st?'Present':(gt?'Google only':'None');el.style.color=st?'#3cffa0':'#f59e0b';function human(d){return d<0?'EXPIRED':d>1440?(Math.round(d/1440)+'d left'):d>60?(Math.round(d/60)+'h left'):d+'m left';}function line(label,tok){if(!tok)return'<div>'+label+': <b>absent</b></div>';var e=_fmtTokExp(tok);if(!e)return'<div>'+label+': present (no exp)</div>';return'<div>'+label+': '+human(e.leftMin)+' ('+e.exp.toLocaleString()+')</div>';}var det=document.getElementById('s-session-detail');if(det)det.innerHTML=line('Session',st)+line('Google',gt)+'<div>Using: <b>'+using+'</b></div>';}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;buildSafeNamesRow();try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildRebuildCard();if(typeof buildStoredRowsCard==='function')buildStoredRowsCard();buildExportCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;buildSafeNamesRow();try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildRebuildCard();if(typeof buildStoredRowsCard==='function')buildStoredRowsCard();buildExportCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();resumePromote();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 // Retry a failed Push to Prod (Henrik, 2026-10-12: "Can we show a retry button if operations
 // like this has hicups? Under the Deploy button for a red failed line show a small retry
 // button" — a promotion had died on a GitHub 504 while merging, with CI already green).
@@ -1166,12 +1166,45 @@ function pollPromoteStatus(attempt,since,startedAt){startedAt=startedAt||Date.no
   if(Date.now()-startedAt>_PROMOTE_WAIT_MS){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}
   // Record it, or the card goes on showing the PREVIOUS push as the current state.
   saveAbandonedPush(_stagingVer,null,'timeout');
-  if(statusEl)statusEl.innerHTML+='<div style="color:#f59e0b;font-weight:600;margin-top:6px">Still running after 25 min — the push may still land. <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#f59e0b">Check Actions →</a></div>';return;}fetch(AGENT_URL+'/promote-to-prod/status?since='+encodeURIComponent(since)+(_promoteRunId?'&run_id='+_promoteRunId:''),{headers:authHeaders()}).then(r=>r.json()).then(data=>{_pollErrs=0;if(_promoteRunId&&(data.run_attempt||1)<_promoteMinAttempt){setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),3000);return;}const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');renderPromoteStatus(data,statusEl);if(data.status==='error'){_promoteStatusError(data.detail,statusEl);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}return;}if(data.status==='completed'){_lastPushData=data;saveLastPush(data,null,_stagingVer);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(data.pr_url)pollProdVersion(0);}else{setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),(Date.now()-startedAt>60000)?10000:3000);}}).catch(()=>{_pollErrs++;if(_pollErrs>=5){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}saveAbandonedPush(_stagingVer,null,'connection');if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Connection lost — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),5000);});}
+  if(statusEl)statusEl.innerHTML+='<div style="color:#f59e0b;font-weight:600;margin-top:6px">Still running after 25 min — the push may still land. <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#f59e0b">Check Actions →</a></div>';return;}fetch(AGENT_URL+'/promote-to-prod/status?since='+encodeURIComponent(since)+(_promoteRunId?'&run_id='+_promoteRunId:''),{headers:authHeaders()}).then(r=>r.json()).then(data=>{_pollErrs=0;_promotePollAt=Date.now();_promoteLastData=data;if(_promoteRunId&&(data.run_attempt||1)<_promoteMinAttempt){setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),3000);return;}const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');renderPromoteStatus(data,statusEl);if(data.status==='error'){_promoteStatusError(data.detail,statusEl);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}return;}if(data.status==='completed'){_lastPushData=data;saveLastPush(data,null,_stagingVer);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(data.pr_url)pollProdVersion(0);}else{setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),(Date.now()-startedAt>60000)?10000:3000);}}).catch(()=>{_pollErrs++;if(_pollErrs>=5){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}saveAbandonedPush(_stagingVer,null,'connection');if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Connection lost — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}setTimeout(()=>pollPromoteStatus(attempt+1,since,startedAt),5000);});}
 function pollProdVersion(attempt){if(attempt>40)return;fetch('https://viritasorg.github.io/peptidetracker/version.json',{cache:'no-store'}).then(r=>r.json()).then(function(d){var v=d.version||'?';var row=document.getElementById('push-to-prod-prod-row');if(_prevProdVer!==null&&v===_prevProdVer){if(row)row.innerHTML='<span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Pages deploying...</span>';setTimeout(function(){pollProdVersion(attempt+1);},20000);return;}_prodVer=v;if(row)row.innerHTML='<span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v'+v+'</span>';saveLastPush(_lastPushData,v,_stagingVer);pollProdArtifacts(0);}).catch(function(){setTimeout(function(){pollProdVersion(attempt+1);},5000);});}
 function pollProdArtifacts(attempt){var urls=['https://viritasorg.github.io/peptidetracker/manifest.json','https://viritasorg.github.io/peptidetracker/protocol-icon.png'];var row=document.getElementById('push-to-prod-artifacts-row');if(attempt>5){if(row)row.innerHTML='<span style="color:#ef4444;font-weight:700;width:10px;text-align:center;flex-shrink:0">✗</span><span style="color:var(--fg)">Could not verify prod artifacts</span>';return;}Promise.all(urls.map(function(u){return fetch(u,{method:'HEAD',cache:'no-store'}).then(function(r){return{url:u,ok:r.ok};}).catch(function(){return{url:u,ok:false};});})).then(function(results){var missing=results.filter(function(r){return!r.ok;}).map(function(r){return r.url.split('/').pop();});if(missing.length===0){_prodArtifacts=true;if(row)row.innerHTML='<span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Artifacts OK (manifest + icon)</span>';}else{if(row)row.innerHTML='<span style="color:#ef4444;font-weight:700;width:10px;text-align:center;flex-shrink:0">✗</span><span style="color:var(--fg)">Missing on prod: '+missing.join(', ')+'</span>';setTimeout(function(){pollProdArtifacts(attempt+1);},15000);}});}
-function renderPromoteStatus(data,el){if(!el)return;const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};let html='<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">';const steps=(data.steps&&data.steps.length)?data.steps:PROMOTE_STEPS.map(n=>({name:n,status:'queued',conclusion:null}));steps.forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;html+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(data.status==='completed'&&data.conclusion==='success'){html+=_prodVer?`<div id="push-to-prod-prod-row" style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${_prodVer}</span></div>`:'<div id="push-to-prod-prod-row" style="display:flex;align-items:center;gap:8px"><span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Verifying prod...</span></div>';html+='<div id="push-to-prod-artifacts-row" style="display:flex;align-items:center;gap:8px"><span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Checking artifacts...</span></div>';}else{html+='<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">·</span><span style="color:var(--muted2)">Verify prod version</span></div>';html+='<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">·</span><span style="color:var(--muted2)">Verify prod artifacts</span></div>';}html+='</div>';if(data.pr_url){html+=`<div><a href="${data.pr_url}" target="_blank" style="color:var(--accent)">View PR on peptidetracker →</a></div>`;}else if(data.status==='completed'&&data.conclusion==='success'){html+='<div style="color:var(--muted2)">No changes — staging and prod are already in sync.</div>';}else if(data.status==='completed'&&data.conclusion==='failure'){html+=`<div style="color:#ef4444">Workflow failed — <a href="${data.run_url}" target="_blank" style="color:#ef4444">view logs</a></div>`;html+=_promoteRetryBtn(data.run_url,_stagingVer);}el.innerHTML=html;}
+function renderPromoteStatus(data,el){if(!el)return;const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};let html='<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">';const steps=(data.steps&&data.steps.length)?data.steps:PROMOTE_STEPS.map(n=>({name:n,status:'queued',conclusion:null}));steps.forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;html+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(data.status==='completed'&&data.conclusion==='success'){html+=_prodVer?`<div id="push-to-prod-prod-row" style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${_prodVer}</span></div>`:'<div id="push-to-prod-prod-row" style="display:flex;align-items:center;gap:8px"><span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Verifying prod...</span></div>';html+='<div id="push-to-prod-artifacts-row" style="display:flex;align-items:center;gap:8px"><span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Checking artifacts...</span></div>';}else{html+='<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">·</span><span style="color:var(--muted2)">Verify prod version</span></div>';html+='<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">·</span><span style="color:var(--muted2)">Verify prod artifacts</span></div>';}html+='</div>';if(data.pr_url){html+=`<div><a href="${data.pr_url}" target="_blank" style="color:var(--accent)">View PR on peptidetracker →</a></div>`;}else if(data.status==='completed'&&data.conclusion==='success'){html+='<div style="color:var(--muted2)">No changes — staging and prod are already in sync.</div>';}else if(data.status==='completed'&&data.conclusion==='failure'){html+=_promoteFailHtml(data);html+=_promoteRetryBtn(data.run_url,_stagingVer);}el.innerHTML=html;}
+// ⚠️ A PUSH IS SHOWN FROM GITHUB, NOT FROM THIS PAGE'S MEMORY (Henrik, 2026-11-05: "Just pushed stage to prod but when I
+// open the settings to check for progress it looks like I never even tried???? If it failed I want an error showing what
+// went wrong, and if it is still in progress I want the full list of promotion steps still visible!!!").
+// The steps lived only in the page that pressed the button: reopen the app and the card showed the last FINISHED push.
+// Now opening Settings asks the backend for the newest promotion run: a running one gets every step and is followed to
+// the end, a finished one this phone has not recorded yet is recorded, and a failed one shows its steps and the
+// workflow's own error text (the run's ::error:: lines, `error` from /promote-to-prod/status).
+var _promotePollAt=0,_promoteLastData=null;
+function _promoteEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function _promoteFailHtml(data){var h='<div style="color:#ef4444;font-weight:600">Push failed'+(data.failed_step?' at “'+_promoteEsc(data.failed_step)+'”':'')+'</div>';
+  if(data.error)h+='<div id="push-to-prod-error" style="color:#ef4444;white-space:pre-wrap;word-break:break-word;-webkit-user-select:text;user-select:text;margin-top:2px">'+_promoteEsc(data.error)+'</div>';
+  h+='<div style="margin-top:2px"><a href="'+_promoteEsc(data.run_url)+'" target="_blank" style="color:#ef4444">View logs →</a></div>';
+  return h;}
+function _promoteRunning(d){return !!d&&d.status!=='completed'&&d.status!=='error'&&d.status!=='not_found';}
+function resumePromote(){
+  var dc=document.getElementById('s-deploy-card'),statusEl=document.getElementById('push-to-prod-status'),btn=document.getElementById('push-to-prod-btn');
+  if(!dc||!statusEl||dc.style.display==='none')return Promise.resolve();
+  // A poll already following a run (this page pressed the button): just put what it last saw back on the card.
+  if(_promoteRunning(_promoteLastData)&&Date.now()-_promotePollAt<30000){if(btn){btn.textContent='Pushing...';btn.disabled=true;}renderPromoteStatus(_promoteLastData,statusEl);return Promise.resolve();}
+  return fetch(AGENT_URL+'/promote-to-prod/status',{headers:authHeaders()}).then(function(r){return r.ok?r.json():null;}).then(function(data){
+    if(!data||!data.run_id)return;
+    if(_promoteRunning(data)){
+      _promoteRunId=String(data.run_id);_promoteMinAttempt=data.run_attempt||1;_pollErrs=0;_promoteLastData=data;_promotePollAt=Date.now();
+      if(btn){btn.textContent='Pushing...';btn.disabled=true;}
+      renderPromoteStatus(data,statusEl);pollPromoteStatus(0,'');return;}
+    var rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch(e){}
+    if(rec&&rec.runId===String(data.run_id)&&(rec.attempt||1)===(data.run_attempt||1))return;
+    if(rec&&!rec.runId&&data.started_at&&Date.parse(data.started_at)<=Date.parse(rec.ts))return;
+    _promoteLastData=data;
+    if(data.conclusion==='failure')renderPromoteStatus(data,statusEl);
+    saveLastPush(data,null,null);
+  }).catch(function(){});
+}
 function _fmtAgo(d){const s=Math.floor((Date.now()-d)/1000);if(s<60)return 'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
-function saveLastPush(data,prodVer,stagingVer){if(!data)return;try{const rec={ts:new Date().toISOString(),conclusion:data.conclusion,steps:data.steps,prUrl:data.pr_url||null,runUrl:data.run_url||null,stagingVer:stagingVer||null,prodVer:prodVer||null};localStorage.setItem('proto-last-push',JSON.stringify(rec));}catch{}buildLastPushDropdown();}
+function saveLastPush(data,prodVer,stagingVer){if(!data)return;try{const rec={ts:new Date().toISOString(),conclusion:data.conclusion,steps:data.steps,prUrl:data.pr_url||null,runUrl:data.run_url||null,stagingVer:stagingVer||null,prodVer:prodVer||null,runId:data.run_id?String(data.run_id):null,attempt:data.run_attempt||null,error:data.error||null,failedStep:data.failed_step||null};localStorage.setItem('proto-last-push',JSON.stringify(rec));}catch{}buildLastPushDropdown();}
 // ⚠️ A PUSH WE STOPPED WATCHING IS NOT THE PREVIOUS PUSH.
 // Henrik, 2026-09-17: "I pushed deploy to prod on b805 but when I check status it says
 // b797 last push to prod? If the 805 failed I would expect a different message."
@@ -1192,8 +1225,8 @@ function saveAbandonedPush(stagingVer,runUrl,why){try{
     stagingVer:stagingVer||null,prodVer:null};
   localStorage.setItem('proto-last-push',JSON.stringify(rec));
 }catch{}buildLastPushDropdown();}
-function buildLastPushDropdown(){const el=document.getElementById('push-to-prod-last');if(!el)return;let rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch{}if(!rec){el.innerHTML='';return;}const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};const _unk=rec.conclusion!=='success'&&rec.conclusion!=='failure';const icoCol=rec.conclusion==='success'?'#22c55e':(_unk?'#f59e0b':'#ef4444');const ico=rec.conclusion==='success'?'✓':(_unk?'?':'✗');const ago=_fmtAgo(new Date(rec.ts));const _verSummary=rec.stagingVer&&rec.prodVer?' · v'+rec.stagingVer+' → v'+rec.prodVer:rec.prodVer?' · v'+rec.prodVer+' on prod':rec.stagingVer?' · staged v'+rec.stagingVer:'';let det='<div style="display:flex;flex-direction:column;gap:3px;padding:6px 0">';(rec.steps||[]).forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(rec.stagingVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">→</span><span style="color:var(--muted2)">Staged: v${rec.stagingVer}</span></div>`;if(rec.prodVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${rec.prodVer}</span></div>`;if(rec.prUrl)det+=`<div style="margin-top:4px"><a href="${rec.prUrl}" target="_blank" style="color:var(--accent)">View PR →</a></div>`;else if(rec.runUrl&&rec.conclusion==='failure')det+=`<div style="margin-top:4px"><a href="${rec.runUrl}" target="_blank" style="color:#ef4444">View failure logs →</a></div>`;det+='</div>';const _lbl=rec.abandoned?('Last push: '+ago+' · stopped watching'+(rec.stagingVer?' at v'+rec.stagingVer:'')):('Last push: '+ago+_verSummary);
-el.innerHTML=`<details><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted2)"><span style="color:${icoCol};font-weight:700">${ico}</span><span id="push-to-prod-lbl">${_lbl}</span></summary>${det}</details>${(rec.conclusion==='failure'&&rec.runUrl?_promoteRetryBtn(rec.runUrl,rec.stagingVer):'')}<div id="push-to-prod-live" style="font-size:11px;color:var(--muted2);margin-top:4px"></div>`;
+function buildLastPushDropdown(){const el=document.getElementById('push-to-prod-last');if(!el)return;let rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch{}if(!rec){el.innerHTML='';return;}const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};const _unk=rec.conclusion!=='success'&&rec.conclusion!=='failure';const icoCol=rec.conclusion==='success'?'#22c55e':(_unk?'#f59e0b':'#ef4444');const ico=rec.conclusion==='success'?'✓':(_unk?'?':'✗');const ago=_fmtAgo(new Date(rec.ts));const _verSummary=rec.stagingVer&&rec.prodVer?' · v'+rec.stagingVer+' → v'+rec.prodVer:rec.prodVer?' · v'+rec.prodVer+' on prod':rec.stagingVer?' · staged v'+rec.stagingVer:'';let det='<div style="display:flex;flex-direction:column;gap:3px;padding:6px 0">';(rec.steps||[]).forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(rec.stagingVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">→</span><span style="color:var(--muted2)">Staged: v${rec.stagingVer}</span></div>`;if(rec.prodVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${rec.prodVer}</span></div>`;if(rec.error)det+='<div style="color:#ef4444;font-weight:600;white-space:pre-wrap;word-break:break-word;-webkit-user-select:text;user-select:text;padding:2px 0">'+_promoteEsc(rec.error)+'</div>';if(rec.prUrl)det+=`<div style="margin-top:4px"><a href="${rec.prUrl}" target="_blank" style="color:var(--accent)">View PR →</a></div>`;else if(rec.runUrl&&rec.conclusion==='failure')det+=`<div style="margin-top:4px"><a href="${rec.runUrl}" target="_blank" style="color:#ef4444">View failure logs →</a></div>`;det+='</div>';const _lbl=rec.abandoned?('Last push: '+ago+' · stopped watching'+(rec.stagingVer?' at v'+rec.stagingVer:'')):('Last push: '+ago+_verSummary);
+el.innerHTML=`<details${rec.error?' open':''}><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted2)"><span style="color:${icoCol};font-weight:700">${ico}</span><span id="push-to-prod-lbl">${_lbl}</span></summary>${det}</details>${(rec.conclusion==='failure'&&rec.runUrl?_promoteRetryBtn(rec.runUrl,rec.stagingVer):'')}<div id="push-to-prod-live" style="font-size:11px;color:var(--muted2);margin-top:4px"></div>`;
 _showLiveProdVersion();}
 // ⚠️ WHAT PROD IS RUNNING IS A FACT, NOT A MEMORY OF WATCHING IT CHANGE.
 // Everything above is a record of what this browser SAW while it was watching. Close
@@ -3264,7 +3297,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
-  {v:'1.897',title:'Export',text:'Settings → Export → Export CSV saves every injection, medication and supplement you have ticked, with each one\u2019s total for its week, as a spreadsheet file.'},
+  {v:'1.897',title:'Export',text:'Settings → Export → Export CSV makes a file of what you are taking now, to show a doctor: the injections planned for the next 7 days, then your medications and supplements with their daily doses.'},
   {v:'1.891',title:'Token cost',text:'Settings → Food log · API key shows what the AI calls on your own key cost each week and each month, in the currency you pick (EUR to start with).'},
   {v:'1.875',title:'Medication and water',text:'Plan → Medication: take a photo of a medicine package to fill in its name and strength, pick how many tablets a day, and tick it on Today. Macros now logs water, with a daily target worked out from your body weight. Today\'s sections fold: tap a heading.'},
   {v:'1.863',title:'Macro targets per day',text:'Food Edit shows the targets in force on any day and lets you set them from that day onward, so the history card measures each day against the right goals. Use it to fill in the periods of an imported log.'},
@@ -3502,53 +3535,46 @@ async function rebuildScheduleFrom(){
   }
   if(btn){btn.disabled=false;btn.textContent='Rebuild from this date';}
 }
-// ── Export (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
-// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────
-// One row per dose taken: injections ticked as logged, medication ticks, supplement ticks. Read straight from the
-// backend (the record), never from the screen. week_total is that item's total for its ISO week in that unit, so
-// the weekly dosage sits on every row; it is empty when the dose is not a number.
-var EXPORT_COLS=['date','week','type','name','dose','unit','detail','time','week_total'];
-function _expIsoWeek(ds){
-  var p=String(ds||'').split('-');if(p.length!==3)return '';
-  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));if(isNaN(d))return '';
-  var day=d.getUTCDay()||7;d.setUTCDate(d.getUTCDate()+4-day);
-  var y=d.getUTCFullYear(),w=Math.ceil(((d-Date.UTC(y,0,1))/86400000+1)/7);
-  return y+'-W'+String(w).padStart(2,'0');
-}
+// ── Export (Henrik, 2026-11-05: "I want one weeks planned injections, and then a days meds and supplements. not for
+// the full timespan of the protocol. I just want a list that says "what I am taking atm" to show a doctor") ──────
+// A snapshot of the regimen, not a record of what was ticked: the injections planned for the 7 days from today,
+// exactly as Today and the week strip show them (_injectionsCache, deduped the same way), then one row per
+// medication and supplement in use, at its daily dose. Taken or not is left out on purpose.
+var EXPORT_COLS=['type','day','date','time','name','dose','unit','amount','how_often'];
+var EXPORT_DAYS=7;
 // "50 µg (2000 IU)" -> {n:50,u:'µg'}; "2.5" -> {n:2.5,u:''}; "1 capsule" -> {n:1,u:'capsule'}
 function _expNumUnit(v){
   var m=String(v==null?'':v).trim().match(/^(\d+(?:[.,]\d+)?)\s*([^\s(]*)/);
   if(!m)return {n:null,u:''};
   return {n:parseFloat(m[1].replace(',','.')),u:m[2]||''};
 }
+var _EXP_DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+var _EXP_FREQ={daily:'daily',eod:'every other day',weekly:'weekly'};
+// src: {start: Date (today), injByDate: {'YYYY-MM-DD': [entries]}, meds: [...], supps: [...]}
 function buildExportRows(src){
-  src=src||{};var rows=[];
-  (src.injections||[]).forEach(function(e){
-    if(!e||!e.logged||!e.date)return;
-    var dose=(e.logged_dose!=null&&e.logged_dose!=='')?e.logged_dose:e.dose;
-    var nu=_expNumUnit(dose);
-    rows.push({date:e.date,type:'injection',name:e.compound_name||e.compound_id||'',dose:nu.n!=null?nu.n:String(dose||''),
-      unit:e.unit||nu.u,detail:e.tier||'',time:e.time_of_day||''});
+  src=src||{};var rows=[];var start=new Date(src.start||NOW);start.setHours(0,0,0,0);
+  var days=[];for(var i=0;i<EXPORT_DAYS;i++){var d=new Date(start);d.setDate(start.getDate()+i);days.push(d);}
+  var slot={AM:0,PM:1};
+  days.forEach(function(d){
+    var dk=dateKey(d);
+    var list=_dedupInjectionSlots(((src.injByDate||{})[dk]||[]).filter(function(e){return e&&e.active!==false;}));
+    list.sort(function(a,b){var sa=slot[a.time_of_day]!=null?slot[a.time_of_day]:2,sb=slot[b.time_of_day]!=null?slot[b.time_of_day]:2;
+      return sa-sb||String(a.compound_name||'').localeCompare(String(b.compound_name||''));});
+    list.forEach(function(e){var nu=_expNumUnit(e.dose);
+      rows.push({type:'injection',day:_EXP_DAY[d.getDay()],date:dk,time:e.time_of_day||'',
+        name:e.compound_name||e.compound_id||'',dose:nu.n!=null?nu.n:String(e.dose||''),unit:e.unit||nu.u,amount:'',how_often:''});});
   });
-  var meds={};(src.meds||[]).forEach(function(m){if(m&&m.id)meds[m.id]=m;});
-  (src.medLog||[]).forEach(function(l){
-    if(!l||!l.date||l.taken===false)return;var m=meds[l.med_id]||{};
-    var n=Number(m.tablets_per_day);
-    rows.push({date:l.date,type:'medication',name:m.name||l.med_id||'',dose:isFinite(n)&&n>0?n:'',
-      unit:String(m.form||'tablet').toLowerCase().indexOf('caps')>=0?'capsule':'tablet',detail:m.strength||'',time:''});
-  });
-  var supps={};(src.supps||[]).forEach(function(x){if(x&&x.supp_id)supps[x.supp_id]=x;});
-  (src.suppLog||[]).forEach(function(l){
-    if(!l||!l.date||l.taken===false)return;var x=supps[l.supp_id]||{};var nu=_expNumUnit(x.dose);
-    rows.push({date:l.date,type:'supplement',name:x.name||l.supp_id||'',dose:nu.n!=null?nu.n:String(x.dose||''),
-      unit:nu.u,detail:x.dose||'',time:l.slot||''});
-  });
-  var tot={};
-  rows.forEach(function(r){r.week=_expIsoWeek(r.date);
-    if(typeof r.dose==='number'){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;tot[k]=(tot[k]||0)+r.dose;}});
-  rows.forEach(function(r){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;
-    r.week_total=typeof r.dose==='number'?Math.round(tot[k]*1000)/1000:'';});
-  rows.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:(a.type+a.name<b.type+b.name?-1:a.type+a.name>b.type+b.name?1:0);});
+  var inWeek=function(fn,x){return days.some(function(d){return fn(x,d);});};
+  (src.meds||[]).filter(function(m){return _medActiveOn(m,start);})
+    .sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));})
+    .forEach(function(m){var nu=_expNumUnit(m.strength);
+      rows.push({type:'medication',day:'',date:'',time:'',name:m.name||'',dose:nu.n!=null?nu.n:String(m.strength||''),unit:nu.u,
+        amount:Number(m.tablets_per_day)>0?_medFmtTablets(m.tablets_per_day,m.form)+' a day':'',how_often:'daily'});});
+  (src.supps||[]).filter(function(s){return inWeek(_suppActiveOn,s);})
+    .sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));})
+    .forEach(function(s){var nu=_expNumUnit(s.dose);
+      rows.push({type:'supplement',day:'',date:'',time:_suppSlots(s.timing).join(' + '),name:s.name||'',
+        dose:nu.n!=null?nu.n:String(s.dose||''),unit:nu.u,amount:s.dose||'',how_often:_EXP_FREQ[s.freq||'daily']||String(s.freq)});});
   return rows;
 }
 function _expCell(v){var s=String(v==null?'':v);return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
@@ -3560,21 +3586,21 @@ function buildExportCard(){
   card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
     +sSecHdr('export','Export')+sSecBody('export')
     +'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.6;">'
-    +'A CSV file of every injection, medication and supplement you have ticked, with each item’s total for its week.</div>'
+    +'What you are taking now, as a CSV file to show a doctor: the injections planned for the next 7 days, then your medications and supplements with their daily doses.</div>'
     +'<button id="s-export-btn" onclick="exportData()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Export CSV</button>'
     +'<div id="s-export-status" style="font-size:12px;color:var(--muted2);margin-top:10px;"></div>'
     +'</div></div></div>';
 }
-async function _expGet(path){var r=await fetch(AGENT_URL+path,{headers:authHeaders()});if(!r.ok)throw new Error(path+': HTTP '+r.status);return r.json();}
+// The regimen as the app holds it: the injections Today shows, and the meds and supplements caches (both mirror the backend).
+function _expSources(){return {start:NOW,injByDate:_injectionsCache,meds:_meds,supps:_supplements};}
 async function exportData(){
   var btn=document.getElementById('s-export-btn'),out=document.getElementById('s-export-status');
   if(btn){btn.disabled=true;btn.textContent='Exporting…';}
   if(out){out.textContent='';out.style.color='var(--muted2)';}
   try{
-    var got=await Promise.all([_expGet('/injections?active_only=false'),_expGet('/medications'),_expGet('/medications/log'),
-      _expGet('/supplements'),_expGet('/supplement-log')]);
-    var rows=buildExportRows({injections:got[0],meds:got[1],medLog:got[2],supps:got[3],suppLog:got[4]});
-    var name='peptide-tracker-'+dateKey(new Date())+'.csv';
+    if(!_injCacheReady)await refreshInjectionsCache();
+    var rows=buildExportRows(_expSources());
+    var name='peptide-tracker-current-'+dateKey(new Date(NOW))+'.csv';
     var file=new File([exportCsv(rows)],name,{type:'text/csv'});
     if(navigator.canShare&&navigator.canShare({files:[file]})){
       try{await navigator.share({files:[file],title:name});}catch(e){if(e&&e.name==='AbortError')return;throw e;}
@@ -3582,7 +3608,8 @@ async function exportData(){
       var url=URL.createObjectURL(file),a=document.createElement('a');a.href=url;a.download=name;
       document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},1000);
     }
-    if(out){out.style.color='var(--accent3,#3cffa0)';out.textContent=rows.length+(rows.length===1?' row':' rows')+' exported.';}
+    var c=function(t){return rows.filter(function(r){return r.type===t;}).length;};
+    if(out){out.style.color='var(--accent3,#3cffa0)';out.textContent='Exported '+c('injection')+' injection(s) this week, '+c('medication')+' medication(s), '+c('supplement')+' supplement(s).';}
   }catch(e){
     if(typeof _logErr==='function')_logErr('exportData',e);
     if(out){out.style.color='var(--danger,#ff3c3c)';out.textContent='Export failed: '+(e.message||e);}
@@ -4162,23 +4189,23 @@ async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
     if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
   _wlOwn=ml;if(ml)localStorage.setItem('water-goal-ml',String(ml));else localStorage.removeItem('water-goal-ml');_wlRender();}
 </script>
-<script src="inj-writer.js?v=1.358"></script>
-<script src="tab-cycles.js?v=1.358"></script>
-<script src="tab-macros.js?v=1.358"></script>
-<script src="tab-stack.js?v=1.358"></script>
-<script src="tab-today.js?v=1.358"></script>
-<script src="inj-site.js?v=1.358"></script>
-<script src="tab-schedule.js?v=1.358"></script>
-<script src="tab-timeline.js?v=1.358"></script>
-<script src="tab-body.js?v=1.358"></script>
-<script src="tab-recon.js?v=1.358"></script>
-<script src="tab-blood.js?v=1.358"></script>
-<script src="tab-labs.js?v=1.358"></script>
-<script src="tab-tcalc.js?v=1.358"></script>
-<script src="tab-thist.js?v=1.358"></script>
-<script src="tab-tdose.js?v=1.358"></script>
-<script src="tab-supplements.js?v=1.358"></script>
-<script src="tab-meds.js?v=1.358"></script>
+<script src="inj-writer.js?v=1.359"></script>
+<script src="tab-cycles.js?v=1.359"></script>
+<script src="tab-macros.js?v=1.359"></script>
+<script src="tab-stack.js?v=1.359"></script>
+<script src="tab-today.js?v=1.359"></script>
+<script src="inj-site.js?v=1.359"></script>
+<script src="tab-schedule.js?v=1.359"></script>
+<script src="tab-timeline.js?v=1.359"></script>
+<script src="tab-body.js?v=1.359"></script>
+<script src="tab-recon.js?v=1.359"></script>
+<script src="tab-blood.js?v=1.359"></script>
+<script src="tab-labs.js?v=1.359"></script>
+<script src="tab-tcalc.js?v=1.359"></script>
+<script src="tab-thist.js?v=1.359"></script>
+<script src="tab-tdose.js?v=1.359"></script>
+<script src="tab-supplements.js?v=1.359"></script>
+<script src="tab-meds.js?v=1.359"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}{const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
