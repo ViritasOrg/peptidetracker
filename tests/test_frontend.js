@@ -14487,6 +14487,11 @@ if (typeof G._tcSuppDailyDose === 'function') {
   var _iBor = {shbg:{direction:'suppress', maxSuppression:0.09, halfTimeDays:4, doseResponse:{unit:'mg/day', ed50:4, emax:0.126, typicalDose:10}}};
   check('suppDailyDose: daily boron supplement "10 mg" → 10 mg/day',
     Math.abs(G._tcSuppDailyDose(_iBor, 'supp', {dose:'10 mg', freq:'daily'}) - 10) < 1e-9);
+  // Henrik, 2026-11-05: "assumes one capsule is the daily dose". 3 mg per capsule × 2 a day = 6 mg/day.
+  check('suppDailyDose: boron "3 mg" per capsule, 2 capsules a day → 6 mg/day',
+    Math.abs(G._tcSuppDailyDose(_iBor, 'supp', {dose:'3 mg', freq:'daily', per_day:2, per_unit:'capsule'}) - 6) < 1e-9);
+  check('suppDailyDose: g/ml are the day\'s amount, never multiplied',
+    Math.abs(G._tcSuppDailyDose(_iBor, 'supp', {dose:'10 mg', freq:'daily', per_day:5, per_unit:'g'}) - 10) < 1e-9);
   var _iCjc = {shbg:{direction:'suppress', maxSuppression:0.20, halfTimeDays:32, doseResponse:{unit:'mcg/day', ed50:120, emax:0.28, typicalDose:300}}};
   check('suppDailyDose: enhanced compound "2100 mcg/week" → 300 mcg/day',
     Math.abs(G._tcSuppDailyDose(_iCjc, 'compound', {dose:'2100', unit:'mcg/week'}) - 300) < 1e-9);
@@ -19257,8 +19262,15 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   G._tourStop();
 
   // "Watch the intro again" at the top of Settings: tour only, nothing saved.
-  check('Settings opens with a "Watch the intro again" button, before the first section',
-    /id="tab-settings">\s*<button id="tour-replay-btn" onclick="openTour\(\)"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(html));
+  // Henrik, 2026-11-05: "app version should be on top", "move push to prod to spot 2 in Settings in both apps", then
+  // "you hadnt moved App version up in peptide tracker": App card (version) first and open, Push to Prod second, the
+  // intro button third.
+  check('Settings opens with the App card (version), open',
+    /id="tab-settings">\s*<div[^>]*>\s*<div class="s-sec-hdr open"[^>]*>App<\/div>\s*<div class="s-sec-body" id="s-sec-app">[\s\S]*?id="s-version"/.test(html));
+  const _st = html.slice(html.indexOf('id="tab-settings"'));
+  check('  …then the Push to Prod card, then "Watch the intro again", before every other section',
+    _st.indexOf('id="s-sec-app"') < _st.indexOf('id="s-deploy-card"') && _st.indexOf('id="s-deploy-card"') < _st.indexOf('id="tour-replay-btn"') &&
+    _st.indexOf('id="tour-replay-btn"') < _st.indexOf("toggleSSec('backend')") && /id="tour-replay-btn"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(_st));
   const ov = trk('onboarding-overlay'); ov.classList.add('hidden');
   const dots = trk('ob-dots'), backB = trk('ob-back'), nextB = trk('ob-next'), skipB = trk('ob-skip-btn'), body = trk('ob-body');
   Object.defineProperty(body, 'innerHTML', { set() {}, get() { return ''; } }); Object.defineProperty(dots, 'innerHTML', { set() {}, get() { return ''; } });
@@ -19687,7 +19699,7 @@ console.log('\n── No fixed banners over the navbar ────────�
     /id="peptide-sync-btn" onclick="pushAllPeptideToBackend\(\)"/.test(_bSrc));
   check('  …inside the Data section',
     _bSrc.indexOf('id="s-sec-data"') < _bSrc.indexOf('id="peptide-sync-btn"') &&
-    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-app"'));
+    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-account"'));
   check('  …and the button resets instead of removing a bar it no longer sits in',
     /btn.textContent='Sync';btn.disabled=false;/.test(rawScript) &&
     !/closest\('\.sync-bar'\)/.test(rawScript));
@@ -21985,6 +21997,141 @@ console.log('\n── Food log ────────────────�
   })().catch(e => { check('food log: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }
 
+// ── Supplements: label photo → supplement + daily dose, added to the backend catalogue (2026-11-05) ──
+// Henrik: "peptide add supplement needs to support taking a picture of a supplement and adding daily
+// dose. Any supplement added like this needs to update backend catalog of supplements available in app
+// drop down." tab-supplements.js runs here in its own context against a fake backend.
+{
+  const _sjs = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-supplements.js'), 'utf8');
+  const calls = [], els = {}, store = {};
+  let catalogOk = true, labelAnswer = {name: 'Shilajit (Resin)', dose: '250 mg', per_day: 2, per_unit: 'capsule'}, lastSheet = null;
+  const el = (id) => { if (id === 'supp-add-overlay') return null; if (!els[id]) { let h = ''; els[id] = {value: '', style: {}, setAttribute(){}, removeAttribute(){}, getAttribute(){ return null; }};
+    Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; const m = /<option value="([^"]*)"[^>]*selected/.exec(v) || /<option value="([^"]*)"/.exec(v); els[id].value = m ? m[1] : ''; }}); } return els[id]; };
+  const S = vm.createContext({console, Promise, JSON, Math, String, Number, Object, Array, Date, parseFloat, isNaN, encodeURIComponent,
+    AGENT_URL: 'https://agent', NOW: new Date(), _currentTab: 'supplements', alert: () => {},
+    authHeaders: (x) => Object.assign({}, x || {}), _logHttp: () => {}, _logErr: () => {},
+    getData: (k, d) => (k in store ? JSON.parse(store[k]) : d), setData: (k, v) => { store[k] = JSON.stringify(v); },
+    _flShrink: async () => 'UEhPVE8=',
+    document: {getElementById: el, createElement: () => (lastSheet = {style: {}, remove(){}}), body: {appendChild(){}}},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; const body = opt && opt.body ? JSON.parse(opt.body) : null; calls.push({url, m, body});
+      if (/read-label$/.test(url)) return {ok: true, status: 200, json: async () => labelAnswer};
+      if (/supplement-catalog$/.test(url) && m === 'POST') { if (!catalogOk) return {ok: false, status: 500, json: async () => ({})};
+        const id = body.name === 'Vitamin D3' ? 'vitd3' : 'u-shilajit-resin';
+        return {ok: true, status: 200, json: async () => ({ok: true, entry: {id, name: body.name, doses: [body.dose]}})}; }
+      if (/supplement-catalog$/.test(url)) return {ok: true, status: 200, json: async () => [{id: 'vitd3', name: 'Vitamin D3', doses: ['75 µg']}, {id: 'u-ksm', name: 'KSM-66', doses: ['600 mg']}]};
+      if (/\/supplements$/.test(url) && m === 'POST') return {ok: true, status: 200, json: async () => ({ok: true, entry: Object.assign({}, body, {id: 'srv1'})})};
+      return {ok: true, status: 200, json: async () => ([])}; },
+  });
+  vm.runInContext(_sjs, S);
+  const _rts = S.renderTodaySupplements;
+  S.renderTodaySupplements = () => {};   // Today's section is covered elsewhere
+  (async () => {
+    const n0 = S.SUPPLEMENT_CAT.length;
+    await S.syncSupplementCatalogFromAgent();
+    check('supp catalogue: the backend list is merged into the dropdown, new supplements at the end',
+      S.SUPPLEMENT_CAT.length === n0 + 1 && S.SUPPLEMENT_CAT[n0].id === 'u-ksm');
+    check('  …and a new dose of a listed supplement is added after its own',
+      S._suppCat('vitd3').doses[S._suppCat('vitd3').doses.length - 1] === '75 µg' && S._suppCat('vitd3').doses[0] === '25 µg (1000 IU)');
+    check('  …and kept as the cache for the next start', JSON.parse(store['pep-supp-catalog']).length === 2);
+    await S.syncSupplementCatalogFromAgent();
+    check('  …a second sync adds no duplicates', S.SUPPLEMENT_CAT.length === n0 + 1);
+
+    S._suppOpenAddSheet();
+    check('supp photo: the Add sheet has a label-photo button whose input takes camera or library images',
+      /id="supp-photo-btn"/.test(lastSheet.innerHTML) && /<input id="supp-photo" type="file" accept="image\/\*"/.test(lastSheet.innerHTML) && !/capture=/.test(lastSheet.innerHTML));
+    el('supp-as-freq').value = 'daily'; el('supp-as-timing').value = 'AM';
+    calls.length = 0;
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    const rl = calls.find(c => /read-label$/.test(c.url));
+    check('supp photo: the label photo is sent as a JPEG to /supplements/read-label',
+      rl && rl.m === 'POST' && rl.body.image_b64 === 'UEhPVE8=' && rl.body.media_type === 'image/jpeg');
+    check('  …an unknown supplement gets a provisional entry, selected, with the read daily dose',
+      els['supp-as-comp'].value.indexOf('new-') === 0 && /Shilajit \(Resin\) \(new\)/.test(els['supp-as-comp'].innerHTML) &&
+      els['supp-as-dose'].value === '250 mg');
+    check('  …and how many a day from the label (2 capsules), with the dose labelled per capsule',
+      els['supp-as-perday'].value === '2' && els['supp-as-perunit'].value === 'capsule' && els['supp-as-dose-lbl'].textContent === 'Dose per capsule');
+    check('  …and nothing is saved by reading the photo', !calls.some(c => c.m === 'POST' && !/read-label$/.test(c.url)));
+    catalogOk = false; calls.length = 0;
+    await S._suppConfirmAdd();
+    check('supp photo: when the catalogue refuses, nothing is saved and it says so',
+      !calls.some(c => /\/supplements$/.test(c.url)) && /could not be added to the list/.test(els['supp-photo-msg'].textContent || ''));
+    catalogOk = true; calls.length = 0;
+    await S._suppConfirmAdd();
+    const ca = calls.find(c => /supplement-catalog$/.test(c.url) && c.m === 'POST');
+    const sv = calls.find(c => /\/supplements$/.test(c.url) && c.m === 'POST');
+    check('supp photo: saving adds the supplement and its dose to the backend catalogue first',
+      ca && ca.body.name === 'Shilajit (Resin)' && ca.body.dose === '250 mg' && calls.indexOf(ca) < calls.indexOf(sv));
+    check('  …then saves the regimen row under the catalogue id, with the dose and how many a day',
+      sv && sv.body.supp_id === 'u-shilajit-resin' && sv.body.name === 'Shilajit (Resin)' && sv.body.dose === '250 mg' && sv.body.freq === 'daily' &&
+      sv.body.per_day === 2 && sv.body.per_unit === 'capsule');
+    check('  …and the dropdown lists it from now on, without the provisional entry',
+      !!S._suppCat('u-shilajit-resin') && !S.SUPPLEMENT_CAT.some(c => c._new));
+
+    // a supplement already in the list is selected, not duplicated, and the catalogue still hears of it
+    S._suppOpenAddSheet();
+    labelAnswer = {name: 'vitamin d3', dose: '125 µg (5000 IU)', per_day: 1, per_unit: 'softgel'};
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    check('supp photo: a known supplement is selected by name, not added twice',
+      els['supp-as-comp'].value === 'vitd3' && !S.SUPPLEMENT_CAT.some(c => c._new) && els['supp-as-dose'].value === '125 µg (5000 IU)');
+    calls.length = 0;
+    await S._suppConfirmAdd();
+    check('  …and saving still sends it to the catalogue, then saves it as vitd3',
+      calls.some(c => /supplement-catalog$/.test(c.url) && c.m === 'POST') &&
+      calls.some(c => /\/supplements$/.test(c.url) && c.body && c.body.supp_id === 'vitd3'));
+
+    // a provisional entry that is never saved leaves the dropdown with the sheet
+    S._suppOpenAddSheet();
+    labelAnswer = {name: 'Sea Moss', dose: '', per_day: 1, per_unit: 'capsule'};
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    check('supp photo: no visible amount says so', /No amount was visible/.test(els['supp-photo-msg'].textContent || ''));
+    S._suppCloseAddSheet();
+    check('  …and closing the sheet without saving drops the provisional entry', !S.SUPPLEMENT_CAT.some(c => c._new));
+
+    // a regimen row whose supplement isn't listed keeps its own name when edited
+    S._supplements = [{id: 'r9', supp_id: 'u-gone', name: 'Old Thing', dose: '1 g', freq: 'daily', timing: 'AM'}];
+    S._suppOpenAddSheet('r9');
+    check('supp edit: an unlisted supplement stays selected under its own name', /<option value="u-gone" selected>Old Thing<\/option>/.test(lastSheet.innerHTML));
+
+    // ── how many a day, in both the Add and the Edit sheet (Henrik, 2026-11-05) ──
+    check('supp per day: the sheet has a Per day amount and unit', /id="supp-as-perday"/.test(lastSheet.innerHTML) && /id="supp-as-perunit"/.test(lastSheet.innerHTML) && />Per day</.test(lastSheet.innerHTML));
+    check('  …a row saved before it opens at 1 a day', els['supp-as-perday'].value === '1');
+    S._supplements = [{id: 'r1', supp_id: 'magnesium', name: 'Magnesium (Glycinate)', dose: '200 mg', freq: 'daily', timing: 'AMPM', per_day: 3, per_unit: 'tablet'}];
+    S._suppOpenAddSheet('r1');
+    check('supp edit: opens with the stored 3 tablets a day', els['supp-as-perday'].value === '3' && els['supp-as-perunit'].value === 'tablet' && els['supp-as-dose-lbl'].textContent === 'Dose per tablet');
+    el('supp-as-freq').value = 'daily'; el('supp-as-timing').value = 'AMPM';
+    el('supp-as-comp').value = 'magnesium'; el('supp-as-dose').value = '200 mg';
+    el('supp-as-perday').value = '4';
+    calls.length = 0;
+    await S._suppConfirmAdd('r1');
+    const ed = calls.find(c => /\/supplements$/.test(c.url) && c.m === 'POST');
+    check('  …and Save sends the changed count', ed && ed.body.id === 'r1' && ed.body.per_day === 4 && ed.body.per_unit === 'tablet' && ed.body.dose === '200 mg');
+    S._suppOpenAddSheet();
+    S.document.getElementById('supp-as-perunit').value = 'g'; S._suppPerUnitSel();
+    check('supp add: powders by the gram, and the dose then reads as the day\'s amount',
+      /<option value="5"/.test(els['supp-as-perday'].innerHTML) && els['supp-as-dose-lbl'].textContent === 'Dose a day');
+    S._suppCloseAddSheet();
+
+    // the one place the day's amount is worked out, and what every list shows
+    check('supp per day: dose × count for count units', S._suppDoseMult({per_day: 2, per_unit: 'capsule'}) === 2 && S._suppDoseMult({per_day: 0.5, per_unit: 'tablet'}) === 0.5);
+    check('  …g and ml are already the day\'s amount, and a row saved before counts once',
+      S._suppDoseMult({per_day: 5, per_unit: 'g'}) === 1 && S._suppDoseMult({dose: '200 mg'}) === 1);
+    check('  …the line reads "200 mg per capsule · 2 capsules a day"',
+      S._suppDoseLine({supp_id: 'magnesium', dose: '200 mg', per_day: 2, per_unit: 'capsule'}) === '200 mg per capsule · 2 capsules a day',
+      S._suppDoseLine({supp_id: 'magnesium', dose: '200 mg', per_day: 2, per_unit: 'capsule'}));
+    check('  …"½ tablet a day", "3 gummies a day", "5 g a day", and an old row unchanged',
+      S._suppPerDayText({per_day: 0.5, per_unit: 'tablet'}) === '½ tablet a day' && S._suppPerDayText({per_day: 3, per_unit: 'gummy'}) === '3 gummies a day' &&
+      S._suppDoseLine({supp_id: 'creatine', dose: '5 g', per_day: 5, per_unit: 'g'}) === '5 g · 5 g a day' && S._suppDoseLine({supp_id: 'zinc', dose: '25 mg'}) === '25 mg');
+    S.renderTodaySupplements = _rts;
+    el('today-supplements');
+    S.todaySecHeader = () => ''; S.todaySecBody = (k, h) => h;
+    S._supplements = [{id: 'r1', supp_id: 'magnesium', name: 'Magnesium (Glycinate)', dose: '200 mg', freq: 'daily', timing: 'AM', start_date: '2020-01-01', per_day: 2, per_unit: 'capsule'}];
+    S.parseLocalDate = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+    try { S.renderTodaySupplements(new Date()); } catch (e) { /* Today needs more of the app; the row markup is what matters */ }
+    check('supp per day: Today shows how many a day', /200 mg per capsule · 2 capsules a day/.test(els['today-supplements'].innerHTML), els['today-supplements'].innerHTML.slice(0, 300));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('supp photo: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
 // ── Food log: a photo is attached, then Log sends it with the typed amount (2026-10-21) ──
 // Henrik: a photo of a 500 g tub of cottage cheese was logged as the whole tub, with no way
 // to say he ate 115 g. Picking a photo must not send anything on its own.
@@ -22750,7 +22897,7 @@ console.log('\n── Export CSV ───────────────�
     meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'},
            {id: 'm2', name: 'Later', strength: '5 mg', tablets_per_day: 1, start_date: '2026-12-01'}],
     supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)', timing: 'AMPM', freq: 'daily'},
-            {supp_id: 'mg', name: 'Magnesium', dose: '400 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01'},
+            {supp_id: 'mg', name: 'Magnesium', dose: '200 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01', per_day: 2, per_unit: 'capsule'},
             {supp_id: 'fut', name: 'Future', dose: '1 g', start_date: '2026-12-01'}]});
   const ij = rows.filter(r => r.type === 'injection');
   check('export: injections planned for the 7 days from today, nothing before or after',
@@ -22768,6 +22915,9 @@ console.log('\n── Export CSV ───────────────�
   check('export: supplements due this week, with their dose, times of day and how often',
     sup.length === 2 && sup[1].name === 'Vitamin D3' && sup[1].dose === 50 && sup[1].unit === 'µg' && sup[1].time === 'AM + PM' &&
     sup[1].how_often === 'daily' && sup[0].name === 'Magnesium' && sup[0].how_often === 'weekly');
+  check('export: a supplement with a count shows the strength per capsule and how many a day (2026-11-05)',
+    sup[0].dose === 200 && sup[0].unit === 'mg' && sup[0].amount === '2 capsules a day', JSON.stringify(sup[0]));
+  check('  …one saved before the count keeps its dose as the amount', sup[1].amount === '50 µg (2000 IU)');
   check('export: injections first, then medications, then supplements',
     rows.map(r => r.type).join(',') === 'injection,injection,injection,injection,medication,supplement,supplement');
   const csv = G.exportCsv([{type: 'medication', name: 'A, "B"', dose: 1, unit: 'mg', amount: '1 tablet a day', how_often: 'daily'}]);
