@@ -64,6 +64,42 @@ var _suppViewDate = null;// date currently shown in the Today section (for re-re
 function _suppEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function _suppCat(id){ return SUPPLEMENT_CAT.find(function(c){return c.id===id;}); }
 
+// ── How many a day (Henrik, 2026-11-05: "assumes one capsule is the daily dose … I need to add
+// number of capsules/tablets taken per day per supplement (or grams for powders etc)") ─────────
+// A row's dose is the strength of ONE per_unit when that is a count (capsule, tablet …), so the
+// day's amount is dose × per_day. For g and ml (powder or liquid by weight or volume) the dose is
+// already the day's amount. Rows saved before carry no per_day: their dose counts once, as before.
+var SUPP_PER_UNITS = ['capsule','tablet','softgel','gummy','scoop','drop','serving','g','ml'];
+function _suppIsCountUnit(u){ return SUPP_PER_UNITS.indexOf(u) >= 0 && u !== 'g' && u !== 'ml'; }
+function _suppFmtNum(n){
+  var w = Math.floor(n), f = Math.round((n - w) * 100) / 100;
+  var fr = f === 0.5 ? '½' : (f === 0.25 ? '¼' : (f === 0.75 ? '¾' : ''));
+  if(fr) return (w ? String(w) : '') + fr;
+  return String(Math.round(n * 100) / 100);
+}
+function _suppUnitWord(u, n){
+  if(!_suppIsCountUnit(u) || n <= 1) return u;
+  return u === 'gummy' ? 'gummies' : u + 's';
+}
+// "2 capsules a day", "5 g a day", or '' for a row without a per-day amount.
+function _suppPerDayText(s){
+  var n = s ? Number(s.per_day) : 0;
+  if(!(n > 0) || !s.per_unit) return '';
+  return _suppFmtNum(n) + ' ' + _suppUnitWord(s.per_unit, n) + ' a day';
+}
+// What the stored dose is multiplied by to get the day's amount of the active ingredient.
+function _suppDoseMult(s){
+  var n = s ? Number(s.per_day) : 0;
+  return (n > 0 && _suppIsCountUnit(s.per_unit)) ? n : 1;
+}
+// The dose line shown wherever a supplement is listed: "200 mg per capsule · 2 capsules a day".
+function _suppDoseLine(s){
+  var d = _suppFmtDose(s.supp_id, s.dose) || '';
+  var p = _suppPerDayText(s);
+  if(d && p && _suppIsCountUnit(s.per_unit)) d += ' per ' + s.per_unit;
+  return [d, p].filter(Boolean).join(' · ');
+}
+
 // Display-only formatting of a stored dose string. Supplements saved before the metric/µg
 // change keep their old dose text (e.g. "5000 IU", "100 mcg") — the stored value is left
 // untouched, but for display we (1) write micrograms as "µg" not "mcg", and (2) upgrade an
@@ -206,6 +242,44 @@ async function syncSupplementsFromAgent(){
   }catch(e){ _logErr('syncSupplements', e); }
 }
 
+// ── catalogue (dropdown) from the backend ────────────────────────────────────
+// /supplement-catalog serves the built-in list plus every supplement added from a label
+// photo (Henrik, 2026-11-05). SUPPLEMENT_CAT above is the list until it has loaded; what the
+// backend adds is laid over it here, new supplements at the end, new doses after the old.
+function _suppKey(name){ return String(name||'').toLowerCase().replace(/[^a-z0-9]+/g,''); }
+function _suppMergeCatalog(list){
+  (list||[]).forEach(function(e){
+    if(!e || !e.id || !e.name) return;
+    var c = _suppCat(e.id);
+    if(!c){ SUPPLEMENT_CAT.push({id:e.id, name:e.name, doses:(e.doses||[]).slice()}); return; }
+    (e.doses||[]).forEach(function(d){ if(c.doses.indexOf(d) === -1) c.doses.push(d); });
+  });
+}
+async function syncSupplementCatalogFromAgent(){
+  _suppMergeCatalog(getData('pep-supp-catalog', []) || []);
+  try{
+    var r = await fetch(AGENT_URL + '/supplement-catalog', {headers: authHeaders()});
+    if(!r.ok){ _logHttp('syncSuppCatalog', r.status, '/supplement-catalog'); return; }
+    var data = await r.json();
+    if(Array.isArray(data)){ setData('pep-supp-catalog', data); _suppMergeCatalog(data); }
+  }catch(e){ _logErr('syncSuppCatalog', e); }
+}
+// Add a supplement read from a label (or a new dose of one) to the backend catalogue, so it
+// is in everyone's dropdown. Returns the catalogue entry, or null when the backend refused.
+async function _suppAddToCatalog(name, dose){
+  try{
+    var r = await fetch(AGENT_URL + '/supplement-catalog', {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({name: name, dose: dose || ''})});
+    if(!r.ok){ _logHttp('suppCatalogAdd', r.status, '/supplement-catalog'); return null; }
+    var j = await r.json();
+    if(!j || !j.entry || !j.entry.id) return null;
+    _suppMergeCatalog([j.entry]);
+    var cached = getData('pep-supp-catalog', []) || [];
+    setData('pep-supp-catalog', cached.filter(function(e){ return e.id !== j.entry.id; }).concat([j.entry]));
+    return _suppCat(j.entry.id);
+  }catch(e){ _logErr('suppCatalogAdd', e); return null; }
+}
+
 // ── taken-dose log (checkboxes) ──────────────────────────────────────────────
 function _suppLoadLogCache(){ _suppLog = getData('pep-supp-log', {}) || {}; }
 function _suppSaveLogCache(){ setData('pep-supp-log', _suppLog); }
@@ -330,7 +404,7 @@ function renderTodaySupplements(date){
     return '<div class="check-item'+(taken?' checked-item':'')+'" onclick="toggleSupplementDose(\''+_suppEsc(r.s.supp_id)+'\',\''+dstr+'\',\''+r.slot+'\')">' +
       '<div class="check-box'+(taken?' checked':'')+'"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
       '<div class="check-main"><div class="check-name" style="color:var(--text)">' + _suppEsc(r.s.name) + '</div>' +
-      (r.s.dose ? '<div class="check-detail">' + _suppEsc(_suppFmtDose(r.s.supp_id, r.s.dose)) + '</div>' : '') + '</div>' +
+      (_suppDoseLine(r.s) ? '<div class="check-detail">' + _suppEsc(_suppDoseLine(r.s)) + '</div>' : '') + '</div>' +
       '<div class="check-time">' + r.slot + '</div></div>';
   }).join('');
   wrap.innerHTML =
@@ -360,7 +434,7 @@ function buildSupplements(){
         '<div style="width:9px;height:9px;border-radius:50%;background:var(--accent3,#7bd88f);flex-shrink:0"></div>' +
         '<div style="flex:1;min-width:0">' +
           '<div style="font-size:15px;font-weight:600;color:var(--text)">' + _suppEsc(s.name) + '</div>' +
-          '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _suppEsc(_suppFmtDose(s.supp_id, s.dose)||'') + (s.dose?' · ':'') + meta + '</div>' +
+          '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _suppEsc(_suppDoseLine(s)) + (_suppDoseLine(s)?' · ':'') + meta + '</div>' +
         '</div>' +
         '<button onclick="_suppOpenAddSheet(\'' + _suppEsc(s.id) + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit</button>' +
         '<button onclick="_suppDelete(\'' + _suppEsc(s.id) + '\')" aria-label="Delete" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;line-height:1;padding:2px 4px">×</button>' +
@@ -377,6 +451,10 @@ function _suppOpenAddSheet(editId){
   var editing = editId ? (_supplements||[]).find(function(s){return s.id===editId;}) : null;
   var iSty = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:15px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
   var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted,#888);text-transform:uppercase;margin-bottom:8px;display:block';
+  _suppSheet = {busy:false, photo:null};
+  // A regimen row whose supplement the dropdown doesn't list yet (catalogue not loaded) keeps
+  // its own name, so saving never switches it to another supplement.
+  if(editing && !_suppCat(editing.supp_id)) SUPPLEMENT_CAT.push({id:editing.supp_id, name:editing.name, doses: editing.dose ? [editing.dose] : ['1 serving']});
   var selId = editing ? editing.supp_id : SUPPLEMENT_CAT[0].id;
   var compOpts = SUPPLEMENT_CAT.map(function(c){ return '<option value="'+_suppEsc(c.id)+'"'+(c.id===selId?' selected':'')+'>'+_suppEsc(c.name)+'</option>'; }).join('');
   var freqOpts = Object.keys(SUPP_FREQ_LABELS).map(function(k){ return '<option value="'+k+'"'+(editing&&editing.freq===k?' selected':'')+'>'+SUPP_FREQ_LABELS[k]+'</option>'; }).join('');
@@ -392,9 +470,17 @@ function _suppOpenAddSheet(editId){
       '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">' + (editing?'EDIT SUPPLEMENT':'ADD SUPPLEMENT') + '</div>' +
       '<button onclick="_suppCloseAddSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
     '</div>' +
+    '<input id="supp-photo" type="file" accept="image/'+'*" style="display:none" onchange="_suppPhotoPicked(this)">' +
+    '<button id="supp-photo-btn" onclick="document.getElementById(\'supp-photo\').click()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:6px">📷 Photo of the label</button>' +
+    '<div id="supp-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">Name, dose and how many a day are read from the photo with your own API key (Settings, Food key). Check them before saving. A supplement not in the list is added to it.</div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">Supplement</label>' +
-      '<select id="supp-as-comp" onchange="_suppFillDoses()" style="'+iSty+'">'+compOpts+'</select></div>' +
-    '<div style="margin-bottom:14px"><label style="'+lSty+'">Dose</label>' +
+      '<select id="supp-as-comp" onchange="_suppFillDoses();_suppFillPerDay(null,null)" style="'+iSty+'">'+compOpts+'</select></div>' +
+    '<div style="margin-bottom:14px"><label style="'+lSty+'">Per day</label>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+        '<select id="supp-as-perday" aria-label="How many a day" style="'+iSty+'"></select>' +
+        '<select id="supp-as-perunit" aria-label="Counted in" onchange="_suppPerUnitSel()" style="'+iSty+'"></select>' +
+      '</div></div>' +
+    '<div style="margin-bottom:14px"><label id="supp-as-dose-lbl" style="'+lSty+'">Dose</label>' +
       '<select id="supp-as-dose" onchange="_suppDoseSel()" style="'+iSty+';margin-bottom:8px"></select>' +
       '<div id="supp-as-dose-custom" style="display:none;grid-template-columns:1fr 1fr;gap:12px">' +
         '<div style="min-width:0"><label style="'+lSty+'">Amount</label>' +
@@ -410,9 +496,106 @@ function _suppOpenAddSheet(editId){
     '</div>';
   document.body.appendChild(ol);
   _suppFillDoses(editing ? _suppFmtDose(editing.supp_id, editing.dose) : null);
+  _suppFillPerDay(editing ? editing.per_day : null, editing ? editing.per_unit : null);
 }
 
-function _suppCloseAddSheet(){ var ol=document.getElementById('supp-add-overlay'); if(ol) ol.remove(); }
+// ── Per day: how many (amount dropdown) of what (unit dropdown) ──────────────
+function _suppPerDayOptions(unit){
+  if(unit === 'g')    return [0.5,1,2,3,5,10,15,20,25,30,40,50];
+  if(unit === 'ml')   return [1,2.5,5,10,15,20,30,50];
+  if(unit === 'drop') return [1,2,3,4,5,10,15,20,30];
+  return [0.5,1,1.5,2,3,4,5,6,8,10];
+}
+// Unit a supplement is most likely counted in, from its catalogue doses.
+function _suppDefaultPerUnit(){
+  var compEl = document.getElementById('supp-as-comp');
+  var cat = compEl ? _suppCat(compEl.value) : null;
+  var d = (cat && cat.doses && cat.doses[0]) ? String(cat.doses[0]) : '';
+  if(/scoop/.test(d) || /^\s*[\d.]+\s*g\b/.test(d)) return 'scoop';
+  if(/serving/.test(d)) return 'serving';
+  return 'capsule';
+}
+function _suppFillPerDay(n, unit){
+  var uEl = document.getElementById('supp-as-perunit'), nEl = document.getElementById('supp-as-perday');
+  if(!uEl || !nEl) return;
+  var u = SUPP_PER_UNITS.indexOf(unit) >= 0 ? unit : _suppDefaultPerUnit();
+  uEl.innerHTML = SUPP_PER_UNITS.map(function(x){ return '<option value="'+x+'"'+(x===u?' selected':'')+'>'+_suppUnitWord(x, 2)+'</option>'; }).join('');
+  uEl.value = u;
+  var opts = _suppPerDayOptions(u).slice();
+  var sel = (Number(n) > 0) ? Number(n) : 1;
+  if(opts.indexOf(sel) === -1){ opts.push(sel); opts.sort(function(a,b){ return a-b; }); }
+  nEl.innerHTML = opts.map(function(v){ return '<option value="'+v+'"'+(v===sel?' selected':'')+'>'+_suppFmtNum(v)+'</option>'; }).join('');
+  nEl.value = String(sel);
+  var lbl = document.getElementById('supp-as-dose-lbl');
+  if(lbl) lbl.textContent = _suppIsCountUnit(u) ? ('Dose per ' + u) : 'Dose a day';
+}
+function _suppPerUnitSel(){
+  var uEl = document.getElementById('supp-as-perunit'), nEl = document.getElementById('supp-as-perday');
+  _suppFillPerDay(nEl ? Number(nEl.value) : null, uEl ? uEl.value : null);
+}
+
+function _suppCloseAddSheet(){
+  var ol=document.getElementById('supp-add-overlay'); if(ol) ol.remove();
+  // provisional entries from a label photo that was never saved leave the dropdown
+  for(var i=SUPPLEMENT_CAT.length-1;i>=0;i--){ if(SUPPLEMENT_CAT[i]._new) SUPPLEMENT_CAT.splice(i,1); }
+}
+
+// ── label photo → supplement + daily dose (Henrik, 2026-11-05) ───────────────
+// /supplements/read-label reads the label on the user's own key (the Food key, like the
+// medication package photo) and saves nothing. A name the dropdown doesn't list gets a
+// provisional entry; saving adds it to the backend catalogue first (_suppAddToCatalog).
+var _suppSheet = {busy:false, photo:null};   // photo: {id, name, dose} read for this sheet
+function _suppSetPhotoMsg(text, bad){
+  var m = document.getElementById('supp-photo-msg');
+  if(m){ m.textContent = text; m.style.color = bad ? 'var(--danger,#ff3b30)' : 'var(--muted)'; }
+  var b = document.getElementById('supp-photo-btn');
+  if(b){ b.disabled = !!_suppSheet.busy; b.textContent = _suppSheet.busy ? 'Reading the label…' : '📷 Photo of the label'; }
+}
+// What read-label answered → the dropdowns. Returns the catalogue entry selected.
+function _suppApplyRead(j){
+  var name = j && j.name ? String(j.name).trim() : '';
+  if(!name) return null;
+  var dose = j.dose ? String(j.dose).trim() : '';
+  var cat = SUPPLEMENT_CAT.find(function(c){ return _suppKey(c.name) === _suppKey(name); });
+  if(!cat){
+    cat = {id: 'new-' + Date.now().toString(36), name: name, doses: [], _new: true};
+    SUPPLEMENT_CAT.push(cat);
+  }
+  if(dose && cat.doses.indexOf(dose) === -1) cat.doses.push(dose);
+  if(!cat.doses.length) cat.doses.push('1 serving');
+  _suppSheet.photo = {id: cat.id, name: cat.name, dose: dose};
+  var compEl = document.getElementById('supp-as-comp');
+  if(compEl){
+    compEl.innerHTML = SUPPLEMENT_CAT.map(function(c){ return '<option value="'+_suppEsc(c.id)+'"'+(c.id===cat.id?' selected':'')+'>'+_suppEsc(c.name)+(c._new?' (new)':'')+'</option>'; }).join('');
+    compEl.value = cat.id;
+  }
+  _suppFillDoses(dose || null);
+  _suppFillPerDay(j.per_day, j.per_unit);
+  return cat;
+}
+async function _suppPhotoPicked(inp){
+  var file = inp && inp.files && inp.files[0];
+  if(!file || _suppSheet.busy) return;
+  _suppSheet.busy = true; _suppSetPhotoMsg('Reading the label…');
+  try{
+    var b64 = await _flShrink(file);
+    var r = await fetch(AGENT_URL + '/supplements/read-label', {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({image_b64: b64, media_type: 'image/jpeg'})});
+    var j = await r.json().catch(function(){ return {}; });
+    _suppSheet.busy = false;
+    if(!r.ok){ _suppSetPhotoMsg((j && typeof j.detail==='string') ? j.detail : ('The server answered '+r.status+'.'), true); }
+    else {
+      var cat = _suppApplyRead(j);
+      if(!cat) _suppSetPhotoMsg('No supplement read from the photo. Pick it from the list.', true);
+      else _suppSetPhotoMsg((cat._new ? 'New supplement: it is added to the list when you save. ' : '') +
+        (j.dose ? 'Dose and how many a day read from the label. Check them, then save.' : 'No amount was visible. Pick the dose, then save.'));
+    }
+  }catch(e){
+    _suppSheet.busy = false;
+    _suppSetPhotoMsg('Could not read the photo: no connection.', true);
+  }
+  if(inp) inp.value = '';
+}
 
 // ── Custom dose via two dropdowns (no free text) ─────────────────────────────
 // Custom doses are entered with an amount dropdown + a unit dropdown so the
@@ -522,6 +705,8 @@ function _suppDoseSel(){
   }
 }
 
+function _suppSheetPerDay(){ var el = document.getElementById('supp-as-perday'); var n = el ? Number(el.value) : 0; return n > 0 ? n : 1; }
+function _suppSheetPerUnit(){ var el = document.getElementById('supp-as-perunit'); return (el && SUPP_PER_UNITS.indexOf(el.value) >= 0) ? el.value : 'serving'; }
 async function _suppConfirmAdd(editId){
   var compEl = document.getElementById('supp-as-comp');
   var doseEl = document.getElementById('supp-as-dose');
@@ -531,6 +716,15 @@ async function _suppConfirmAdd(editId){
   var cat = _suppCat(compEl.value);
   if(!cat) return;
   var dose = (doseEl && doseEl.value === '__custom__') ? _suppCurrentDropdownDose() : (doseEl ? doseEl.value : '');
+  // Picked from a label photo: the supplement (and this dose) go into the backend catalogue
+  // first, so it is in the dropdown from now on, and the regimen row gets its catalogue id.
+  if(cat._new || (_suppSheet.photo && _suppSheet.photo.id === cat.id)){
+    var pending = cat;
+    var added = await _suppAddToCatalog(cat.name, dose);
+    if(!added){ _suppSetPhotoMsg('Not saved: the supplement could not be added to the list. Try again.', true); return; }
+    _suppSheet.photo = null;
+    cat = added;
+  }
   var existing = editId ? (_supplements||[]).find(function(s){return s.id===editId;}) : null;
   var entry = {
     id:         editId || undefined,
@@ -539,7 +733,9 @@ async function _suppConfirmAdd(editId){
     dose:       dose,
     freq:       freqEl ? freqEl.value : 'daily',
     timing:     timeEl ? timeEl.value : 'AM',
-    start_date: (existing && existing.start_date) ? existing.start_date : _suppToday()
+    start_date: (existing && existing.start_date) ? existing.start_date : _suppToday(),
+    per_day:    _suppSheetPerDay(),
+    per_unit:   _suppSheetPerUnit()
   };
   // optimistic local update
   if(editId){
