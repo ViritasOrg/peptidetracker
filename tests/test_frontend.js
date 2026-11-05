@@ -8246,19 +8246,17 @@ console.log('\n── The loading dose ─────────────�
   {
     const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
 
-    // THE GATE. This file promotes to prod unchanged, so the card must be behind
-    // IS_STAGING or it ships to production.
-    check('the debug card is gated on IS_STAGING', (function(){
+    // NO GATE (Henrik, 2026-11-05: the only thing prod does not need is the Push to Prod card).
+    // It was behind IS_STAGING until then; prod now builds it exactly as staging does.
+    check('the debug card is built in prod as on staging (no staging gate)', (function(){
       // The whole card, from its banner to the closing of the guard — not a fixed
       // window, which was shorter than the markup and failed on a correct gate.
-      const i=src.indexOf('// ── Debug dump — STAGING ONLY');
+      const i=src.indexOf('// ── Debug dump');
       if(i<0) return false;
       const j=src.indexOf("el.innerHTML = html;", i);
       if(j<0) return false;
       const seg=src.slice(i,j);
-      // The guard has to OPEN before any of the markup is appended.
-      const g=seg.indexOf('IS_STAGING'), o=seg.indexOf('tc-debug-out');
-      return g>=0 && o>g;
+      return seg.indexOf('IS_STAGING')<0 && seg.indexOf('tc-debug-out')>=0;
     })());
     check('  …and the dump is the only thing behind that gate in this file',
       (src.match(/id="tc-debug-out"/g)||[]).length===1);
@@ -8605,7 +8603,7 @@ console.log('\n── The loading dose ─────────────�
       +'setInterval clearInterval requestAnimationFrame parseInt parseFloat isNaN isFinite AbortController '
       +'encodeURIComponent decodeURIComponent NaN Infinity undefined true false typeof instanceof new delete '
       +'void in of return if else for while do switch case break continue function var let const try catch '
-      +'finally throw yield await async this arguments null Intl Symbol Blob URL FormData TextEncoder '
+      +'finally throw yield await async this arguments null Intl Symbol Blob File URL FormData TextEncoder '
       +'performance crypto structuredClone RE').split(/\s+/));
     const suspects=[];
     Object.keys(srcMap).forEach(function(fname){
@@ -9103,12 +9101,11 @@ console.log('\n── Injection site (Today) ───────────�
     }
 
     // ── Staging-only override (Henrik, 2026-10-14) ───────────────────────────
-    check('override: staging honours a pinned figure', G._injBodyOverrideFor(true, 'f35').key === 'f35' &&
-      G._injBodyOverrideFor(true, 'm10').key === 'm10');
-    check('override: prod ignores it entirely', G._injBodyOverrideFor(false, 'f35') === null);
+    check('override: a pinned figure is honoured, in prod as on staging', G._injBodyOverrideFor('f35').key === 'f35' &&
+      G._injBodyOverrideFor('m10').key === 'm10');
     check('override: "auto" or junk falls back to sex + body fat',
-      G._injBodyOverrideFor(true, 'auto') === null && G._injBodyOverrideFor(true, 'x9') === null &&
-      G._injBodyOverrideFor(true, '') === null);
+      G._injBodyOverrideFor('auto') === null && G._injBodyOverrideFor('x9') === null &&
+      G._injBodyOverrideFor('') === null);
     check('override: the picker asks the override before sex and body fat',
       /function _injBody\(\)\{\s*var ov=_injBodyOverride\(\); if\(ov\) return ov;/.test(siteSrc));
     {
@@ -9120,9 +9117,9 @@ console.log('\n── Injection site (Today) ───────────�
       G.setInjBodyOverride('auto');
       G.pushPepSettingsToAgent = _pushSave;
     }
-    check('override: the Settings row is hidden by default and only shown on staging',
+    check('override: the Settings row is shown in prod as on staging',
       /id="s-injbody-row" style="display:none;/.test(html) &&
-      /if\(IS_STAGING\)\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html));
+      /\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html) && !/IS_STAGING\)\{const ir=/.test(html));
     check('override: the settings sync restores it on a new device',
       /s\['inj-body-override'\]/.test(html));
     // ── Needle length: the backend's answer, printed as given ────────────────
@@ -10210,10 +10207,10 @@ if (typeof G._chainFromActive === 'function') {
 
 // ── Storage tab hideable via Settings ─────────────────────────────────────────
 {
-  check('TAB_LABELS uses Object.assign to conditionally include storage (IS_STAGING gate)',
-    rawScript.includes("Object.assign({today:'Today'") && rawScript.includes("IS_STAGING?{storage:'Storage'}:{}"));
-  check('TAB_DEFAULTS uses Object.assign to conditionally include storage:true',
-    rawScript.includes("IS_STAGING?{storage:true}:{}"));
+  check('TAB_LABELS includes storage in prod as on staging (no staging gate)',
+    rawScript.includes("Object.assign({today:'Today'") && rawScript.includes(",{storage:'Storage'})") && !rawScript.includes("IS_STAGING?{storage:"));
+  check('TAB_DEFAULTS includes storage:true',
+    rawScript.includes(",{storage:true})"));
   check('tab-btn-storage exists in HTML (hidden by default)',
     html.includes('id="tab-btn-storage"'));
   check('storage tab visibility gated by TAB_LABELS membership (no manual show override in init)',
@@ -22456,6 +22453,34 @@ console.log('\n── Medication ───────────────�
   G._meds = [];
   G.renderTodayMeds(_d);
   check('  …nothing at all when there is no medication', _w.innerHTML === '');
+  // The package photo can come from the camera OR the photo library (Henrik, 2026-11-05: "Add meds only
+  // uses camera, it should also be able to open a image from photos"). `capture` makes iOS open the camera only.
+  {
+    const _ol = {style: {}}, _gidP = G.document.getElementById, _ceP = G.document.createElement, _bd = G.document.body;
+    G.document.createElement = () => _ol; G.document.getElementById = () => null;
+    if (!G.document.body) G.document.body = {};
+    const _ap = G.document.body.appendChild; G.document.body.appendChild = () => {};
+    try { G._medOpenSheet(); } catch (e) { /* only the sheet's markup matters here */ }
+    G.document.createElement = _ceP; G.document.getElementById = _gidP; G.document.body.appendChild = _ap; if (!_bd) delete G.document.body;
+    const _inp = (String(_ol.innerHTML || '').match(/<input id="med-photo"[^>]*>/) || [''])[0];
+    check('meds: the package photo input takes images', /accept="image\/\*"/.test(_inp), _inp);
+    check('  …from the photo library as well as the camera (no capture attribute)', _inp !== '' && !/capture=/.test(_inp), _inp);
+  }
+  // Picking a past day in the week strip must draw the meds for THAT day, so a tick saves that
+  // day's date (Henrik, 2026-11-05: yesterday picked at 00:12, this morning's meds saved on today).
+  {
+    const _y = new Date(); _y.setDate(_y.getDate() - 1);
+    const _rm = G.renderTodayMeds, _seen = [];
+    G.renderTodayMeds = d => _seen.push(G._medDateKey(d));
+    try { G.showDayInline(_y, null); } catch (e) { /* the rest of the day view needs a DOM; the meds call comes first */ }
+    G.renderTodayMeds = _rm;
+    check('meds: picking yesterday draws the meds for yesterday', _seen.length > 0 && _seen[0] === G._medDateKey(_y), JSON.stringify(_seen));
+    G._meds = [{id: 'm1', name: 'Lisinopril', tablets_per_day: 1, start_date: '2020-01-01'}]; G._medLog = {};
+    G.document.getElementById = id => id === 'today-meds' ? _w : null;
+    G.renderTodayMeds(_y);
+    check("  …so its tick saves yesterday's date", _w.innerHTML.indexOf("toggleMedDose('m1','" + G._medDateKey(_y) + "')") >= 0);
+    G._meds = []; G._medLog = {};
+  }
   G.document.getElementById = _gid;
   // folding: injections open, the rest folded; a tap flips one
   check('today: injections expanded, medication and supplements folded by default',
@@ -22672,3 +22697,100 @@ console.log('\n── Medication ───────────────�
     if (failed > 0) process.exitCode = 1;
   })().catch(e => { check('water: retry checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }
+
+// ── Push to Prod ships every feature: no feature is gated to staging (Henrik, 2026-11-04) ──
+// "I push stage to prod, then all features must be available in prod!" Polestar shipped behind
+// `POLESTAR_ON=IS_STAGING`, Henrik pushed to prod and the card was not there. Then (2026-11-05):
+// "The only feature we don't need in production is the push to prod card". IS_STAGING may only
+// switch ENVIRONMENT plumbing (data namespace, URLs, the stage-copy card) and the Push to Prod
+// card. Every use is listed here; anything else fails.
+console.log('\n── No feature is gated to staging ─────────────────────────');
+{
+  const _fs = require('fs'), _path = require('path');
+  const _dir = _path.dirname(_path.resolve(htmlPath));
+  const _files = [_path.resolve(htmlPath)].concat(_fs.readdirSync(_dir).filter(f => /\.js$/.test(f)).map(f => _path.join(_dir, f)));
+  const ALLOWED = [
+    /const IS_STAGING=\(window\.location\.pathname/,                 // the switch itself
+    /const APP_ID=IS_STAGING\?'stage':''/,                            // staging's own data namespace
+    /if\(IS_STAGING\)\{var _S='staging:'/,                           // staging's own localStorage keys
+    /if\(IS_STAGING\)\{card\.innerHTML='';return;\}/,                // prod→stage copy card, prod only
+    /env='\+\(\(typeof IS_STAGING/,                                   // environment name in a debug report
+    /if\(IS_STAGING\)buildDeployCard\(\)|s-deploy-card/,              // the Push to Prod card itself
+    /fetch\(\(IS_STAGING\?'https:\/\/viritasorg\.github\.io\//,       // each app's own version.json
+    /if\(!IS_STAGING\|\|localStorage\.getItem\('wk-bf-isol-v1'\)\)/, // staging data isolation migration
+  ];
+  const bad = [];
+  _files.forEach(f => {
+    const src = _fs.readFileSync(f, 'utf8'); let i = -1;
+    while ((i = src.indexOf('IS_STAGING', i + 1)) >= 0) {
+      const win = src.slice(Math.max(0, i - 80), i + 400);
+      if (!ALLOWED.some(re => re.test(win))) bad.push(_path.basename(f) + ': …' + src.slice(Math.max(0, i - 40), i + 60).replace(/\s+/g, ' ') + '…');
+    }
+  });
+  check('every IS_STAGING use is environment plumbing or the Push to Prod card, never a feature',
+    bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
+}
+
+// ── Export CSV (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
+// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────────
+console.log('\n── Export CSV ─────────────────────────────────────────────');
+{
+  check('export: ISO weeks (Monday start, week 1 holds Thursday)',
+    G._expIsoWeek('2026-11-02') === '2026-W45' && G._expIsoWeek('2026-11-08') === '2026-W45' &&
+    G._expIsoWeek('2026-11-09') === '2026-W46' && G._expIsoWeek('2027-01-01') === '2026-W53' && G._expIsoWeek('bad') === '');
+  const rows = G.buildExportRows({
+    injections: [
+      {date: '2026-11-02', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', time_of_day: 'AM', logged: true},
+      {date: '2026-11-04', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', logged_dose: '120', unit: 'mg', logged: true},
+      {date: '2026-11-06', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: false},
+      {date: '2026-11-10', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: true}],
+    meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'}],
+    medLog: [{med_id: 'm1', date: '2026-11-03'}, {med_id: 'm1', date: '2026-11-04'}, {med_id: 'gone', date: '2026-11-04'}],
+    supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)'}, {supp_id: 'b', name: 'B-Complex', dose: 'one'}],
+    suppLog: [{supp_id: 'vitd3', date: '2026-11-03', slot: 'AM', taken: true}, {supp_id: 'vitd3', date: '2026-11-03', slot: 'PM', taken: true},
+              {supp_id: 'vitd3', date: '2026-11-04', slot: 'AM', taken: false}, {supp_id: 'b', date: '2026-11-04', slot: 'AM', taken: true}]});
+  const inj = rows.filter(r => r.type === 'injection');
+  check('export: only injections ticked as taken, at the dose actually logged',
+    inj.length === 3 && inj[1].dose === 120 && inj[0].unit === 'mg' && inj[0].time === 'AM');
+  check('  …each carries its week\'s total (100 + 120 in W45, 100 in W46)',
+    inj[0].week_total === 220 && inj[1].week_total === 220 && inj[2].week === '2026-W46' && inj[2].week_total === 100);
+  const med = rows.filter(r => r.type === 'medication');
+  check('export: medication ticks with tablets, strength, and a weekly tablet total',
+    med.length === 3 && med[0].name === 'Lisinopril' && med[0].dose === 0.5 && med[0].unit === 'tablet' &&
+    med[0].detail === '10 mg' && med[0].week_total === 1);
+  check('  …a tick for a deleted medication keeps its row, named by its id', med.some(r => r.name === 'gone'));
+  const sup = rows.filter(r => r.type === 'supplement');
+  check('export: supplement ticks per slot, untaken left out, total in the dose\'s own unit',
+    sup.length === 3 && sup[0].dose === 50 && sup[0].unit === 'µg' && sup[0].week_total === 100 && sup[0].detail === '50 µg (2000 IU)');
+  check('  …a dose that is not a number is kept as text with no total',
+    sup.some(r => r.name === 'B-Complex' && r.dose === 'one' && r.week_total === ''));
+  check('export: rows are in date order', rows.every((r, i) => i === 0 || rows[i - 1].date <= r.date));
+  const csv = G.exportCsv([{date: '2026-11-03', week: '2026-W45', type: 'medication', name: 'A, "B"', dose: 1, unit: 'tablet', detail: '', time: '', week_total: 7}]);
+  check('export: CSV has the header and quotes commas and quotes',
+    csv.split('\r\n')[0] === 'date,week,type,name,dose,unit,detail,time,week_total' &&
+    csv.split('\r\n')[1] === '2026-11-03,2026-W45,medication,"A, ""B""",1,tablet,,,7');
+  check('export: Settings has the card and it is built with the other cards',
+    /<div id="s-export-card"/.test(require('fs').readFileSync(htmlPath, 'utf8')) && /buildExportCard\(\);buildStageCopyCard\(\)/.test(require('fs').readFileSync(htmlPath, 'utf8')));
+  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title)));
+}
+globalThis.__exportRun = (async function(){
+  const calls = [], shared = [];
+  const _f = G.fetch, _n = G.navigator, _F = G.File, _gid = G.document.getElementById;
+  const els = {'s-export-btn': {textContent: '', disabled: false}, 's-export-status': {textContent: '', style: {}}};
+  // Other async tests run alongside this one: every stub hands anything that is not the export's back to the original.
+  G.document.getElementById = id => els[id] || (_gid ? _gid.call(G.document, id) : null);
+  G.File = function(parts, name, o){ this.text = parts.join(''); this.name = name; this.type = o && o.type; };
+  G.navigator = {canShare: () => true, share: async o => { shared.push(o); }};
+  G.fetch = async function (url) { calls.push(url);
+    const path = url.replace(G.AGENT_URL, '');
+    const body = {'/injections?active_only=false': [{date: '2026-11-02', compound_name: 'Nebido', dose: '100', unit: 'mg', logged: true}],
+      '/medications': [], '/medications/log': [], '/supplements': [], '/supplement-log': []}[path];
+    if (body === undefined) return _f(url, ...Array.prototype.slice.call(arguments, 1));
+    return {ok: true, status: 200, json: async () => body}; };
+  try { await G.exportData(); } finally { G.fetch = _f; G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
+  check('export: reads all five records from the backend, injections including inactive ones',
+    ['/injections?active_only=false', '/medications', '/medications/log', '/supplements', '/supplement-log'].every(p => calls.some(u => u.endsWith(p))));
+  check('  …and hands a .csv file to the share sheet', shared.length === 1 && /^peptide-tracker-\d{4}-\d{2}-\d{2}\.csv$/.test(shared[0].files[0].name) &&
+    shared[0].files[0].type === 'text/csv' && /Nebido,100,mg/.test(shared[0].files[0].text));
+  check('  …and says how many rows', els['s-export-status'].textContent === '1 row exported.' && els['s-export-btn'].textContent === 'Export CSV');
+})().catch(e => check('export run checks ran', false, String(e && e.stack || e)));
