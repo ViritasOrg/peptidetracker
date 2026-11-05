@@ -9170,6 +9170,9 @@ console.log('\n── Injection site (Today) ───────────�
   }
 }
 
+// Async blocks defined at the end of the file (globalThis.__<name>Run) finish before the count, or their checks race
+  // this exit and vanish.
+  for (const k of Object.keys(globalThis)) if (/^__\w+Run$/.test(k)) await globalThis[k];
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -22731,66 +22734,138 @@ console.log('\n── No feature is gated to staging ─────────
     bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
 }
 
-// ── Export CSV (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
-// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────────
+// ── Export CSV (Henrik, 2026-11-05: "I want one weeks planned injections, and then a days meds and supplements.
+// not for the full timespan of the protocol. I just want a list that says "what I am taking atm" to show a doctor") ──
 console.log('\n── Export CSV ─────────────────────────────────────────────');
 {
-  check('export: ISO weeks (Monday start, week 1 holds Thursday)',
-    G._expIsoWeek('2026-11-02') === '2026-W45' && G._expIsoWeek('2026-11-08') === '2026-W45' &&
-    G._expIsoWeek('2026-11-09') === '2026-W46' && G._expIsoWeek('2027-01-01') === '2026-W53' && G._expIsoWeek('bad') === '');
+  const inj = (date, o) => Object.assign({date, compound_id: 'nebido', compound_name: 'Nebido', dose: '100', unit: 'mg', time_of_day: 'AM', active: true}, o || {});
   const rows = G.buildExportRows({
-    injections: [
-      {date: '2026-11-02', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', time_of_day: 'AM', logged: true},
-      {date: '2026-11-04', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', logged_dose: '120', unit: 'mg', logged: true},
-      {date: '2026-11-06', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: false},
-      {date: '2026-11-10', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: true}],
-    meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'}],
-    medLog: [{med_id: 'm1', date: '2026-11-03'}, {med_id: 'm1', date: '2026-11-04'}, {med_id: 'gone', date: '2026-11-04'}],
-    supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)'}, {supp_id: 'b', name: 'B-Complex', dose: 'one'}],
-    suppLog: [{supp_id: 'vitd3', date: '2026-11-03', slot: 'AM', taken: true}, {supp_id: 'vitd3', date: '2026-11-03', slot: 'PM', taken: true},
-              {supp_id: 'vitd3', date: '2026-11-04', slot: 'AM', taken: false}, {supp_id: 'b', date: '2026-11-04', slot: 'AM', taken: true}]});
-  const inj = rows.filter(r => r.type === 'injection');
-  check('export: only injections ticked as taken, at the dose actually logged',
-    inj.length === 3 && inj[1].dose === 120 && inj[0].unit === 'mg' && inj[0].time === 'AM');
-  check('  …each carries its week\'s total (100 + 120 in W45, 100 in W46)',
-    inj[0].week_total === 220 && inj[1].week_total === 220 && inj[2].week === '2026-W46' && inj[2].week_total === 100);
+    start: new Date(2026, 10, 5),
+    injByDate: {
+      '2026-11-04': [inj('2026-11-04')],
+      '2026-11-05': [inj('2026-11-05', {logged: true}), inj('2026-11-05', {compound_id: 'bpc', compound_name: 'BPC-157', dose: '250', unit: 'µg', time_of_day: 'PM'})],
+      '2026-11-07': [inj('2026-11-07'), inj('2026-11-07', {id: 'x'}), inj('2026-11-07', {compound_id: 'old', compound_name: 'Old', active: false})],
+      '2026-11-11': [inj('2026-11-11')],
+      '2026-11-12': [inj('2026-11-12')]},
+    meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'},
+           {id: 'm2', name: 'Later', strength: '5 mg', tablets_per_day: 1, start_date: '2026-12-01'}],
+    supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)', timing: 'AMPM', freq: 'daily'},
+            {supp_id: 'mg', name: 'Magnesium', dose: '400 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01'},
+            {supp_id: 'fut', name: 'Future', dose: '1 g', start_date: '2026-12-01'}]});
+  const ij = rows.filter(r => r.type === 'injection');
+  check('export: injections planned for the 7 days from today, nothing before or after',
+    ij.length === 4 && ij[0].date === '2026-11-05' && ij[ij.length - 1].date === '2026-11-11', JSON.stringify(ij));
+  check('  …whether ticked or not, deduped like Today, inactive ones left out',
+    ij.filter(r => r.date === '2026-11-07').length === 1 && !ij.some(r => r.name === 'Old'));
+  check('  …in day then AM/PM order, with weekday, time, dose and unit',
+    ij[0].name === 'Nebido' && ij[0].day === 'Thu' && ij[0].time === 'AM' && ij[0].dose === 100 && ij[0].unit === 'mg' &&
+    ij[1].name === 'BPC-157' && ij[1].time === 'PM' && ij[1].unit === 'µg');
+  check('export: no taken status and no weekly totals in the file', !G.EXPORT_COLS.some(c => /taken|logged|total|week$/.test(c)));
   const med = rows.filter(r => r.type === 'medication');
-  check('export: medication ticks with tablets, strength, and a weekly tablet total',
-    med.length === 3 && med[0].name === 'Lisinopril' && med[0].dose === 0.5 && med[0].unit === 'tablet' &&
-    med[0].detail === '10 mg' && med[0].week_total === 1);
-  check('  …a tick for a deleted medication keeps its row, named by its id', med.some(r => r.name === 'gone'));
+  check('export: medications in use today, with strength and the daily amount',
+    med.length === 1 && med[0].name === 'Lisinopril' && med[0].dose === 10 && med[0].unit === 'mg' && med[0].amount === '½ tablet a day' && med[0].how_often === 'daily');
   const sup = rows.filter(r => r.type === 'supplement');
-  check('export: supplement ticks per slot, untaken left out, total in the dose\'s own unit',
-    sup.length === 3 && sup[0].dose === 50 && sup[0].unit === 'µg' && sup[0].week_total === 100 && sup[0].detail === '50 µg (2000 IU)');
-  check('  …a dose that is not a number is kept as text with no total',
-    sup.some(r => r.name === 'B-Complex' && r.dose === 'one' && r.week_total === ''));
-  check('export: rows are in date order', rows.every((r, i) => i === 0 || rows[i - 1].date <= r.date));
-  const csv = G.exportCsv([{date: '2026-11-03', week: '2026-W45', type: 'medication', name: 'A, "B"', dose: 1, unit: 'tablet', detail: '', time: '', week_total: 7}]);
+  check('export: supplements due this week, with their dose, times of day and how often',
+    sup.length === 2 && sup[1].name === 'Vitamin D3' && sup[1].dose === 50 && sup[1].unit === 'µg' && sup[1].time === 'AM + PM' &&
+    sup[1].how_often === 'daily' && sup[0].name === 'Magnesium' && sup[0].how_often === 'weekly');
+  check('export: injections first, then medications, then supplements',
+    rows.map(r => r.type).join(',') === 'injection,injection,injection,injection,medication,supplement,supplement');
+  const csv = G.exportCsv([{type: 'medication', name: 'A, "B"', dose: 1, unit: 'mg', amount: '1 tablet a day', how_often: 'daily'}]);
   check('export: CSV has the header and quotes commas and quotes',
-    csv.split('\r\n')[0] === 'date,week,type,name,dose,unit,detail,time,week_total' &&
-    csv.split('\r\n')[1] === '2026-11-03,2026-W45,medication,"A, ""B""",1,tablet,,,7');
+    csv.split('\r\n')[0] === 'type,day,date,time,name,dose,unit,amount,how_often' &&
+    csv.split('\r\n')[1] === 'medication,,,,"A, ""B""",1,mg,1 tablet a day,daily');
   check('export: Settings has the card and it is built with the other cards',
     /<div id="s-export-card"/.test(require('fs').readFileSync(htmlPath, 'utf8')) && /buildExportCard\(\);buildStageCopyCard\(\)/.test(require('fs').readFileSync(htmlPath, 'utf8')));
-  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title)));
+  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title) && /doctor/.test(w.text)));
 }
 globalThis.__exportRun = (async function(){
-  const calls = [], shared = [];
-  const _f = G.fetch, _n = G.navigator, _F = G.File, _gid = G.document.getElementById;
+  const shared = [];
+  const _n = G.navigator, _F = G.File, _gid = G.document.getElementById;
   const els = {'s-export-btn': {textContent: '', disabled: false}, 's-export-status': {textContent: '', style: {}}};
   // Other async tests run alongside this one: every stub hands anything that is not the export's back to the original.
   G.document.getElementById = id => els[id] || (_gid ? _gid.call(G.document, id) : null);
   G.File = function(parts, name, o){ this.text = parts.join(''); this.name = name; this.type = o && o.type; };
   G.navigator = {canShare: () => true, share: async o => { shared.push(o); }};
-  G.fetch = async function (url) { calls.push(url);
-    const path = url.replace(G.AGENT_URL, '');
-    const body = {'/injections?active_only=false': [{date: '2026-11-02', compound_name: 'Nebido', dose: '100', unit: 'mg', logged: true}],
-      '/medications': [], '/medications/log': [], '/supplements': [], '/supplement-log': []}[path];
-    if (body === undefined) return _f(url, ...Array.prototype.slice.call(arguments, 1));
-    return {ok: true, status: 200, json: async () => body}; };
-  try { await G.exportData(); } finally { G.fetch = _f; G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
-  check('export: reads all five records from the backend, injections including inactive ones',
-    ['/injections?active_only=false', '/medications', '/medications/log', '/supplements', '/supplement-log'].every(p => calls.some(u => u.endsWith(p))));
-  check('  …and hands a .csv file to the share sheet', shared.length === 1 && /^peptide-tracker-\d{4}-\d{2}-\d{2}\.csv$/.test(shared[0].files[0].name) &&
-    shared[0].files[0].type === 'text/csv' && /Nebido,100,mg/.test(shared[0].files[0].text));
-  check('  …and says how many rows', els['s-export-status'].textContent === '1 row exported.' && els['s-export-btn'].textContent === 'Export CSV');
+  try { await G.exportData(); } finally { G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
+  check('export: hands a .csv file to the share sheet', shared.length === 1 && /^peptide-tracker-current-\d{4}-\d{2}-\d{2}\.csv$/.test(shared[0].files[0].name) &&
+    shared[0].files[0].type === 'text/csv' && /^type,day,date,time,name,dose,unit,amount,how_often\r\n/.test(shared[0].files[0].text), String(shared[0] && shared[0].files[0].text));
+  check('  …and says what it exported', /^Exported \d+ injection\(s\) this week, \d+ medication\(s\), \d+ supplement\(s\)\.$/.test(els['s-export-status'].textContent) &&
+    els['s-export-btn'].textContent === 'Export CSV', els['s-export-status'].textContent);
 })().catch(e => check('export run checks ran', false, String(e && e.stack || e)));
+
+// ── Push to Prod: Settings shows the push GitHub is running, not this page's memory (Henrik, 2026-11-05: "Just pushed
+// stage to prod but when I open the settings to check for progress it looks like I never even tried???? If it failed I
+// want an error showing what went wrong, and if it is still in progress I want the full list of promotion steps still
+// visible!!!") ──
+// The promotion functions run in a context of their own (their own fetch, timers, storage and elements), cut out of the
+// page by name, so they cannot race the other async tests over the shared globals.
+console.log('\n── Push to Prod: a running or failed push survives reopening Settings ─');
+check('opening Settings asks GitHub for the newest push', /buildLastPushDropdown\(\);resumePromote\(\);/.test(String(G.loadSettings)));
+globalThis.__promoteResumeRun = (async function(){
+  const _page = require('fs').readFileSync(htmlPath, 'utf8');
+  const fnSrc = name => {
+    const at = _page.search(new RegExp('(?:async )?function ' + name + '\\('));
+    if (at < 0) throw new Error('no function ' + name);
+    let i = _page.indexOf('{', at), d = 0;
+    for (; i < _page.length; i++) { const c = _page[i]; if (c === '{') d++; else if (c === '}' && --d === 0) break; }
+    return _page.slice(at, i + 1);
+  };
+  const names = ['resumePromote', '_promoteRunning', '_promoteFailHtml', '_promoteEsc', 'renderPromoteStatus', 'pollPromoteStatus',
+    'saveLastPush', 'buildLastPushDropdown', '_promoteRetryBtn', '_promoteRunIdOf', '_fmtAgo', '_promoteStatusError', 'saveAbandonedPush'];
+  const code = names.map(fnSrc).join('\n');
+  function mk(answers) {
+    const store = {}, calls = [], els = {'s-deploy-card': {style: {display: ''}}, 'push-to-prod-status': {innerHTML: ''},
+      'push-to-prod-btn': {textContent: 'Push to Prod', disabled: false}, 'push-to-prod-last': {innerHTML: ''}};
+    const C = vm.createContext({console, Promise, JSON, Math, String, Number, Date, Object, Array, RegExp,
+      AGENT_URL: 'https://agent', authHeaders: () => ({}), _escP: x => String(x), _showLiveProdVersion: () => {},
+      _promoteRunId: null, _promoteMinAttempt: 0, _pollErrs: 0, _stagingVer: null, _prodVer: null, _lastPushData: null,
+      _promotePollAt: 0, _promoteLastData: null, _PROMOTE_WAIT_MS: 25 * 60 * 1000,
+      PROMOTE_STEPS: ['Checkout staging', 'Checkout prod', 'Sync files into prod branch', 'Open PR on prod', 'Wait for CI and merge prod PR'],
+      setTimeout: () => 0, pollProdVersion: () => {},
+      localStorage: {getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }},
+      document: {getElementById: id => els[id] || null, querySelectorAll: () => []},
+      fetch: async url => { calls.push(url); const body = answers.shift(); return {ok: true, status: 200, json: async () => body}; }});
+    vm.runInContext(code, C);
+    return {C, els, store, calls, answers};
+  }
+  const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+  const steps = last => ['Checkout staging', 'Checkout prod', 'Sync files into prod branch', 'Open PR on prod']
+    .map(n => ({name: n, status: 'completed', conclusion: 'success'})).concat([{name: 'Wait for CI and merge prod PR', status: 'completed', conclusion: last}]);
+  const running = {status: 'in_progress', run_id: 41985654271, run_attempt: 1, run_url: 'https://github.com/x/runs/41985654271',
+    steps: steps(null).map((s, i) => i < 4 ? s : {name: s.name, status: 'in_progress', conclusion: null})};
+  const failed = Object.assign({}, running, {status: 'completed', conclusion: 'failure', steps: steps('failure'),
+    failed_step: 'Wait for CI and merge prod PR', error: 'Timeout: PR #302 did not merge within 30 minutes'});
+
+  // 1. A push still running when Settings opens: every step and a busy button, then followed by its run id.
+  let t = mk([running]);
+  await t.C.resumePromote(); await settle();
+  const live = t.els['push-to-prod-status'].innerHTML;
+  check('a push still running when Settings opens shows every promotion step and a busy button',
+    t.els['push-to-prod-btn'].textContent === 'Pushing...' && t.els['push-to-prod-btn'].disabled &&
+    ['Checkout staging', 'Checkout prod', 'Sync files into prod branch', 'Open PR on prod', 'Wait for CI and merge prod PR'].every(n => live.includes(n)), live);
+  check('  …and is followed by its run id', t.calls.length === 2 && /run_id=41985654271/.test(t.calls[1]), t.calls.join(' | '));
+  // 2. The same push then fails: the step and the workflow's own error, kept in the record.
+  t = mk([running, failed]);
+  await t.C.resumePromote(); await settle();
+  const shown = t.els['push-to-prod-status'].innerHTML;
+  check('a push that fails shows the step it failed at and the workflow\'s own error',
+    /Push failed at “Wait for CI and merge prod PR”/.test(shown) && /did not merge within 30 minutes/.test(shown) && shown.includes('Checkout staging'), shown);
+  const rec = JSON.parse(t.store['proto-last-push'] || 'null');
+  check('  …the record keeps the run, the step and the error', rec && rec.runId === '41985654271' && rec.conclusion === 'failure' &&
+    rec.error === 'Timeout: PR #302 did not merge within 30 minutes' && rec.failedStep === 'Wait for CI and merge prod PR');
+  check('  …which the Last push line shows, opened', /<details open>/.test(t.els['push-to-prod-last'].innerHTML) &&
+    /did not merge within 30 minutes/.test(t.els['push-to-prod-last'].innerHTML));
+  // 3. Reopening Settings afterwards: the recorded failure is not drawn twice and nothing is polled.
+  t.answers.push(failed); t.els['push-to-prod-status'].innerHTML = ''; t.calls.length = 0; t.C._promoteLastData = null;
+  await t.C.resumePromote(); await settle();
+  check('a finished push already recorded is not drawn again, and nothing is polled', t.calls.length === 1 && t.els['push-to-prod-status'].innerHTML === '');
+  // 4. A push that failed while the app was closed: shown with its error when Settings opens.
+  t = mk([Object.assign({}, failed, {run_id: 42, run_url: 'https://github.com/x/runs/42', error: 'PR creation failed: Bad credentials', failed_step: 'Open PR on prod'})]);
+  await t.C.resumePromote(); await settle();
+  check('a push that failed while the app was closed is shown with its error when Settings opens',
+    /PR creation failed: Bad credentials/.test(t.els['push-to-prod-status'].innerHTML) && JSON.parse(t.store['proto-last-push']).runId === '42');
+  // 5. Prod hides or leaves out the Deploy card: nothing is asked.
+  t = mk([running]); t.els['s-deploy-card'].style.display = 'none';
+  await t.C.resumePromote(); await settle();
+  check('with the Deploy card hidden (prod) nothing is asked', t.calls.length === 0);
+})().catch(e => { check('promote resume checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
