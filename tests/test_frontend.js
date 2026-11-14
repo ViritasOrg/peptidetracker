@@ -2502,8 +2502,13 @@ console.log('\n── Editing when a dose was taken ─────────�
   {
     const _mkCell = (dose) => { const el={style:{},onclick:null,textContent:''};
                                 G._todayDoseCell(el, dose); return el; };
-    check('a real row gets a tappable dose',
-      !!_mkCell(_r()).onclick && _mkCell(_r()).style.cursor==='pointer');
+    // Henrik, 2026-11-12: an oil's dose moved into its injection window, so the row's
+    // dose is plain text there; a non-oil row keeps the tappable dose.
+    const _pep = {id:'d1', compound_id:'retatrutide', tier:'peptide', dose:'2', unit:'mg'};
+    check('a real non-oil row gets a tappable dose',
+      !!_mkCell(_pep).onclick && _mkCell(_pep).style.cursor==='pointer');
+    check('  …but an oil row does not — its dose changes in the injection window',
+      !_mkCell(_r()).onclick && _mkCell(_r()).style.cursor!=='pointer');
     check('  …and a legacy log row with no record behind it does not',
       !_mkCell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', dose:'', logged:true}).onclick);
   }
@@ -9022,6 +9027,32 @@ console.log('\n── Injection site (Today) ───────────�
       G.toggleInjection = _ts.tog;
     }
 
+    // ── The last three sites on the oil's name (Henrik, 2026-11-12) ──────────
+    {
+      const _hs = {h:G._injSiteHist, c:G._injectionsCache};
+      const mk = (id, date, site, extra) => Object.assign({id, date, site, compound_id:'enanthate',
+        tier:'trt', logged:true, active:true, dose:'125', unit:'mg'}, extra||{});
+      G._injSiteHist = [mk('h1','2026-08-01','r_quad'), mk('h2','2026-08-08','l_delt'),
+                        mk('h3','2026-08-15','r_delt')];
+      G._injectionsCache = {'2026-08-22':[mk('c1','2026-08-22','l_glute')],
+        '2026-08-29':[mk('t1','2026-08-29',null,{logged:false})],
+        '2026-08-30':[mk('fut','2026-08-30','r_lat')]};
+      const cur = {id:'t1', date:'2026-08-29', compound_id:'enanthate', tier:'trt', logged:false};
+      check('an oil shows its last three sites, most recent first, from cache and history',
+        G._injRecentSites(cur,3).join('-') === 'L3s-R1-L1', G._injRecentSites(cur,3).join('-'));
+      check('  …on the name itself, joined by dashes',
+        G._todayRowName(Object.assign({compound_name:'Testosterone Enanthate'}, cur)) === 'Testosterone Enanthate L3s-R1-L1',
+        G._todayRowName(Object.assign({compound_name:'Testosterone Enanthate'}, cur)));
+      G._injectionsCache['2026-08-22'][0].logged = false;
+      check('  …counting only doses actually taken',
+        G._injRecentSites(cur,3).join('-') === 'R1-L1-R4', G._injRecentSites(cur,3).join('-'));
+      check('  …and another compound\'s sites never appear',
+        G._injRecentSites({id:'x', date:'2026-08-29', compound_id:'tren_e', tier:'enhanced'},3).length === 0);
+      check('a peptide gets no sites on its name',
+        G._todayRowName({id:'p', compound_id:'retatrutide', compound_name:'Retatrutide', tier:'peptide', date:'2026-08-29'}) === 'Retatrutide');
+      G._injSiteHist = _hs.h; G._injectionsCache = _hs.c;
+    }
+
     G.fetch = _save.f; G._injectionsCache = _save.c; G._viewDate = _save.vd; G.document = _save.d;
   }
   G._enhConcMgPerMl = _apSave;
@@ -9035,6 +9066,10 @@ console.log('\n── Injection site (Today) ───────────�
     // feature added to one of them only is the tier-parity break in miniature.
     check('source: both Today row renderers append the site button',
       (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
+    check('source: both Today row renderers name the row with its recent sites',
+      (tdSrc.match(/nameEl\.textContent=_todayRowName\(dose\)/g) || []).length === 2);
+    check('source: the injection window carries CHANGE DOSE',
+      /CHANGE DOSE/.test(siteSrc) && /openInjectionDoseEditor\(/.test(siteSrc));
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
     // The single generic figures were replaced by the body-fat figures (INJ_BODIES) and
@@ -19001,7 +19036,8 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
   // ── Today actually uses it, and stored data does not ──────────────────────
   const _tdSrc = fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8');
   check('source: the Today dose rows render through _tdName',
-    /nameEl\.textContent=_tdName\(dose\.compound_name,\s*dose\.compound_id\)/.test(_tdSrc));
+    /nameEl\.textContent=_todayRowName\(dose\)/.test(_tdSrc)
+    && /function _todayRowName\(dose\)\{\n  var n=_tdName\(dose\.compound_name,dose\.compound_id\);/.test(_tdSrc));
   check('source: no Today row prints compound_name raw',
     !/nameEl\.textContent=dose\.compound_name/.test(_tdSrc));
   check('source: _tdName falls back to the real name if the engine is missing',
@@ -22591,6 +22627,7 @@ console.log('\n── Water ─────────────────�
   check('water: shows the day\'s total against the target', /0\.8 L<\/b> \/ 3\.1 L/.test(_h) && /width:24%/.test(_h));
   check('  …says where the target comes from', /Yamada 2022/.test(_h) && /Set my own/.test(_h));
   check('  …with one-tap amounts and an undo', /wlAdd\(250\)/.test(_h) && /wlAdd\(500\)/.test(_h) && /wlUndo\(\)/.test(_h));
+  check('  …including a 100 ml step, before 250 and 500', /wlAdd\(100\)[\s\S]*wlAdd\(250\)[\s\S]*wlAdd\(500\)/.test(_h));
   G._wlOwn = 3500;
   _h = G._wlHtml();
   check('  …and an own target replaces the research one', /\/ 3\.5 L/.test(_h) && /your own target/.test(_h) && !/Yamada/.test(_h));
@@ -23069,3 +23106,40 @@ globalThis.__promoteResumeRun = (async function(){
   await t.C.resumePromote(); await settle();
   check('with the Deploy card hidden (prod) nothing is asked', t.calls.length === 0);
 })().catch(e => { check('promote resume checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+
+// ── Food Edit: Update an entry (Henrik, 2026-11-14) ──────────────────────────
+// "Add a update for a entry so one doesn't have to delete and enter again, ie store the actual input moving forward".
+console.log('\n── Food Edit: Update an entry ─────────────────────────────');
+(async () => {
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const blk = _src.slice(_src.indexOf('// Update an entry (Henrik, 2026-11-14'), _src.indexOf('async function buildFoodEdit('));
+  const sent = []; let reply = { ok: true, status: 200, j: { ok: true, rows: [] } }; let rebuilt = 0;
+  const U = vm.createContext({
+    AGENT_URL: 'https://agent', JSON, String, Number, authHeaders: (x) => Object.assign({}, x || {}),
+    _flEsc: (x) => String(x == null ? '' : x).replace(/</g, '&lt;'), _flBtn: (l, a) => '<button onclick="' + a + '">' + l + '</button>',
+    _flDetail: (r, j) => (j && j.detail) || ('The server answered ' + r.status + '.'),
+    _flEditHtml: () => '', _flEditDate: '2026-11-14', _flDay: () => '2026-11-14', _flLoadRows: async () => [], _flRows: [],
+    buildFoodEdit: async () => { rebuilt++; }, document: { getElementById: () => null },
+    fetch: async (url, opt) => { sent.push({ url, body: JSON.parse(opt.body) }); return { ok: reply.ok, status: reply.status, json: async () => reply.j }; },
+  });
+  vm.runInContext(blk, U);
+  const row = { id: 'a1', date: '2026-11-14', time: '10:25', food: 'coffee with milk and sugar', amount: '330 ml', input: '2 coffees (double espresso, 2dl milk)', batch: 'b1' };
+  const rows = [row, { id: 'a2', batch: 'b1', food: 'sugar' }];
+  const html = U._flUpdHtml(row, rows);
+  check('Update shows the text the entry was made from', html.includes('2 coffees (double espresso, 2dl milk)'));
+  check('…and says it replaces every entry from that text', html.includes('replaces the 2 entries from this text'));
+  check('an entry from before the text was kept starts from its name and amount',
+    U._flUpdText({ food: 'Steak', amount: '200 g' }) === 'Steak 200 g');
+  U._flEditRows = rows;
+  await U.flUpdRun('a1');
+  check('Estimate again sends the text, the entry\'s day and time, and which entry it replaces',
+    sent.length === 1 && /\/food-log\/estimate$/.test(sent[0].url) && sent[0].body.replace === 'a1' &&
+    sent[0].body.date === '2026-11-14' && sent[0].body.time === '10:25' && sent[0].body.text === '2 coffees (double espresso, 2dl milk)');
+  check('…and the day is drawn again from the server once it is in', rebuilt === 1 && U._flUpd === null);
+  reply = { ok: false, status: 503, j: { detail: 'Google is busy.' } };
+  U._flUpd = 'a1';
+  await U.flUpdRun('a1');
+  check('a failed update says why and keeps the box open', U._flUpdErr === 'Google is busy.' && U._flUpd === 'a1');
+  check('every Food Edit entry has an Update button', /_flBtn\('Update',"flUpdOpen\('/.test(_src));
+  if (failed > 0) process.exitCode = 1;
+})();
