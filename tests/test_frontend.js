@@ -267,8 +267,40 @@ if(typeof G._nextStackName==='function'){
   G._userStacks=_nsSaved;
   // initWizard uses it for a fresh (non-edit) stack
   G._userStacks=[{name:'Protocol 1'}]; G.initWizard();
-  check('initWizard: default name bumps (Protocol 2)', G._wiz.stackName==='Protocol 2');
+  // Henrik, 2026-11-17: fun names, as in Workout ("random, so a user can never get the same name for exact the same
+  // prgoram ever"): a new protocol gets '"<fun>", <N>-Week <goal>' instead of "Protocol N".
+  check('initWizard: a new protocol gets a fun name, not "Protocol N"', /^".+", 12-Week Protocol$/.test(G._wiz.stackName), G._wiz.stackName);
   G._userStacks=_nsSaved;
+}
+if(typeof G.stackFunName==='function'){
+  var _fnSaved=G._userStacks;
+  check('fun name: Enhanced first in the pool', G.stackFunName('enhanced',16,0,[])==='"Better Living Through Chemistry", 16-Week Enhanced', G.stackFunName('enhanced',16,0,[]));
+  check('fun name: each goal has its own pool', new Set(['enhanced','trt','muscle','recovery','skin','fat','cognitive','antiaging'].map(function(g){return G.STACK_FUN_NAMES[g][0];})).size===8);
+  var _tk=[];for(var _k=0;_k<40;_k++)_tk.push(G.stackFunName('fat',12,Math.random(),_tk));
+  check('fun name: 40 identical protocols never share a name', new Set(_tk.map(function(n){return n.toLowerCase();})).size===40, _tk.slice(-2).join(' | '));
+  var _sn=new Set();for(var _k2=0;_k2<30;_k2++)_sn.add(G.stackFunName('skin',8,Math.random(),[]));
+  check('fun name: the pick is random', _sn.size>1);
+  check('goal: Enhanced compounds win', G._stackFunGoal({enhanced:{compounds:[{id:'x'}]},trt:{compounds:[{id:'t'}]},peptides:[]})==='enhanced');
+  check('goal: then TRT', G._stackFunGoal({trt:{compounds:[{id:'t'}]},peptides:[]})==='trt');
+  check('goal: the wizard goals count', G._stackFunGoal({goals:['fat'],peptides:[]})==='fat');
+  check('goal: nothing in it is general', G._stackFunGoal({peptides:[]})==='general');
+  // The wizard: the name follows the choices until typed, an edited protocol keeps its own.
+  G._userStacks=[]; G.initWizard(); G._wiz.goals=['cognitive']; G._wizAutoName();
+  var _n1=G._wiz.stackName; G._wizAutoName();
+  check('wizard: the name follows the goal and stays put while open', /^".+", 12-Week Cognitive$/.test(_n1) && G._wiz.stackName===_n1, _n1);
+  G.wizSetStackName('My Stack'); G._wizAutoName();
+  check('wizard: a typed name always wins', G._wiz.stackName==='My Stack' && G._wiz.nameTyped===true);
+  G._wiz={editMode:true,stackName:'Protocol 1',goals:['fat']}; G._wizAutoName();
+  check('wizard: editing keeps the protocol\'s own name', G._wiz.stackName==='Protocol 1');
+  // Existing protocols still called "Protocol N" are renamed once; a chosen name is left alone.
+  var _st=[{name:'Protocol 1',cycle_length:12,peptides:[],enhanced:{compounds:[{id:'a'}]}},{name:'Protocol 2',cycle_length:12,peptides:[],enhanced:{compounds:[{id:'a'}]}},{name:'Cutting',peptides:[]},{name:'',cycle_length:8,peptides:[]}];
+  var _chg=G._funRenameStacks(_st);
+  check('rename: "Protocol N" and unnamed protocols get fun names, all different', _chg===true && /^".+", 12-Week Enhanced$/.test(_st[0].name) && /^".+", 12-Week Enhanced$/.test(_st[1].name) && _st[0].name!==_st[1].name && /^".+", 8-Week Protocol$/.test(_st[3].name), _st.map(function(x){return x.name;}).join(' | '));
+  check('rename: a chosen name is left alone', _st[2].name==='Cutting');
+  check('rename: a second load changes nothing', G._funRenameStacks(_st)===false);
+  var _d=G.stackDetails({cycle_length:12,peptides:[{id:'a'},{id:'b'}],enhanced:{compounds:[{id:'c'}]}});
+  check('details: goal, length and contents', _d==='Enhanced · 12 weeks · 2 peptides · 1 compound', _d);
+  G._userStacks=_fnSaved;
 }
 
 // ── Today view: de-dupe injection slots (dose-edit doubling fix) ──
@@ -3973,15 +4005,13 @@ console.log('\n── Protocol cards: a long name cannot break the grid ──�
 
   // BOTH are needed and NEITHER is sufficient: the track can only shrink if the
   // item inside it can too, and the item can only shrink if the track lets it.
-  check('the grid tracks can shrink below their content',
-    /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(_buildG));
+  check('the protocols are one column of cards, every protocol (Henrik, 2026-11-17)',
+    /flex-direction:column/.test(_buildG) && !/grid-template-columns/.test(_buildG) && !/SLOTS/.test(_buildG));
   check('  …and the card itself can shrink with them',
     /\.stack-card\{[^}]*min-width:0;?\}/.test(_cssG));
   // The truncation that was already there and could not fire.
-  check('  …so the name truncates instead of widening the column',
-    /\.stack-card-name\{[^}]*text-overflow:ellipsis[^}]*\}/.test(_cssG) &&
-    /\.stack-card-name\{[^}]*white-space:nowrap[^}]*\}/.test(_cssG) &&
-    /\.stack-card-name\{[^}]*overflow:hidden[^}]*\}/.test(_cssG));
+  check('  …so a long name wraps inside the card instead of widening it',
+    /\.stack-card-name\{[^}]*overflow-wrap:anywhere[^}]*\}/.test(_cssG));
   // A plain 1fr anywhere in this grid reintroduces the bug.
   check('  …with no bare 1fr track left in the protocol grid',
     !/grid-template-columns:1fr 1fr/.test(_buildG));
@@ -15496,7 +15526,7 @@ if (typeof G._blBuildLines === 'function') {
     check('timeline nav: and no longer a sub-tab of Plan',
       /plan:\['stacks','meds','supplements','recon'\]/.test(rawScript));
     check('timeline nav: it sits immediately after Plan',
-      /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','more'\]/.test(rawScript));
+      /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','profile','more'\]/.test(rawScript));
     check('timeline nav: the bottom-nav button is placed after Plan',
       html.indexOf('id="navbtn-timeline"') > html.indexOf('id="navbtn-plan"') &&
       html.indexOf('id="navbtn-timeline"') < html.indexOf('id="navbtn-levels"'));
@@ -18545,13 +18575,12 @@ console.log('\n── The card and the editor agree on the end date ────
   check('  …and reports nothing for an open-ended protocol',
     G._cycleEndDateStr({cycle_start:'2026-05-18'}) === '');
 
-  const _src = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
-  const _cardIdx = _src.indexOf("' → ongoing<");
-  const _around = _src.slice(Math.max(0, _cardIdx - 1400), _cardIdx + 200);
+  // The card's dates now come from stackDetails (2026-11-17, one-column cards): the end date wins over cycle_length.
+  const _sd = G.stackDetails({cycle_start:'2026-05-18', end_date:'2026-08-26', cycle_length:15, peptides:[]});
   check('the protocol card resolves its end through _cycleEndDateStr',
-    _around.indexOf('_cycleEndDateStr') >= 0);
-  check('  …and no longer multiplies cycle_length by seven itself',
-    _around.indexOf('cycle_length*7*86400000') < 0);
+    _sd.indexOf(G.fmtDate(G.parseLocalDate('2026-08-26'))) >= 0, _sd);
+  check('  …and no longer derives it from cycle_length when an end date exists',
+    _sd.indexOf(G.fmtDate(G.parseLocalDate('2026-08-31'))) < 0, _sd);
 
   const _stack = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
   check('the TRT day cutoff honours the end date', _stack.indexOf('_trtEnd') >= 0);
@@ -23172,5 +23201,90 @@ console.log('\n── Food Edit: Update an entry ──────────�
   await U.flUpdRun('a1');
   check('a failed update says why and keeps the box open', U._flUpdErr === 'Google is busy.' && U._flUpd === 'a1');
   check('every Food Edit entry has an Update button', /_flBtn\('Update',"flUpdOpen\('/.test(_src));
+
+  // ── Profile (Henrik, 2026-11-16: "make the same Profile changes in peptide tracker") ──────────────
+  console.log('\n── Profile ───────');
+  {
+    const src = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+    const hdr = src.slice(src.indexOf('<div class="hdr">'), src.indexOf('<div class="week-strip"'));
+    check('the header has a Profile button that opens the Profile section', /id="hdr-profile" onclick="switchPrimary\('profile'\)"/.test(hdr) && /id="hdr-profile-lbl">Profile</.test(hdr));
+    check('…and keeps the date, now beside the version under the title so title and button keep their size', /class="hdr-sub">[\s\S]*id="hdr-weekday"[\s\S]*id="hdr-day"/.test(hdr) && !/class="hdr-right">[\s\S]*hdr-day/.test(hdr));
+    check('Profile is the former Body Comp page, and Labs keeps the labs', JSON.stringify(G.PRIMARY_GROUPS.profile) === JSON.stringify(['body']) && JSON.stringify(G.PRIMARY_GROUPS.labs) === JSON.stringify(['labs']) && G.primaryOf('body') === 'profile' && />Profile</.test(src.slice(src.indexOf('id="tab-btn-body"'), src.indexOf('id="tab-btn-body"') + 80)));
+    check('title, date and button are centred on one line, the button 56px high, a long label cut with an ellipsis',
+      /\.hdr\{[^}]*align-items:center/.test(css) && /\.pf-badge\{height:56px/.test(css) && /\.pf-badge span\{[^}]*max-width:96px;overflow:hidden;text-overflow:ellipsis/.test(css) && /\.hdr>div:first-child\{min-width:0;flex:1 1 auto;\}/.test(css));
+    {
+      const t = { textContent: 'PROTOCOL', style: {}, clientWidth: 400, get scrollWidth() { return parseInt(this.style.fontSize) * 7; } }, lbl = { textContent: '' }, logo = { textContent: '' };
+      const _qs = G.document.querySelector, _gid = G.document.getElementById;
+      G.document.querySelector = (q) => q === '.hdr-title' ? t : q === '.signin-logo' ? logo : null; G.document.getElementById = (id) => id === 'hdr-profile-lbl' ? lbl : _gid.call(G.document, id);
+      G.applyOwnerName('Henrik');
+      check('the main screen says PROTOCOL with no name; the name is on the Profile button; the sign-in logo keeps it', t.textContent === 'PROTOCOL' && lbl.textContent === 'Henrik' && /HENRIK/.test(logo.textContent));
+      G.applyOwnerName('');
+      check('…an account with no name shows Profile', lbl.textContent === 'Profile');
+      t.clientWidth = 150; G._fitHeaderTitle();
+      check('a title too wide for its space shrinks (34px down to 16px); one that fits keeps 34px', t.style.fontSize === '21px' && (t.clientWidth = 400, G._fitHeaderTitle(), t.style.fontSize === '34px'));
+      G.document.querySelector = _qs; G.document.getElementById = _gid;
+    }
+    const _ls = G.localStorage, keys = ['user_sex', 'user_age', 'user_height', 'user_weight', 'pep-profile', 'weight_log', G.BC_KEY || 'proto-bodycomp-v2'], saved = {};
+    keys.forEach(k => saved[k] = _ls.getItem(k));
+    const _w = G.weights;
+    _ls.setItem('user_sex', 'male'); _ls.setItem('user_age', '40'); _ls.setItem('user_height', '180'); _ls.setItem('pep-profile', JSON.stringify({ sex: 'male', onboarded: true }));
+    _ls.setItem('proto-bodycomp-v2', JSON.stringify([{ date: '2026-11-05', bf: 18, method: 'dexa' }]));
+    G.weights = [{ date: '2026-11-01', weight: 88 }, { date: '2026-11-10', weight: 86 }];
+    const info = G._pfInfoHtml();
+    check('profile card: sex, age, height, latest weight, BMI, body fat and lean mass', ['Male', '40 yrs', '180 cm', '86 kg', '26.5', '18 %', '70.5 kg'].every(x => info.includes(x)), info.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
+    check('…with Log weight and Edit profile', info.includes('data-pf-weight="1" onclick="pfLogWeight()"') && info.includes('data-pf-edit="1" onclick="pfEditStart()"'));
+    const el = { innerHTML: '' }, ef = {}, _gid2 = G.document.getElementById;
+    G.document.getElementById = (id) => id === 'pf-info' ? el : (ef[id] || _gid2.call(G.document, id));
+    const sent = [], _ps = G.pushPepSettingsToAgent, _pw = G.pushWeightToAgent, _br = G.bcRender, _sb = G.setBioSex;
+    G.pushPepSettingsToAgent = (kv) => sent.push(['settings', kv]); G.pushWeightToAgent = (d, w) => sent.push(['weight', d, w]); let rendered = 0; G.bcRender = () => { rendered++; }; G.setBioSex = () => {};
+    G.pfLogWeight();
+    check('Log weight opens a weight box with Save, logged the way Body Comp always logged it', el.innerHTML.includes('id="bc-weight-in"') && el.innerHTML.includes('onclick="pfLogWeightSave()"'));
+    G.pfLogWeight();
+    G.pfEditStart();
+    const eh = el.innerHTML;
+    check('Edit profile makes sex, age, height and weight editable in place', ['pf-e-age', 'pf-e-height', 'pf-e-weight'].every(id => eh.includes('id="' + id + '"')) && eh.includes('data-pf-sex="female"') && /id="pf-e-age"[^>]*value="40"/.test(eh));
+    check('…Edit becomes Save and Log weight becomes Cancel', /data-pf-save="1" onclick="pfEditSave\(\)"[^>]*>Save</.test(eh) && /data-pf-cancel="1" onclick="pfEditCancel\(\)"[^>]*>Cancel</.test(eh) && !eh.includes('data-pf-weight') && !eh.includes('data-pf-edit="1"'));
+    check('…readable: 15px or larger and never greyed', !/font-size:1[0-4]px/.test(eh + info) && !/var\(--muted2?\)/.test(eh + info));
+    G.pfEditCancel();
+    check('Cancel changes nothing', sent.length === 0 && el.innerHTML.includes('data-pf-edit="1"'));
+    G.pfEditStart(); ef['pf-e-age'] = { value: '41' }; ef['pf-e-height'] = { value: '90' }; ef['pf-e-weight'] = { value: '85,5' };
+    G.pfEditSex('female');
+    G.pfEditSave();
+    check('an impossible value saves nothing and says what to do, with its help link', sent.length === 0 && el.innerHTML.includes('data-pf-edit-err="1"') && el.innerHTML.includes('height') && el.innerHTML.includes('href="help.html#profile-invalid"') && _ls.getItem('user_height') === '180');
+    ef['pf-e-height'] = { value: '181' }; G.pfEditSave();
+    const pp = JSON.parse(_ls.getItem('pep-profile') || '{}'), today = G.dateKey(new Date());
+    check('Save stores sex, age and height like the wizard does, on the device and the backend', _ls.getItem('user_sex') === 'female' && _ls.getItem('user_age') === '41' && _ls.getItem('user_height') === '181' && pp.sex === 'female' && pp.age === 41 && pp.height === 181 && pp.onboarded === true &&
+      sent.some(x => x[0] === 'settings' && x[1].user_sex === 'female' && x[1].user_age === 41 && x[1].user_height === 181 && x[1]['pep-profile']));
+    check('…a changed weight is logged for today', G.weights.some(w => w.date === today && w.weight === 85.5) && sent.some(x => x[0] === 'weight' && x[2] === 85.5) && rendered >= 1 && G._pfEdit === null);
+    G.document.getElementById = _gid2; G.pushPepSettingsToAgent = _ps; G.pushWeightToAgent = _pw; G.bcRender = _br; G.setBioSex = _sb; G.weights = _w;
+    keys.forEach(k => { if (saved[k] === null) _ls.removeItem(k); else _ls.setItem(k, saved[k]); });
+    const ms = { from: '2026-11-01', to: '2026-11-02', metrics: { kcal: { avg: 96 }, protein: { avg: 88 }, carbs: null, fat: null }, series: [{ date: '2026-11-01', kcal: 100, protein: 90 }, { date: '2026-11-02', kcal: 92, protein: 86 }] };
+    const mh = G._pfMacroHtml(ms);
+    check('Macro adherence: each day as % of its goals, with each macro\'s average', mh.includes('id="pfMacroChart"') && mh.includes('Kcal 96 % avg') && !mh.includes('data-pf-macro="carbs"') && G._pfMacroHtml(null).includes('data-pf-macro-empty'));
+    check('…on the Profile page', src.includes('<div id="pf-macros"></div>') && src.includes('<div id="pf-info"></div>'));
+    const help = fs.readFileSync(path.join(__dirname, '..', 'help.html'), 'utf8');
+    check('help page: the profile warning has its section, and the page carries the app icon and manifest', /id="profile-invalid"[\s\S]*What it means[\s\S]*What happens if you ignore it[\s\S]*How to fix it/.test(help) && /rel="icon"[^>]*protocol-icon\.png/.test(help) && /rel="manifest"/.test(help));
+  }
+  // Henrik, 2026-11-16: "profile in peptidetracker-staging doesnt use the full screen, but macro does?" — a chart drawn
+  // while Profile was hidden (the sync redraws it) measured 0, fell back to 300px and pinned style.width to it, so every
+  // later draw read 300 again. A chart is 100% wide and measured afresh on every draw.
+  {
+    const mk = () => { const c = { style: {}, width: 0, height: 0, visible: false,
+      get offsetWidth() { return !this.visible ? 0 : (this.style.width === '100%' ? 900 : parseInt(this.style.width) || 900); },
+      getContext: () => new Proxy({}, { get: (t, k) => k === 'measureText' ? () => ({ width: 10 }) : (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } }) }; return c; };
+    const cv = { 'chart-weight-trend': mk(), 'chart-bf': mk(), 'chart-bmi': mk(), pfMacroChart: mk() }, _gid3 = G.document.getElementById;
+    G.document.getElementById = (id) => cv[id] || _gid3.call(G.document, id);
+    const _dpr = G.window.devicePixelRatio; G.window.devicePixelRatio = 1;
+    const draw = () => { try { G.bcDrawWeightLeanChart(); } catch (e) {} try { G.bcDrawChart('chart-bmi', [25, 26], ['2026-11-01', '2026-11-02'], '#0f0', ''); } catch (e) {}
+      try { G._pfDrawMacroChart({ series: [{ date: '2026-11-01', kcal: 100 }, { date: '2026-11-02', kcal: 90 }] }); } catch (e) {} };
+    draw();
+    Object.values(cv).forEach(c => { c.visible = true; });
+    draw();
+    check('charts on Profile use the full width once shown, even after a draw while hidden',
+      ['chart-weight-trend', 'chart-bmi', 'pfMacroChart'].every(id => cv[id].width === 900 && cv[id].style.width === '100%'),
+      ['chart-weight-trend', 'chart-bmi', 'pfMacroChart'].map(id => id + ':' + cv[id].width + '/' + cv[id].style.width).join(' '));
+    check('…the body-fat chart is measured the same way', /cssW=\(canvas\.style\.width='100%',canvas\.offsetWidth\)\|\|300/.test(fs.readFileSync(path.join(__dirname, '..', 'tab-body.js'), 'utf8')));
+    G.document.getElementById = _gid3; G.window.devicePixelRatio = _dpr;
+  }
   if (failed > 0) process.exitCode = 1;
 })();
