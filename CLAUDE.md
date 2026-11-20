@@ -264,6 +264,10 @@ This is the single most common way the rule above gets bypassed — through inte
 - If your fix genuinely makes something obsolete, **say so in your reply and ask** — never remove it silently.
 - You may only remove code that was **explicitly named** in the request.
 
+## Answers to Henrik about his own protocol and bloodwork
+- **Never raise fertility, LH/FSH, HPTA recovery, PCT, hCG or coming off with Henrik** (Henrik, 2026-11-20: "stop bringing shit up that I dont care about"): he has four children, had a vasectomy about 2016 and will never run PCT; a bloodwork, protocol or compound answer for him lists only what applies to what he runs now, and never names these even as "not needed". The app and the docs still cover them for other users.
+- **Henrik sets the bloodwork budget; guidance stays inside it** (Henrik, 2026-11-20: "I will not be able to pay more than the 160 + 45 for E2", then "I need guidance but not lets spend over €400 on bloodtests"): a bloodwork answer says what his chosen panel covers and may name the best-value swap or one add-on with its price and the new total; never a list of every missing test, never a plan near 400 €. Synlab packages, contents and prices are in the backend, `docs/enhanced-bodybuilding/23-synlab-bloodwork-tests-and-prices.md` (read 2026-11-20; re-fetch a page before quoting its price).
+
 ## Deployment
 - GitHub Pages at `https://viritasorg.github.io/peptidetracker/`
 - Deploys automatically on push to `main`
