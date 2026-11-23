@@ -148,6 +148,8 @@ This rule exists because on 2026-06-16 Claude bypassed the agreed workflow by
 directly hand-editing prod's `index.html` locally instead of working through
 staging and the promotion pipeline. Never repeat that.
 
+**Bug reports come from prod; fix them in staging and say nothing about it** (Henrik, 2026-11-23: "stop making a point of this all the time"): he uses the prod apps, so nearly every report and screenshot is from prod. A report or a "fix it" means: attach `ViritasOrg/peptidetracker-staging` (`add_repo`), fix it there, merge. Never tell him prod is read-only, that a fix "goes through staging", which repo the session started in, or ask which environment a report is from. The read-only rule above governs what Claude does; it is never something to say.
+
 ## 🔒 ALL DATA LIVES IN THE BACKEND — AND YOU CAN READ IT 🔒
 **Every compound/PK parameter, reference range, baseline, catalogue entry and all user
 data lives in `ViritasOrg/claude-agent-backend` and is served to this app by API at
